@@ -1,14 +1,22 @@
 import type { PGliteInterface } from '@electric-sql/pglite';
 import { schemaSql, seedSql } from './dataset';
 import { seedContentDocs } from './content';
-import type { ContentSection, QueryErrorShape, RowValue } from '../types';
+import type { ContentSection, EngineCapabilities, QueryErrorShape, RowValue } from '../types';
 
 /* The real engine: PostgreSQL compiled to WebAssembly, running in the page.
 
    This is what makes "Run" honest. The old mock adapter returned the result the
    exercise already contained, so it never executed anything. Here every
-   statement is executed by a real Postgres server, inside a read-only
-   transaction, against the same schema and seed the Go gateway serves.
+   statement is executed by a real Postgres server against the same schema and
+   seed the Go gateway serves.
+
+   The workspace is writable (ADR 0003). A statement runs in an ordinary
+   transaction, and a statement that succeeds is committed — so an INSERT in one
+   Run is visible to the next Run in the same session. That is what makes the
+   writing half of SQL teachable, and resetEnvironment() is how the learner gets
+   the original dataset back. A statement that manages its own transaction
+   (`BEGIN`/`COMMIT`/`ROLLBACK`) is executed exactly as written, unwrapped, so a
+   transaction chapter can be practised.
 
    Postgres runs in a Web Worker (./pglite.worker.ts), so a runaway statement can
    be terminated by the host instead of freezing the tab. Results are capped as
@@ -39,19 +47,25 @@ export interface LiveTable {
   preview: string[][];
 }
 
-/* OIDs PGlite reports for the column types this dataset uses. */
+/* PostgreSQL's own type names, keyed by OID.
+
+   These are `pg_type.typname` spellings (`int4`, `int8`, `bool`, …), not the SQL
+   standard names (`integer`, `bigint`, `boolean`, …), because the gateway side
+   reports typnames too (backend/internal/engine/pgx.go, `typeName`) and
+   docs/technical-design.md §4.2 uses `int8` in its own example. The same column
+   has to be described identically in both adapters. */
 const OID_TYPE: Record<number, string> = {
-  16: 'boolean',
+  16: 'bool',
   17: 'bytea',
-  20: 'bigint',
-  21: 'smallint',
-  23: 'integer',
+  20: 'int8',
+  21: 'int2',
+  23: 'int4',
   25: 'text',
   114: 'json',
-  700: 'real',
-  701: 'double precision',
-  1042: 'character',
-  1043: 'character varying',
+  700: 'float4',
+  701: 'float8',
+  1042: 'bpchar',
+  1043: 'varchar',
   1082: 'date',
   1083: 'time',
   1114: 'timestamp',
@@ -68,8 +82,39 @@ const OID_TIME = 1083;
 const OID_TIMETZ = 1266;
 
 function oidTypeName(oid: number): string {
-  return OID_TYPE[oid] ?? 'text';
+  /* An unknown OID is reported as unknown. Calling it `text` would be a claim
+     about the value that nothing checked — the one thing this app must not do.
+     The gateway falls back to `oid:<n>` for the same reason. */
+  return OID_TYPE[oid] ?? `oid:${oid}`;
 }
+
+/**
+ * The OIDs whose contract value is the engine's own text, never a value
+ * re-rendered by the host.
+ *
+ * The Go gateway keeps the identical list (backend/internal/engine/normalize.go,
+ * `textOIDs`) and the two must agree: one lesson runs against both adapters, so
+ * a price that reads "118.00" in the browser must not read 118 over HTTP.
+ *
+ * PGlite's default parsers turn `date`/`time`/`timestamp` into a JS `Date` and
+ * `numeric` into a JS `number`, and both lose information the lesson text
+ * depends on:
+ *
+ *   - a naive `timestamp` has no offset, so materialising it as a Date and
+ *     rendering it back with UTC getters moves the wall clock by the host's UTC
+ *     offset (measured: 10:30:00 reads 05:00:00 under TZ=Asia/Calcutta).
+ *     `SET TIME ZONE 'UTC'` does not help — the parser does.
+ *   - `numeric` drops its scale: 118.00 arrives as 118.
+ *
+ * An identity parser keeps the bytes the server sent.
+ */
+export const TEXT_VALUE_OIDS = [1082, 1083, 1114, 1184, 1186, 1266, 1700];
+
+/** Identity parsers for TEXT_VALUE_OIDS, handed to every query that reads
+    learner data. `@electric-sql/pglite` calls these instead of its own. */
+const TEXT_PARSERS: Record<number, (value: string) => string> = Object.fromEntries(
+  TEXT_VALUE_OIDS.map((oid) => [oid, (value: string) => value]),
+);
 
 function pad2(n: number): string {
   return String(n).padStart(2, '0');
@@ -133,18 +178,13 @@ let liveWorker: Worker | null = null;
    instead of claiming a deadline we cannot enforce. */
 let placement: 'worker' | 'main' | null = null;
 
-export interface EngineCapabilities {
-  placement: 'worker' | 'main';
-  /** True only when a runaway query can actually be stopped by the host. */
-  hardTimeout: boolean;
-  timeoutMs: number;
-}
+export type { EngineCapabilities };
 
 /** `null` until the engine has booted, so the UI can say "starting" rather
     than advertise a capability it has not established. */
 export function engineCapabilities(): EngineCapabilities | null {
   if (placement === null) return null;
-  return { placement, hardTimeout: placement === 'worker', timeoutMs: QUERY_TIMEOUT_MS };
+  return { placement, hardTimeout: placement === 'worker', timeoutMs: QUERY_TIMEOUT_MS, writable: true };
 }
 
 /* Open the engine off the main thread when the page allows it. */
@@ -187,10 +227,7 @@ async function bootstrap(): Promise<PGliteInterface> {
     );
   }
   try {
-    await db.exec(schemaSql);
-    await db.exec(seedSql);
-    await createContentSchema(db);
-    await seedContentDocs(db);
+    await seedDatabase(db);
   } catch (e) {
     await disposeDatabase();
     throw e;
@@ -198,9 +235,27 @@ async function bootstrap(): Promise<PGliteInterface> {
   return db;
 }
 
+/**
+ * Apply the shipped dataset (schema + seed), the `app` content schema and the
+ * authored markdown, then mirror the gateway's per-session search path.
+ *
+ * First boot and a workspace reset both go through here, so the two can never
+ * drift: a reset that forgot the content seed, or one that seeded a different
+ * schema than boot did, would be a bug the reset test could not see.
+ */
+async function seedDatabase(db: PGliteInterface): Promise<void> {
+  await db.exec(schemaSql);
+  await db.exec(seedSql);
+  await createContentSchema(db);
+  await seedContentDocs(db);
+  /* The commerce tables resolve unqualified (FROM orders) while `app` metadata
+     stays off the path. Session-scoped, so it also holds for a statement that
+     brings its own transaction. */
+  await db.exec('SET search_path = dataset, public');
+}
+
 /* Tear the worker down and drop the handle. The next query rebuilds the database
-   from the same schema and seed, so the dataset is restored by construction —
-   and the read-only transaction meant it was never modified anyway. */
+   from the same schema and seed, so the dataset is restored by construction. */
 async function disposeDatabase(): Promise<void> {
   const w = liveWorker;
   liveWorker = null;
@@ -254,6 +309,33 @@ export function warmUpDatabase(): void {
   void getDatabase().catch(() => {
     /* surfaced on first real query */
   });
+}
+
+/**
+ * Restore the original workspace: drop everything the learner put in the
+ * `dataset` schema — their tables, their rows, their dropped columns — and
+ * re-apply the shipped schema, seed and chapter content.
+ *
+ * `DROP SCHEMA ... CASCADE` rather than the schema's own `DROP TABLE`s: the
+ * learner may have created a table the seed script does not know about, and a
+ * reset that leaves those behind is not a reset. The database stays open and
+ * warm, so the next Run works with no reload.
+ *
+ * The measurement is the engine's, not the UI's: the caller reports what this
+ * returns, so a "0.4s" badge is what the engine actually spent.
+ */
+export async function resetEnvironment(): Promise<{ ok: boolean; duration_ms: number }> {
+  const t0 = typeof performance !== 'undefined' && performance.now ? performance.now() : Date.now();
+  const db = await getDatabase();
+  /* A learner may have left a transaction open on purpose (`BEGIN;` with no
+     `COMMIT;`). Reset is the documented way out, so close it first — otherwise
+     the drop would run inside their transaction and the content seed, which
+     opens its own, would fail. */
+  await db.exec('ROLLBACK').catch(() => undefined);
+  await db.exec('DROP SCHEMA IF EXISTS dataset CASCADE');
+  await seedDatabase(db);
+  const ms = (typeof performance !== 'undefined' && performance.now ? performance.now() : Date.now()) - t0;
+  return { ok: true, duration_ms: Number(ms.toFixed(1)) };
 }
 
 /* ---------- execution ---------- */
@@ -319,12 +401,6 @@ function mapError(e: unknown, sql: string): QueryErrorShape {
     case '42803':
     case '42702':
       return { code: 'QUERY_RUNTIME_ERROR', message, detail: withDetail };
-    case '25006':
-      return {
-        code: 'QUERY_RUNTIME_ERROR',
-        message: 'This exercise runs in a read-only transaction, so the statement cannot change data.',
-        detail: message,
-      };
     case '57014':
     case '55P03':
       return { code: 'QUERY_TIMEOUT', message: 'The query was stopped because it ran too long.', detail: message };
@@ -342,13 +418,17 @@ function mapError(e: unknown, sql: string): QueryErrorShape {
   }
 }
 
-async function beginReadOnly(db: PGliteInterface): Promise<void> {
-  try {
-    await db.exec('BEGIN READ ONLY');
-  } catch {
-    await db.exec('ROLLBACK').catch(() => undefined);
-    await db.exec('BEGIN READ ONLY');
-  }
+/**
+ * Whether the learner's own text controls the transaction.
+ *
+ * A submission that says `BEGIN`, `COMMIT` or `ROLLBACK` is a transaction
+ * lesson, and wrapping it in a transaction of ours would make its own `BEGIN`
+ * fail with "already a transaction in progress". When the learner manages the
+ * transaction, their statements are run exactly as written and we neither open
+ * nor close one for them.
+ */
+function managesOwnTransaction(sql: string): boolean {
+  return /(^|;)\s*(begin|start\s+transaction|commit|end|rollback|savepoint|release)\b/i.test(sql);
 }
 
 function pickResult(results: Array<{ rows: unknown[]; fields: { name: string; dataTypeID: number }[]; command?: string }>): { rows: unknown[][]; fields: { name: string; dataTypeID: number }[] } | null {
@@ -381,7 +461,14 @@ function withHardTimeout<T>(run: Promise<T>, ms: number): Promise<T> {
   });
 }
 
-/** Execute learner SQL for real, in a read-only transaction that is always rolled back. */
+/**
+ * Execute learner SQL for real, in an ordinary (writable) transaction.
+ *
+ * A statement that succeeds is committed, so the workspace keeps what the
+ * learner did; a statement that fails is rolled back, so a half-applied
+ * submission never sticks. A submission that manages its own transaction is
+ * handed to PostgreSQL unwrapped — that is what a transaction chapter needs.
+ */
 export async function executeSql(sql: string): Promise<EngineResult> {
   const text = String(sql ?? '');
   const statement = stripComments(text);
@@ -394,20 +481,20 @@ export async function executeSql(sql: string): Promise<EngineResult> {
     return failed('ENVIRONMENT_UNAVAILABLE', 'The in-browser database could not start.', sqlStateOf(e).message);
   }
 
+  const wrapped = !managesOwnTransaction(statement);
   let results: Array<{ rows: unknown[]; fields: { name: string; dataTypeID: number }[]; command?: string }>;
+  let succeeded = false;
   try {
     const attempt = (async () => {
-      await beginReadOnly(db);
-      /* Mirror the gateway's per-session setting: the commerce tables resolve
-         unqualified (FROM orders) while `app` metadata stays off the path. */
-      await db.exec('SET LOCAL search_path = dataset, public');
-      return db.exec(text, { rowMode: 'array' });
+      if (wrapped) await db.exec('BEGIN');
+      return db.exec(text, { rowMode: 'array', parsers: TEXT_PARSERS });
     })();
     /* Only a Worker can be stopped from outside. On the main-thread fallback
        there is nothing to kill, so wrapping it in a timeout would just report a
        stop that never happens; `engineCapabilities()` already tells the UI that
        this engine has no hard deadline. */
     results = liveWorker !== null ? await withHardTimeout(attempt, QUERY_TIMEOUT_MS) : await attempt;
+    succeeded = true;
   } catch (e) {
     if (e instanceof QueryTimeout) {
       /* The worker is still spinning inside the WASM loop; terminating it is the
@@ -421,9 +508,13 @@ export async function executeSql(sql: string): Promise<EngineResult> {
     }
     return { status: 'failed', columns: [], rows: [], row_count: 0, truncated: false, error: mapError(e, text) };
   } finally {
-    /* A terminated worker has no transaction left to roll back; the timeout path
-       has already dropped the client, so this runs only on the normal path. */
-    if (liveWorker !== null) await db.exec('ROLLBACK').catch(() => undefined);
+    /* A terminated worker has no transaction left to finish and its client is
+       gone (`database` is null after disposeDatabase), so this runs only on a
+       live connection — including the main-thread fallback, where skipping it
+       would leave the transaction open and the write uncommitted. */
+    if (wrapped && database !== null) {
+      await db.exec(succeeded ? 'COMMIT' : 'ROLLBACK').catch(() => undefined);
+    }
   }
 
   const chosen = pickResult(results);
@@ -444,7 +535,7 @@ export async function executeSql(sql: string): Promise<EngineResult> {
 const INTERNAL_TABLES = new Set(['dataset_meta', 'content_docs', 'content_meta']);
 
 async function queryWithFields(db: PGliteInterface, sql: string): Promise<{ rows: unknown[][]; fields: { name: string; dataTypeID: number }[] }> {
-  const res = await db.exec(sql, { rowMode: 'array' });
+  const res = await db.exec(sql, { rowMode: 'array', parsers: TEXT_PARSERS });
   for (let i = res.length - 1; i >= 0; i--) {
     if (res[i] && res[i].fields.length > 0) {
       return { rows: res[i].rows as unknown as unknown[][], fields: res[i].fields };

@@ -23,6 +23,11 @@ const LearnerRole = "querycraft_learner"
 // It is idempotent and must run on every boot, not only when the dataset is
 // first created: a cluster initialised before this role existed still needs it,
 // and a container image may present a database the app has never seen.
+//
+// It grants SELECT and nothing else, and that stays true: this is the gateway's
+// own database, where the learner is a reader. A challenge environment is a
+// different database with a different grant set (LoadWritableIntoTemplate), so
+// the two must not be collapsed into one "make the learner role useful" helper.
 func EnsureLearnerRole(ctx context.Context, conn *pgx.Conn, password string) error {
 	role := quoteIdent(LearnerRole)
 

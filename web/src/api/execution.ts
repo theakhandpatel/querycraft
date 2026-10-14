@@ -3,7 +3,15 @@ import { decodeAuthSession, decodeEvaluation, decodeQueryResult, decodeUser } fr
 import { engineExecute } from './engine';
 import { checksFromComparison, compareColumns, compareResult } from './compare';
 import type { Comparison, ExpectedResult } from './compare';
-import { PGLITE_ENGINE, engineCapabilities, executeSql, fetchModuleContent, fetchTables, warmUpDatabase } from './pglite';
+import {
+  PGLITE_ENGINE,
+  engineCapabilities,
+  executeSql,
+  fetchModuleContent,
+  fetchTables,
+  resetEnvironment as resetPgliteEnvironment,
+  warmUpDatabase,
+} from './pglite';
 import { STORE_ATTEMPTS, STORE_DRAFTS, STORE_PROGRESS, idbGet, idbPut, idbPutMany } from './idb';
 import { bundleFromProgress } from '../lib/offlineBundle';
 import { attemptKey } from '../lib/progress';
@@ -21,6 +29,8 @@ import type {
   CourseGeneration,
   Evaluation,
   EngineCapabilities,
+  EnvironmentInfo,
+  EnvironmentReset,
   ExecutionApi,
   GenerationRequest,
   LoginInput,
@@ -55,6 +65,10 @@ export interface ExecutionServiceShape {
   runQuery(sql: string, expect?: Block): Effect.Effect<QueryResult, GatewayError>;
   checkAnswer(sql: string, cell: Cell): Effect.Effect<Evaluation, GatewayError>;
   getTables(): Effect.Effect<TablesResponse, GatewayError>;
+  /* ADR 0003: the learner's writes live in a workspace that can be restored.
+     `getEnvironment()` returns null when the adapter has no such workspace. */
+  getEnvironment(): Effect.Effect<EnvironmentInfo | null, GatewayError>;
+  resetEnvironment(): Effect.Effect<EnvironmentReset, GatewayError>;
   getProgress(courseId?: string): Effect.Effect<{ ok: boolean; snapshot?: unknown }, GatewayError>;
   saveProgress(snapshot: Progress, courseId?: string): Effect.Effect<{ ok: boolean }, GatewayError>;
   logEvent(evt: ProgressEvent): Effect.Effect<{ ok: boolean; id?: string }, GatewayError>;
@@ -291,7 +305,10 @@ export function mockLayer(config: ApiConfig = MOCK_CONFIG, note: NoteFn = () => 
     ...mockAuthMethods(config, note),
     /* Nothing is executed here — the results are canned — so there is no engine
        to put a deadline on and no capability to advertise. */
-    capabilities: () => Effect.succeed<EngineCapabilities | null>({ placement: 'none', hardTimeout: false, timeoutMs: 0 }),
+    /* Canned results: nothing executes, so there is no deadline to enforce and
+       no workspace to write to. */
+    capabilities: () =>
+      Effect.succeed<EngineCapabilities | null>({ placement: 'none', hardTimeout: false, timeoutMs: 0, writable: false }),
     runQuery: (sql, expect) =>
       Effect.gen(function* () {
         const t0 = nowMs();
@@ -337,6 +354,17 @@ export function mockLayer(config: ApiConfig = MOCK_CONFIG, note: NoteFn = () => 
         const rows = TABLES.reduce((a, t) => a + t.rows, 0);
         return { dataset: 'commerce', version: 1, tables: TABLES, rows };
       }),
+    /* The mock adapter holds no database at all, so there is no environment to
+       report and nothing a reset could restore. Saying so is the honest result;
+       pretending to reset would be the one thing the mock must never do. */
+    getEnvironment: () => Effect.succeed<EnvironmentInfo | null>(null),
+    resetEnvironment: () =>
+      Effect.fail(
+        new GatewayError({
+          code: 'ENVIRONMENT_UNAVAILABLE',
+          message: 'Canned results have no workspace to reset. This adapter does not run SQL at all.',
+        }),
+      ),
     ...localMethods(config, note),
   };
   return Layer.succeed(ExecutionService, service);
@@ -566,6 +594,17 @@ export function pgliteLayer(config: ApiConfig = PGLITE_CONFIG, note: NoteFn = ()
         note('GET', '/datasets/commerce/tables', 200, nowMs() - t0);
         return { dataset: 'commerce', version: 1, tables: live.tables, rows: live.rows };
       }),
+    /* The browser engine is the learner's own database, created on first use
+       and writable, so it always has an environment to describe. */
+    getEnvironment: () =>
+      Effect.succeed<EnvironmentInfo | null>({ database: config.baseUrl, exists: true, writable: true }),
+    resetEnvironment: () =>
+      Effect.gen(function* () {
+        const t0 = nowMs();
+        const out = yield* Effect.tryPromise({ try: () => resetPgliteEnvironment(), catch: engineFailure });
+        note('POST', '/environment/reset', 200, nowMs() - t0);
+        return { ok: out.ok, duration_ms: out.duration_ms, environment: { database: config.baseUrl, exists: true, writable: true } };
+      }),
     ...localMethods(config, note),
     /* Overrides the bundled fallback: content comes out of the database. */
     getContent: (moduleId) =>
@@ -680,7 +719,10 @@ export function httpLayer(opts: {
         Effect.map((json): EngineCapabilities | null => {
           const body = (json ?? {}) as { hard_timeout?: unknown };
           const hardTimeout = typeof body.hard_timeout === 'boolean' ? body.hard_timeout : true;
-          return { placement: 'server', hardTimeout, timeoutMs: 5000 };
+          /* Writes need an owned environment, which the gateway gives a
+             signed-in learner; an anonymous visitor keeps the shared read-only
+             dataset (ADR 0003). So the honest answer is "is there a session". */
+          return { placement: 'server', hardTimeout, timeoutMs: 5000, writable: readAuthToken() !== null };
         }),
         Effect.catch(() => Effect.succeed<EngineCapabilities | null>(null)),
       ),
@@ -755,6 +797,19 @@ export function httpLayer(opts: {
         Effect.map((json) => json as TablesResponse),
         Effect.catch(() => Effect.succeed({ dataset: 'commerce', version: 1, tables: [], rows: 0 })),
       ),
+    /* ADR 0003. `GET /environment` describes the caller's workspace; an
+       anonymous caller has none, so it answers null rather than an error. A 401
+       is still handled by the shared request helper, which drops the token. */
+    getEnvironment: () =>
+      request('GET', '/environment').pipe(
+        Effect.map(environmentFrom),
+        Effect.catch(() => Effect.succeed<EnvironmentInfo | null>(null)),
+      ),
+    resetEnvironment: () =>
+      request('POST', '/environment/reset').pipe(
+        Effect.map(asEnvironmentReset),
+        Effect.mapError(asGatewayError),
+      ),
     /* The gateway does not serve chapter content yet, so use the authored
        markdown that ships with the client. */
     getContent: (moduleId) => Effect.succeed(BUNDLED_CONTENT[moduleId] ?? []),
@@ -818,6 +873,42 @@ function errorCode(body: unknown): string | null {
 function errorMessage(body: unknown): string | null {
   const err = (body as { error?: { message?: unknown } } | null)?.error;
   return typeof err?.message === 'string' ? err.message : null;
+}
+
+/* The environment endpoints answer `{ ok, environment }` (reset adds
+   `duration_ms`). There is no contracts/*.schema.json for them yet, so the
+   parse is deliberately tolerant: an unknown shape reads as "no environment"
+   rather than throwing inside a reset the learner has already confirmed.
+   Errors never reach here — a 4xx fails earlier in `request` with the
+   gateway's own code and message, which the UI shows verbatim. */
+function asEnvironment(value: unknown): EnvironmentInfo | null {
+  if (typeof value !== 'object' || value === null) return null;
+  const e = value as Record<string, unknown>;
+  const str = (k: string): string | undefined => (typeof e[k] === 'string' ? (e[k] as string) : undefined);
+  const num = (k: string): number | undefined => (typeof e[k] === 'number' ? (e[k] as number) : undefined);
+  return {
+    account: str('account'),
+    database: str('database'),
+    exists: e.exists === true,
+    writable: e.writable === true,
+    tables: num('tables'),
+    created_at: str('created_at'),
+    reset_at: str('reset_at'),
+    idle_until: str('idle_until'),
+  };
+}
+
+function environmentFrom(json: unknown): EnvironmentInfo | null {
+  return asEnvironment((json as { environment?: unknown } | null)?.environment);
+}
+
+function asEnvironmentReset(json: unknown): EnvironmentReset {
+  const body = (json ?? {}) as { ok?: unknown; duration_ms?: unknown; environment?: unknown };
+  return {
+    ok: body.ok === true,
+    duration_ms: typeof body.duration_ms === 'number' ? body.duration_ms : 0,
+    environment: asEnvironment(body.environment) ?? undefined,
+  };
 }
 
 function failedResult(e: unknown): QueryResult {
@@ -905,6 +996,8 @@ export function createExecutionApi(opts: {
     runQuery: (sql, expect) => call((svc) => svc.runQuery(sql, expect)),
     checkAnswer: (sql, cell) => call((svc) => svc.checkAnswer(sql, cell)),
     getTables: () => call((svc) => svc.getTables()),
+    getEnvironment: () => call((svc) => svc.getEnvironment()),
+    resetEnvironment: () => call((svc) => svc.resetEnvironment()),
     getContent: (moduleId) => call((svc) => svc.getContent(moduleId)),
     getProgress: (courseId) => call((svc) => svc.getProgress(courseId)),
     saveProgress: (snapshot, courseId) => call((svc) => svc.saveProgress(snapshot, courseId)),

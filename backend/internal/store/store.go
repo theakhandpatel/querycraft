@@ -57,5 +57,11 @@ type Store interface {
 	SessionUser(ctx context.Context, token string) (User, bool, error)
 	DeleteSession(ctx context.Context, token string) error
 
+	// Kind names the implementation for the diagnostics view: "postgres" when
+	// accounts and snapshots survive a restart, "memory" when they do not. A
+	// gateway running on the memory store is not broken, but a learner looking
+	// at it should be told their progress is not being kept.
+	Kind() string
+
 	Close() error
 }

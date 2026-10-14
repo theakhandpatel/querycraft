@@ -273,6 +273,9 @@ func (p *Postgres) DeleteSession(ctx context.Context, token string) error {
 }
 
 // Close implements Store.
+// Kind implements Store.
+func (p *Postgres) Kind() string { return "postgres" }
+
 func (p *Postgres) Close() error {
 	if p.pool != nil {
 		p.pool.Close()

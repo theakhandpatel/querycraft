@@ -86,6 +86,15 @@ func Execute(ctx context.Context, ex Executor, sql string, limits Limits) QueryR
 		if rerr := rows.Err(); rerr != nil {
 			return res.failed(classify(qctx, rerr), start)
 		}
+	} else {
+		// A cap was hit, so the rest of the result is unwanted. Cancelling the
+		// query now makes the server abort it; without this, closing a partially
+		// read result makes the driver drain every remaining row to leave the
+		// connection usable, and a capped read of `generate_series(1, 1e9)` then
+		// spends the whole deadline discarding rows nobody asked for (measured:
+		// 4003 ms to return 300 rows). The cancellation is also why the pool
+		// connection is free immediately instead of at the timeout.
+		cancel()
 	}
 
 	res.Truncated = rowCapped || byteCapped
@@ -150,14 +159,29 @@ func (res QueryResult) failed(qerr *QueryError, start time.Time) QueryResult {
 	return res
 }
 
-// classify maps an engine error to a stable code. PostgreSQL SQLSTATE class 42
-// ("syntax error or access rule violation") is reported as a syntax error;
-// everything else the engine rejects is a runtime error. Deadline misses and
-// server-side cancellations map to QUERY_TIMEOUT, and connectivity problems map
-// to ENVIRONMENT_UNAVAILABLE.
+// classify maps an engine error onto the contract's closed error-code set
+// (design §4.2). The table is shared, code by code, with the browser adapter
+// (web/src/api/pglite.ts, mapError): one lesson runs against both adapters, and
+// the learner must not see the same mistake described two different ways.
+//
+// The distinction that carries the most weight is syntax versus runtime.
+// QUERY_SYNTAX_ERROR means the *parser* rejected the statement, so "look at
+// your SQL" is the only useful advice. Everything the engine rejects after
+// parsing is a runtime error, and that explicitly includes SQLSTATE class 42's
+// "undefined table" and "undefined column": those are errors about a *name*
+// the learner can see in the tables drawer, not about the shape of their SQL.
+// Class 42's name ("syntax error or access rule violation") is a historical
+// label, not a classification, which is why 42501 (permission denied) is also
+// a runtime error here.
+//
+// Deadline misses and server-side cancellations map to QUERY_TIMEOUT, and
+// connectivity problems map to ENVIRONMENT_UNAVAILABLE.
 func classify(ctx context.Context, err error) *QueryError {
 	if err == nil {
 		return nil
+	}
+	if errors.Is(err, ErrPoolTimeout) {
+		return NewError(CodeTimeout, "The gateway was busy; no execution connection became available within the time limit.", "")
 	}
 	if errors.Is(err, context.DeadlineExceeded) || errors.Is(err, context.Canceled) {
 		return NewError(CodeTimeout, "Query exceeded the time limit and was stopped.", "")
@@ -171,11 +195,19 @@ func classify(ctx context.Context, err error) *QueryError {
 		if strings.TrimSpace(detail) == "" {
 			detail = pgErr.Hint
 		}
-		switch {
-		case pgErr.Code == "57014":
-			return NewError(CodeTimeout, "Query was canceled, likely because it exceeded the time limit.", detail)
-		case strings.HasPrefix(pgErr.Code, "42"):
+		switch pgErr.Code {
+		case "42601", "42603", "42604":
+			// The parser rejected the statement and reported where.
 			return NewError(CodeSyntax, pgErr.Message, detail)
+		case "57014", "55P03":
+			return NewError(CodeTimeout, "Query was canceled, likely because it exceeded the time limit.", detail)
+		case "54000", "53100", "53400":
+			// The server stopped itself before producing a result: out of
+			// memory, disk or configured limits. The contract calls this
+			// RESULT_LIMIT_EXCEEDED, and the server's own words are the detail.
+			return NewError(CodeResultLimit, pgErr.Message, detail)
+		case "53300", "3D000", "08006", "08003":
+			return NewError(CodeEnvironmentUnavailable, pgErr.Message, detail)
 		default:
 			return NewError(CodeRuntime, pgErr.Message, detail)
 		}

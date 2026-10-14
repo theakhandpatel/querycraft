@@ -59,6 +59,30 @@ func (f *fakeExecutor) Ping(ctx context.Context) error { return nil }
 func (f *fakeExecutor) Version(ctx context.Context) (string, error) {
 	return "PostgreSQL 16.3 (test)", nil
 }
+func (f *fakeExecutor) Stats() engine.PoolStats {
+	return engine.PoolStats{MaxConns: 4, TotalConns: 2, IdleConns: 1, AcquiredConns: 1}
+}
+
+// Ready mirrors the real executor: an executor that cannot answer a query is
+// not ready, and /diagnostics has to say so rather than report a healthy pool.
+func (f *fakeExecutor) Ready(ctx context.Context) (bool, string) {
+	if f.err != nil {
+		return false, f.err.Error()
+	}
+	return true, ""
+}
+
+// Diagnostics makes the fake a Diagnostician so the /diagnostics test covers
+// the learner subsection without a live database.
+func (f *fakeExecutor) Diagnostics(ctx context.Context) map[string]any {
+	return map[string]any{
+		"current_user": "querycraft_learner",
+		"search_path":  "dataset",
+		"database":     "querycraft",
+		"can_read_app": false,
+	}
+}
+
 func (f *fakeExecutor) Close() error { return nil }
 
 func newTestServer(exec engine.Executor) *Server {
@@ -395,6 +419,8 @@ func (nonFiniteExecutor) Query(ctx context.Context, sql string, args ...any) (en
 }
 func (nonFiniteExecutor) Ping(ctx context.Context) error              { return nil }
 func (nonFiniteExecutor) Version(ctx context.Context) (string, error) { return "PostgreSQL test", nil }
+func (nonFiniteExecutor) Stats() engine.PoolStats                     { return engine.PoolStats{} }
+func (nonFiniteExecutor) Ready(ctx context.Context) (bool, string)    { return true, "" }
 func (nonFiniteExecutor) Close() error                                { return nil }
 
 // An executor value with no JSON representation must still produce a well-formed
@@ -428,6 +454,8 @@ func (bigExecutor) Query(ctx context.Context, sql string, args ...any) (engine.R
 }
 func (bigExecutor) Ping(ctx context.Context) error              { return nil }
 func (bigExecutor) Version(ctx context.Context) (string, error) { return "PostgreSQL test", nil }
+func (bigExecutor) Stats() engine.PoolStats                     { return engine.PoolStats{} }
+func (bigExecutor) Ready(ctx context.Context) (bool, string)    { return true, "" }
 func (bigExecutor) Close() error                                { return nil }
 
 // A request may lower a cap but never raise it: asking for max_rows beyond the

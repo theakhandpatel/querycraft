@@ -82,3 +82,48 @@ func nonFiniteFloatText(f float64) (string, bool) {
 func uuidString(b [16]byte) string {
 	return fmt.Sprintf("%08x-%04x-%04x-%04x-%012x", b[0:4], b[4:6], b[6:8], b[8:10], b[10:16])
 }
+
+// textOIDs are the PostgreSQL types whose contract value is the engine's own
+// text, not a JSON number and not a date re-rendered by the host.
+//
+// The browser adapter (web/src/api/pglite.ts) returns exactly this text for the
+// same columns, and the gateway has to agree: one lesson runs against both, so
+// a price that reads "118.00" in the browser must not read 118 over HTTP. Both
+// divergences this closes were real and measured:
+//
+//   - `numeric` used to go through Float64Value, which drops the scale:
+//     118.00 arrived as 118 (a value the learner can no longer trust).
+//   - a naive `timestamp` used to be decoded into a time value and re-rendered,
+//     which moves the wall-clock time by the host's UTC offset (10:30 became
+//     05:00 under Asia/Calcutta), because a "timestamp without time zone" has
+//     no offset to preserve and any conversion invents one.
+//
+// Everything else keeps its decoded Go value, because the browser adapter
+// produces the same shape: int4/float8 are JSON numbers, bool is a JSON
+// boolean, arrays and jsonb keep their structure, int8 stays a string no
+// double can hold exactly.
+var textOIDs = map[uint32]struct{}{
+	1082: {}, // date
+	1083: {}, // time
+	1114: {}, // timestamp
+	1184: {}, // timestamptz
+	1186: {}, // interval
+	1266: {}, // timetz
+	1700: {}, // numeric
+}
+
+// normalizeColumn encodes one result column. raw is the value byte for byte as
+// the server sent it; for the OIDs above that is the text form, because
+// PgxExecutor.Query asks for it (see pgResultFormats). decoded is the value
+// pgx parsed, and is only consulted for the other types.
+//
+// A nil raw value is SQL NULL: it stays nil whatever the OID.
+func normalizeColumn(oid uint32, raw []byte, decoded any) any {
+	if raw == nil {
+		return nil
+	}
+	if _, ok := textOIDs[oid]; ok {
+		return string(raw)
+	}
+	return normalizeValue(decoded)
+}

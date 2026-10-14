@@ -52,7 +52,7 @@ export default function ChallengeLabScreen() {
   const [topics, setTopics] = useState('window functions, ranking within groups, tie handling');
   const [difficulty, setDifficulty] = useState('Challenging');
   const [scenario, setScenario] = useState('A subscription business wants to find the top plan per region each month');
-  const [constraints, setConstraints] = useState('Single statement. Read-only. Return no more than 50 rows. Must include a deterministic tie-break.');
+  const [constraints, setConstraints] = useState('Answer with one statement. Return no more than 50 rows. Must include a deterministic tie-break.');
   const [states, setStates] = useState(CL_STEPS.map(() => 'idle'));
   const [log, setLog] = useState<{ t: string; html: string }[]>([]);
   const [logOpen, setLogOpen] = useState(true);

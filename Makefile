@@ -33,7 +33,7 @@ SMOKE_PG_DIR  ?= $(BACKEND_DIR)/.data/smoke
 # cache but keep the smoke cluster's data and runtime dirs isolated.
 PG_BINARIES_DIR ?= $(BACKEND_DIR)/.data/pg/binaries
 
-.PHONY: help install web typecheck embed backend build test verify verify-mock serve run dev docs dataset audit-lessons audit-content audit-storage audit-search audit-courses audit-progress audit-export audit-import audit-fixtures db-reset clean
+.PHONY: help install web typecheck embed backend build test verify verify-mock serve run dev docs dataset audit-lessons audit-content audit-storage audit-search audit-courses audit-progress audit-export audit-import audit-fixtures audit-metrics audit-metrics-live audit-adversarial audit-adversarial-live audit-load audit-parity db-reset clean
 
 help: ## List the available targets with a one-line description.
 	@echo "Querycraft — make targets"
@@ -72,7 +72,7 @@ backend: ## Compile the gateway to backend/bin/querycraft, stamping BuildVersion
 
 build: web embed backend ## Produce the single deployable binary (web + embed + backend).
 
-test: typecheck audit-lessons audit-content audit-storage audit-search audit-progress audit-export audit-import audit-fixtures ## Run the Go test suite, the frontend type-check and the audit suites.
+test: typecheck audit-lessons audit-content audit-storage audit-search audit-progress audit-export audit-import audit-fixtures audit-metrics audit-adversarial audit-parity ## Run the Go test suite, the frontend type-check and the audit suites.
 	cd $(BACKEND_DIR) && $(GO) test ./...
 
 verify: build test ## build + test + smoke-test the binary on an isolated embedded PostgreSQL.
@@ -286,6 +286,31 @@ audit-fixtures: ## Check the language-neutral result-contract fixtures against t
 	cd $(WEB_DIR) && ./node_modules/.bin/esbuild --bundle --format=cjs --platform=node \
 		--outfile=/tmp/fixtures.cjs src/api/compare.ts >/dev/null
 	node scripts/fixtures-audit.mjs
+
+audit-metrics: ## Check /metrics and /diagnostics on an isolated gateway with no database (design 13.1, M3).
+	cd $(WEB_DIR) && ./node_modules/.bin/esbuild --bundle --format=cjs --platform=node \
+		--outfile=/tmp/progress.cjs src/lib/progress.ts >/dev/null
+	QC_GO=$(GO) QC_BACKEND=$(BACKEND_DIR) node scripts/metrics-audit.mjs
+
+audit-metrics-live: ## Same checks against a running gateway (QC_GATEWAY, default http://localhost:18077), plus timeout and row-cap outcomes.
+	cd $(WEB_DIR) && ./node_modules/.bin/esbuild --bundle --format=cjs --platform=node \
+		--outfile=/tmp/progress.cjs src/lib/progress.ts >/dev/null
+	QC_GATEWAY=$${QC_GATEWAY:-http://localhost:18077} node scripts/metrics-audit.mjs
+
+audit-adversarial: ## Run the ten design 13.3 adversarial cases against a freshly booted gateway (M3 step 3).
+	QC_GO=$(GO) QC_BACKEND=$(BACKEND_DIR) node scripts/adversarial-audit.mjs
+
+audit-adversarial-live: ## Same ten cases against a gateway you already run (QC_GATEWAY, default http://localhost:18077).
+	QC_GATEWAY=$${QC_GATEWAY:-http://localhost:18077} node scripts/adversarial-audit.mjs
+
+audit-load: ## Drive concurrent POST /query load and cross-check client latency against the gateway's own /metrics (M3 step 4).
+	QC_GO=$(GO) QC_BACKEND=$(BACKEND_DIR) node scripts/load-test.mjs
+
+audit-load-live: ## Same load against a gateway you already run (QC_GATEWAY, default http://localhost:18077).
+	QC_GATEWAY=$${QC_GATEWAY:-http://localhost:18077} node scripts/load-test.mjs
+
+audit-parity: ## Prove the same lesson SQL returns the same rows on PGlite (Adapter A) and the Go gateway (Adapter B) (M3 exit gate).
+	QC_GO=$(GO) QC_BACKEND=$(BACKEND_DIR) node scripts/adapter-parity-audit.mjs
 
 docs: ## Print the Swagger UI and OpenAPI URLs.
 	@echo "Swagger UI: http://localhost:8080/docs"

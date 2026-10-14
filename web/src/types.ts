@@ -240,6 +240,34 @@ export interface EngineCapabilities {
   placement: 'worker' | 'main' | 'server' | 'none';
   hardTimeout: boolean;
   timeoutMs: number;
+  /** Whether learner SQL may change data. True for the PGlite workspace and for
+      a signed-in gateway environment (ADR 0003); false for canned results. */
+  writable: boolean;
+}
+
+/** The learner's writable workspace, as reported by the active adapter
+    (design §5.4 / ADR 0003). The gateway owns a per-account database copied
+    from the sealed template; the offline adapters own the browser's PGlite
+    instance. `getEnvironment()` returns null when the adapter has no
+    environment at all (canned results). */
+export interface EnvironmentInfo {
+  account?: string;
+  database?: string;
+  exists: boolean;
+  writable: boolean;
+  tables?: number;
+  created_at?: string;
+  reset_at?: string;
+  idle_until?: string;
+}
+
+/** The result of restoring the original dataset. `duration_ms` is what the
+    adapter measured end to end; `environment` describes the fresh workspace
+    when the adapter can produce one. */
+export interface EnvironmentReset {
+  ok: boolean;
+  duration_ms: number;
+  environment?: EnvironmentInfo;
 }
 
 export type PipelineEvent =
@@ -322,6 +350,11 @@ export interface ExecutionApi {
   runQuery(sql: string, expect?: Block): Promise<QueryResult>;
   checkAnswer(sql: string, cell: Cell): Promise<Evaluation>;
   getTables(): Promise<TablesResponse>;
+  /** The learner's writable workspace, or null when the adapter has none. */
+  getEnvironment(): Promise<EnvironmentInfo | null>;
+  /** Restore the original dataset and discard the learner's own changes and
+      tables. Destructive, so the caller confirms first. */
+  resetEnvironment(): Promise<EnvironmentReset>;
   /** Chapter reading content, stored as markdown. */
   getContent(moduleId: string): Promise<ContentSection[]>;
   getProgress(courseId?: string): Promise<{ ok: boolean; snapshot?: unknown }>;

@@ -73,6 +73,13 @@ func (e *fakeExecutor) Ping(ctx context.Context) error { return e.pingErr }
 func (e *fakeExecutor) Version(ctx context.Context) (string, error) {
 	return e.version, nil
 }
+func (e *fakeExecutor) Stats() PoolStats { return PoolStats{} }
+func (e *fakeExecutor) Ready(ctx context.Context) (bool, string) {
+	if e.pingErr != nil {
+		return false, e.pingErr.Error()
+	}
+	return true, ""
+}
 func (e *fakeExecutor) Close() error { return nil }
 
 func cols(names ...string) []Column {
@@ -173,7 +180,9 @@ func TestExecuteErrorClassification(t *testing.T) {
 		{"deadline", context.DeadlineExceeded, CodeTimeout},
 		{"canceled", context.Canceled, CodeTimeout},
 		{"syntax", &pgconn.PgError{Code: "42601", Message: "syntax error at or near \"selct\""}, CodeSyntax},
-		{"class42 undefined table", &pgconn.PgError{Code: "42P01", Message: "relation \"x\" does not exist"}, CodeSyntax},
+		{"class42 undefined table", &pgconn.PgError{Code: "42P01", Message: "relation \"x\" does not exist"}, CodeRuntime},
+		{"class42 undefined column", &pgconn.PgError{Code: "42703", Message: "column \"y\" does not exist"}, CodeRuntime},
+		{"undefined function", &pgconn.PgError{Code: "42883", Message: "function f() does not exist"}, CodeRuntime},
 		{"runtime", &pgconn.PgError{Code: "22P02", Message: "invalid input syntax for type integer"}, CodeRuntime},
 		{"other runtime", &pgconn.PgError{Code: "23505", Message: "duplicate key value"}, CodeRuntime},
 		{"environment", errors.Join(ErrEnvironmentUnavailable, errors.New("dial tcp refused")), CodeEnvironmentUnavailable},

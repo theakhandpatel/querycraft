@@ -533,6 +533,10 @@ Exit gate:
 
 ### M3: Execution gateway (Go and native PostgreSQL)
 
+Status: **shipped**, tagged `v0.3.0`. Plan of record and the release checklist:
+`docs/m3-implementation-plan.md`; live tracker: `progress.md`. The adapter-parity
+result and its exclusions: `docs/adapter-parity.md`.
+
 Scope: Adapter B behind the same contracts, restricted role, limits, streaming caps, cancellation, template environments, Postgres metadata database, Go evaluator, adversarial suite, load test, metrics, `docker compose up` setup.
 
 Exit gate:
@@ -562,6 +566,41 @@ Exit gate:
 - Plans are reproducible on pinned fixtures.
 - Results report engine version, scale and indexes, and do not overstate timing precision.
 
+### M6: Second dialect — SQLite
+
+Plan of record: [`docs/m6-implementation-plan.md`](m6-implementation-plan.md).
+
+Scope: SQLite as a **second dialect**, alongside PostgreSQL — not a replacement for it
+(ADR 0004 explains why the app is PostgreSQL-first). The learner can take a course that
+teaches SQLite, run it on a real SQLite engine in both adapters, and be graded the same
+way. This is the milestone that turns "SQL" from one engine into a dialect dimension.
+
+Concretely:
+
+- A **dialect** concept in the contracts: a course/chapter declares its dialect, and
+  `QueryResult.engine` names the engine that produced a result.
+- Adapter A: SQLite compiled to WebAssembly in a Worker, mirroring the PGlite adapter
+  (same deadline kill, same row/byte caps, same honest capability reporting).
+- Adapter B: SQLite behind the same `POST /query` contract, so the gateway serves both.
+- A second dataset authored for SQLite (schema + seed), with a checked mapping to the
+  commerce dataset so the two dialects answer the same questions about the same shape.
+- **Dialect-aware grading**: SQLite has no SQLSTATE, dynamic typing, `LIKE` is
+  case-insensitive for ASCII, and dates are not types. Error classification and value
+  encoding must therefore be defined per dialect, not assumed from PostgreSQL.
+- Courses that teach what is *different*: SQLite vs PostgreSQL types and affinity,
+  `AUTOINCREMENT` vs `GENERATED`/`IDENTITY`, `PRAGMA` vs `SET`, `rowid`, when SQLite is
+  the right choice, and what it cannot do (no roles, no `EXPLAIN ANALYZE`, no schemas).
+
+Exit gate:
+- A learner cannot accidentally run a SQLite chapter against PostgreSQL, or the reverse,
+  without the UI saying which dialect they are on — and the refusal is actionable.
+- Both dialects run the same *shape* of question (SELECT, JOIN, GROUP BY, window, CTE,
+  recursive CTE) and pass the same result contracts.
+- Error classification is dialect-specific and documented, with a test per code.
+- The adapter-parity audit runs **once per dialect** (PostgreSQL: PGlite vs gateway;
+  SQLite: wasm vs gateway), and both are green.
+- The single binary stays cgo-free and Docker-free.
+
 ## 15. Open decisions
 
 | Decision | Default | Settle by |
@@ -574,6 +613,10 @@ Exit gate:
 | Challenge delete semantics | Delete challenge data after confirmation. Attempts exported first by default. | Before the delete UI |
 | AI provider and SDK | Undecided | M4 spike |
 | Desktop packaging | Not planned | After real install friction evidence |
+| D12: SQLite engine in the browser | Undecided | M6 spike |
+| D13: SQLite engine on the gateway | `modernc.org/sqlite` (pure Go, no cgo) | M6 spike |
+| D14: How SQLite isolates a learner's writes | Per-learner database file, reset by copy | M6 spike |
+| D15: One dialect per chapter, or dialect-neutral chapters with per-dialect solutions | One dialect per chapter | Before the first SQLite course |
 
 ## 16. First backlog
 

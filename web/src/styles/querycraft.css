@@ -424,6 +424,7 @@ button.small.ghost.on:hover{background:var(--accent-soft);color:var(--accent)}
 .drawerhead{display:flex;align-items:flex-start;justify-content:space-between;gap:12px;padding:16px 18px;border-bottom:1px solid var(--line);background:var(--surface)}
 .drawerhead h2{font-size:16px;margin-top:4px}
 .drawerbody{padding:16px 18px 40px;overflow:auto}
+.drawerfoot{margin-top:auto;padding:14px 18px;border-top:1px solid var(--line);background:var(--surface)}
 
 /* ============ Workbook / progress ============ */
 .wbhero{display:flex;gap:18px;align-items:center;justify-content:space-between;flex-wrap:wrap;background:var(--surface);border:0;border-radius:var(--r-lg);padding:20px 22px;margin-bottom:18px}

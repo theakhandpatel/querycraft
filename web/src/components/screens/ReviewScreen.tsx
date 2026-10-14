@@ -4,7 +4,7 @@ import Schema from '../Schema';
 import { useStore } from '../../state/store';
 import { COURSES, MODULES } from '../../data/curriculum';
 import { chapterOutline, courseExerciseTotal, moduleExerciseBlocks } from '../../lib/model';
-import type { ModalName } from '../../types';
+import type { Course, ModalName } from '../../types';
 
 const TABS = [
   ['overview', 'Overview'],
@@ -16,7 +16,8 @@ const TABS = [
 
 export default function ReviewScreen() {
   const s = useStore();
-  const course = COURSES[0];
+  const course = s.draftCourse ?? COURSES[0];
+  const modules = course.modules ?? MODULES;
   const exerciseTotal = courseExerciseTotal(course);
   const [tieRule, setTieRule] = React.useState('include');
 
@@ -29,7 +30,7 @@ export default function ReviewScreen() {
           <p>{s.courseSubtitle}</p>
           <div className="actions mt-12">
             <span className="pill"><span className="dot"></span> Validation passed with notes</span>
-            <span className="pill subtle">PostgreSQL · {MODULES.length} chapters · {exerciseTotal} exercises</span>
+            <span className="pill subtle">PostgreSQL · {modules.length} chapters · {exerciseTotal} exercises</span>
           </div>
         </div>
         <div className="actions">
@@ -44,7 +45,7 @@ export default function ReviewScreen() {
       </div>
 
       <div className="stats">
-        <div className="stat"><strong>{MODULES.length}</strong><span>Chapters in this draft</span></div>
+        <div className="stat"><strong>{modules.length}</strong><span>Chapters in this draft</span></div>
         <div className="stat"><strong>{exerciseTotal}</strong><span>Hands-on exercises</span></div>
         <div className="stat"><strong>4</strong><span>Dataset tables</span></div>
         <div className="stat"><strong>3</strong><span>Validation dimensions</span></div>
@@ -60,7 +61,7 @@ export default function ReviewScreen() {
         <div className="grid2">
           <div className="card">
             <h2>What you'll be able to do</h2>
-            {MODULES.map((m, i) => {
+            {modules.map((m, i) => {
               const first = (m.objectives && m.objectives[0]) || m.title;
               return (
                 <div className="reportrow" key={m.id}>
@@ -96,7 +97,7 @@ export default function ReviewScreen() {
             </div>
             <p className="muted mt-8" style={{ fontSize: 12 }}>Select a chapter to open it. Use the arrows to reorder. Changes affect this draft only.</p>
             <div className="lessonlist">
-              {MODULES.map((m, i) => (
+              {modules.map((m, i) => (
                 <div className={`lessonrow${s.progress.done[m.id] ? ' done' : ''}`} key={m.id}>
                   <span className="lessonnum">{s.progress.done[m.id] ? '✓' : i + 1}</span>
                   <div className="lessontext">
@@ -104,10 +105,10 @@ export default function ReviewScreen() {
                     <small>{m.summary} · {chapterOutline(m).length} sections · {m.minutes} min</small>
                   </div>
                   <div className="actions">
-                    <button className="small" title="Open chapter" onClick={() => s.openLessonIn('sql-analytics', i)}><Icon name="eye" /></button>
+                    <button className="small" title="Open chapter" onClick={() => s.openLessonIn(course.id, i)}><Icon name="eye" /></button>
                     <button className="small" title="Edit chapter" onClick={() => s.openModal('editLesson')}><Icon name="edit" /></button>
                     <button className="small" title="Move up" disabled={i === 0} onClick={() => s.moveLesson(i, -1)}><Icon name="arrow-up" /></button>
-                    <button className="small" title="Move down" disabled={i === MODULES.length - 1} onClick={() => s.moveLesson(i, 1)}><Icon name="arrow-down" /></button>
+                    <button className="small" title="Move down" disabled={i === modules.length - 1} onClick={() => s.moveLesson(i, 1)}><Icon name="arrow-down" /></button>
                   </div>
                 </div>
               ))}
@@ -129,7 +130,7 @@ export default function ReviewScreen() {
         </div>
       )}
 
-      {s.reviewTab === 'lessonPreview' && <SampleChapter />}
+      {s.reviewTab === 'lessonPreview' && <SampleChapter course={course} />}
 
       {s.reviewTab === 'dataset' && (
         <div className="grid2">
@@ -195,9 +196,10 @@ export default function ReviewScreen() {
   );
 }
 
-function SampleChapter() {
+function SampleChapter({ course }: { course: Course }) {
   const s = useStore();
-  const m = MODULES[4] || MODULES[0];
+  const ms = course.modules ?? MODULES;
+  const m = ms[4] || ms[0];
   const outline = chapterOutline(m);
   const ex = moduleExerciseBlocks(m)[0];
   return (
@@ -217,7 +219,7 @@ function SampleChapter() {
           );
         })}
         {ex ? <div className="callout mt-14"><strong>Exercise {String(ex.id).replace('ex.', '')}</strong><br />{ex.prompt}</div> : null}
-        <button className="primary mt-12" onClick={() => s.openLessonIn('sql-analytics', MODULES.indexOf(m))}>Open this chapter<Icon name="arrow-right" /></button>
+        <button className="primary mt-12" onClick={() => s.openLessonIn(course.id, ms.indexOf(m))}>Open this chapter<Icon name="arrow-right" /></button>
       </div>
       <div className="card">
         <h2>How a chapter works</h2>

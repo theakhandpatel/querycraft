@@ -175,6 +175,9 @@ func (m *Memory) DeleteSession(_ context.Context, token string) error {
 }
 
 // Close implements Store.
+// Kind implements Store.
+func (m *Memory) Kind() string { return "memory" }
+
 func (m *Memory) Close() error { return nil }
 
 func clone(b json.RawMessage) json.RawMessage {

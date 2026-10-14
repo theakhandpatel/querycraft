@@ -60,6 +60,8 @@ func (e *fakeExec) Query(ctx context.Context, sql string, args ...any) (engine.R
 }
 func (e *fakeExec) Ping(ctx context.Context) error              { return nil }
 func (e *fakeExec) Version(ctx context.Context) (string, error) { return "test", nil }
+func (e *fakeExec) Stats() engine.PoolStats                     { return engine.PoolStats{} }
+func (e *fakeExec) Ready(ctx context.Context) (bool, string)    { return true, "" }
 func (e *fakeExec) Close() error                                { return nil }
 
 func colsOf(names ...string) []engine.Column {

@@ -23,6 +23,7 @@ import (
 	"github.com/querycraft/sqlquery/backend/internal/auth"
 	"github.com/querycraft/sqlquery/backend/internal/dataset"
 	"github.com/querycraft/sqlquery/backend/internal/engine"
+	"github.com/querycraft/sqlquery/backend/internal/envdb"
 	"github.com/querycraft/sqlquery/backend/internal/httpapi"
 	"github.com/querycraft/sqlquery/backend/internal/localdb"
 	"github.com/querycraft/sqlquery/backend/internal/store"
@@ -114,9 +115,34 @@ func main() {
 		log.Info("default administrator ready", "email", admin.Email, "passwordSet", os.Getenv("QC_ADMIN_PASSWORD") != "")
 	}
 
+	api := httpapi.New(exec, st, cfg, log)
+
+	// ADR 0003: a signed-in learner gets their own writable database, copied
+	// from the sealed template and created on first use. The manager needs the
+	// administrative connection to CREATE/DROP the copies; with no database —
+	// or if it cannot connect — it stays nil and the gateway answers
+	// ENVIRONMENT_UNAVAILABLE rather than inventing a workspace. Anonymous
+	// callers are unaffected: they keep the shared, read-only dataset.
+	if dsn != "" {
+		envManager, err := envdb.New(ctx, envdb.Options{
+			AdminDSN:        dsn,
+			LearnerPassword: adminPassword,
+			Log:             log,
+			Metrics:         api.Registry(),
+		})
+		if err != nil {
+			log.Warn("challenge environments unavailable; signed-in learners will be refused with ENVIRONMENT_UNAVAILABLE", "err", err)
+		} else {
+			// Registered after the local server's Stop defer, so it runs first
+			// (LIFO): dropping a learner's database needs the cluster running.
+			defer envManager.Close()
+			api.UseEnvironments(envManager)
+		}
+	}
+
 	srv := &http.Server{
 		Addr:              addr,
-		Handler:           httpapi.New(exec, st, cfg, log).Handler(),
+		Handler:           api.Handler(),
 		ReadHeaderTimeout: 5 * time.Second,
 		ReadTimeout:       30 * time.Second,
 		WriteTimeout:      30 * time.Second,

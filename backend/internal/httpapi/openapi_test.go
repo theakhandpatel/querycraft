@@ -14,8 +14,12 @@ var openAPIOperations = []struct {
 }{
 	{http.MethodGet, "/health"},
 	{http.MethodGet, "/capabilities"},
+	{http.MethodGet, "/metrics"},
+	{http.MethodGet, "/diagnostics"},
 	{http.MethodPost, "/query"},
 	{http.MethodPost, "/answers/evaluate"},
+	{http.MethodGet, "/environment"},
+	{http.MethodPost, "/environment/reset"},
 	{http.MethodGet, "/datasets/{id}/tables"},
 	{http.MethodPost, "/auth/signup"},
 	{http.MethodPost, "/auth/login"},

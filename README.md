@@ -77,6 +77,27 @@ make verify       # build + tests + smoke test (recommended before a commit)
 The first `make serve` initialises the embedded cluster in `backend/.data/pg`
 (~10 s); later boots are instant. Point it elsewhere with `QC_DATABASE_URL`.
 
+**Verified from nothing on a clean machine** (M3 exit gate). Starting the built
+binary with an empty data directory *and* an empty binary cache — no cluster, no
+downloaded server, no Docker, no config — downloads PostgreSQL 18.3 once
+(measured: 60 MiB, cached in `QC_PG_BINARIES`), runs `initdb`, applies the
+commerce schema and seed, and serves the app. Measured 2026-10-14 on the
+documented flow:
+
+```sh
+root=$(mktemp -d)
+QC_ADDR=127.0.0.1:18099 QC_PG_PORT=54611 \
+QC_PG_DATA=$root/pg/data QC_PG_RUNTIME=$root/pg/runtime QC_PG_BINARIES=$root/pg/binaries \
+  ./backend/bin/querycraft &
+# -> /health   {"engine":"postgresql","status":"ok","version":"PostgreSQL 18.3"}
+# -> /query    {"status":"succeeded",…"rows":[[80]],…}   (select count(*) as n from orders)
+# -> /         200 text/html   (the SPA)
+# -> /docs     200             (Swagger UI)
+```
+
+`make verify` exercises the same cold-boot path on every run, on a throwaway
+cluster in `backend/.data/smoke`, and asserts the responses above.
+
 ## Frontend
 
 Node 20+, npm. No pnpm/yarn required.
@@ -90,8 +111,9 @@ npm run dev            # http://localhost:5173, Postgres (WASM) in the browser �
 `VITE_API_MODE` selects the adapter:
 
 - `pglite` (default) — real PostgreSQL compiled to WebAssembly
-  (`@electric-sql/pglite`) runs in the browser tab; statements run read-only and
-  answers are graded by comparing result sets. No server, no Docker.
+  (`@electric-sql/pglite`) runs in the browser tab, in the learner's own writable
+  database (ADR 0003); answers are graded by comparing result sets, and the tables
+  drawer can restore the sealed dataset at any time. No server, no Docker.
 - `mock` — the original canned results, kept for comparison.
 - `http` — the Go gateway; also set `VITE_API_BASE` (default
   `http://localhost:8080`).
@@ -251,7 +273,15 @@ make audit-courses # run every authored exercise solution through a running gate
 make audit-progress # the progress model: measured time only, v4 -> v5 upgrade
 make audit-export   # the JSON export document: versioned, complete, credential-free
 make audit-fixtures # the language-neutral result-contract fixtures, via the JS evaluator
+make audit-adversarial # the ten design 13.3 adversarial cases, against a freshly booted gateway
+make audit-load       # concurrent POST /query load, cross-checked against the gateway's own /metrics
+make audit-parity     # the same lesson SQL on PGlite (Adapter A) and the Go gateway (Adapter B)
+make audit-metrics    # /metrics and /diagnostics (hermetic) — audit-metrics-live for a running gateway
 ```
+
+`make test` runs the type-check, every audit suite above except the load test and
+parity, and `go test ./...`. The load test and parity audits boot their own
+gateway, so they are separate targets (`make audit-load`, `make audit-parity`).
 
 `make verify` boots the freshly built binary on `:18080` against a throwaway
 PostgreSQL cluster: it wipes and cold-`initdb`s `backend/.data/smoke`, auto-picks
@@ -307,10 +337,22 @@ endpoint set and its evaluator; it also embeds and serves the built SPA
 It owns a real PostgreSQL (embedded by default, `QC_DATABASE_URL` to point at any
 other server) and applies the shared commerce dataset on first boot.
 
+Learner SQL is writable, but only ever inside a workspace the learner owns
+(ADR `0003`). An anonymous `POST /query` runs on the shared `dataset` in a
+read-only transaction and is refused any write; a **signed-in** learner is routed
+to their own database, copied from the sealed template on first use, where
+`INSERT`, `UPDATE`, `DELETE`, DDL and transactions all work. `GET /environment`
+reports that workspace and `POST /environment/reset` drops the learner's changes
+and copies the sealed template again — the same "restore the original data"
+affordance the browser adapter exposes through `resetEnvironment()`. The shared
+dataset itself is never writable in place, so one learner's writes cannot reach
+another's, or the seed.
+
 The frontend's default adapter is the real PGlite engine
-(`web/src/api/pglite.ts`): statements run read-only against the same schema and
-seed the gateway uses, in a Web Worker so the host can terminate a statement that
-overruns the 5 s deadline and reseed the dataset.
+(`web/src/api/pglite.ts`): statements run against the same schema and seed the
+gateway uses, in the learner's own writable browser database, inside a Web Worker
+so the host can terminate a statement that overruns the 5 s deadline and reseed
+the dataset.
 `engineCapabilities()` reports whether that deadline is real (`placement:
 'worker'`) or whether a page that blocks workers forced the main-thread fallback
 (`hard_timeout: false`), and the Appearance screen prints what it reports.

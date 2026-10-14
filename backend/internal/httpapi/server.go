@@ -13,9 +13,10 @@ import (
 	"math/rand/v2"
 	"net/http"
 	"strings"
-	"time"
 
 	"github.com/querycraft/sqlquery/backend/internal/engine"
+	"github.com/querycraft/sqlquery/backend/internal/envdb"
+	"github.com/querycraft/sqlquery/backend/internal/metrics"
 	"github.com/querycraft/sqlquery/backend/internal/store"
 	"github.com/querycraft/sqlquery/backend/internal/webui"
 )
@@ -37,6 +38,22 @@ type Server struct {
 	store store.Store
 	cfg   Config
 	log   *slog.Logger
+
+	// metrics is the instrumentation behind GET /metrics. It is created in New,
+	// never nil, so no handler needs a nil check.
+	metrics *metrics.Registry
+
+	// sem enforces Config.MaxConcurrent. It bounds statements only: reading
+	// progress, listing tables and the SPA must stay available while the
+	// database is saturated, which is exactly when an operator looks at them.
+	sem chan struct{}
+
+	// envs is the per-account writable-workspace manager (ADR 0003). It is nil
+	// when the gateway has no database — or no administrative DSN to copy the
+	// sealed template — in which case a signed-in learner is refused with
+	// ENVIRONMENT_UNAVAILABLE rather than handed an invented workspace. It is
+	// set once, before the handler is served, with UseEnvironments.
+	envs *envdb.Manager
 }
 
 // New builds a Server, filling unset config from the engine defaults.
@@ -56,13 +73,28 @@ func New(exec engine.Executor, st store.Store, cfg Config, log *slog.Logger) *Se
 	if log == nil {
 		log = slog.Default()
 	}
-	return &Server{exec: exec, store: st, cfg: cfg, log: log}
+	srv := &Server{
+		exec:    exec,
+		store:   st,
+		cfg:     cfg,
+		log:     log,
+		metrics: metrics.New(),
+		sem:     make(chan struct{}, cfg.MaxConcurrent),
+	}
+	srv.declareMetrics()
+	return srv
 }
+
+// Registry exposes the instrumentation so a test can read a counter directly
+// instead of scraping it back out of the text format.
+func (s *Server) Registry() *metrics.Registry { return s.metrics }
 
 // Handler returns the routed, CORS-wrapped HTTP handler.
 func (s *Server) Handler() http.Handler {
 	mux := http.NewServeMux()
 	mux.HandleFunc("GET /health", s.handleHealth)
+	mux.HandleFunc("GET /metrics", s.handleMetrics)
+	mux.HandleFunc("GET /diagnostics", s.handleDiagnostics)
 	mux.HandleFunc("POST /auth/signup", s.handleSignup)
 	mux.HandleFunc("POST /auth/login", s.handleLogin)
 	mux.HandleFunc("POST /auth/logout", s.handleLogout)
@@ -70,6 +102,8 @@ func (s *Server) Handler() http.Handler {
 	mux.HandleFunc("GET /capabilities", s.handleCapabilities)
 	mux.HandleFunc("POST /query", s.handleQuery)
 	mux.HandleFunc("POST /answers/evaluate", s.handleEvaluate)
+	mux.HandleFunc("GET /environment", s.handleEnvironment)
+	mux.HandleFunc("POST /environment/reset", s.handleEnvironmentReset)
 	mux.HandleFunc("GET /datasets/{id}/tables", s.handleTables)
 	mux.HandleFunc("GET /progress/{course}", s.handleGetProgress)
 	mux.HandleFunc("PUT /progress/{course}", s.handlePutProgress)
@@ -90,8 +124,12 @@ func (s *Server) Handler() http.Handler {
 	}
 	// withAuth sits inside logging/request-id so a resolved account is visible to
 	// every handler and to the access log's context, and inside CORS so that an
-	// OPTIONS preflight short-circuits before any database lookup.
-	return withCORS(s.withRequest(s.withLogging(s.withAuth(mux))))
+	// OPTIONS preflight short-circuits before any database lookup. withMetrics is
+	// outside withAuth so an unauthenticated request is still measured, and it
+	// resolves the route from the mux rather than the handler chain so that
+	// requests answered before routing carry a route label from a bounded set
+	// instead of an attacker-chosen path.
+	return withCORS(s.withRequest(s.withObservability(s.withAuth(mux), routeOfMux(mux))))
 }
 
 /* ---------- middleware ---------- */
@@ -120,30 +158,6 @@ func (s *Server) withRequest(next http.Handler) http.Handler {
 		w.Header().Set("X-Request-Id", id)
 		next.ServeHTTP(w, r.WithContext(engine.WithRequestID(r.Context(), id)))
 	})
-}
-
-func (s *Server) withLogging(next http.Handler) http.Handler {
-	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		start := time.Now()
-		rec := &statusRecorder{ResponseWriter: w, status: http.StatusOK}
-		next.ServeHTTP(rec, r)
-		s.log.Info("request",
-			"method", r.Method,
-			"path", r.URL.Path,
-			"status", rec.status,
-			"ms", engine.RoundMS(time.Since(start)),
-		)
-	})
-}
-
-type statusRecorder struct {
-	http.ResponseWriter
-	status int
-}
-
-func (r *statusRecorder) WriteHeader(code int) {
-	r.status = code
-	r.ResponseWriter.WriteHeader(code)
 }
 
 /* ---------- helpers ---------- */
@@ -183,7 +197,11 @@ func readJSON(w http.ResponseWriter, r *http.Request, dst any) bool {
 	return true
 }
 
+// writeJSON writes a JSON body, and — when the body carries a stable error code
+// — records that code for the access log. Doing it here rather than in each
+// handler means a new endpoint cannot quietly ship without an error_code.
 func writeJSON(w http.ResponseWriter, status int, v any) {
+	noteError(w, errorCode(v))
 	w.Header().Set("Content-Type", "application/json; charset=utf-8")
 	w.WriteHeader(status)
 	enc := json.NewEncoder(w)

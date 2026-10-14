@@ -19,9 +19,10 @@ const openAPISpec = `{
   "servers": [{"url": "/"}],
   "security": [],
   "tags": [
-    {"name": "system", "description": "Liveness and advertised capabilities."},
+    {"name": "system", "description": "Liveness, advertised capabilities, metrics and diagnostics."},
     {"name": "auth", "description": "Local accounts and bearer-token sessions."},
     {"name": "query", "description": "SQL execution and answer evaluation."},
+    {"name": "environment", "description": "The learner's writable workspace and its reset."},
     {"name": "datasets", "description": "Dataset introspection."},
     {"name": "progress", "description": "Per-course progress snapshots."},
     {"name": "events", "description": "Client telemetry events."},
@@ -50,6 +51,34 @@ const openAPISpec = `{
           "200": {
             "description": "Capabilities.",
             "content": {"application/json": {"schema": {"$ref": "#/components/schemas/CapabilitiesResponse"}}}
+          }
+        }
+      }
+    },
+    "/metrics": {
+      "get": {
+        "operationId": "getMetrics",
+        "tags": ["system"],
+        "summary": "Prometheus text exposition of request, statement and pool metrics.",
+        "description": "Unlabelled series arrive without braces. Labels are a bounded set (route patterns, method, status class, error code), so scraping never grows unbounded series. The pool and readiness gauges are sampled at scrape time.",
+        "responses": {
+          "200": {
+            "description": "Prometheus text exposition (version 0.0.4).",
+            "content": {"text/plain": {"schema": {"type": "string"}}}
+          }
+        }
+      }
+    },
+    "/diagnostics": {
+      "get": {
+        "operationId": "getDiagnostics",
+        "tags": ["system"],
+        "summary": "Measured readiness, versions, pool state and sandbox facts.",
+        "description": "Never includes a DSN, password or hash. The learner subsection is read over the restricted connection, so it reports the privileges learner SQL actually holds.",
+        "responses": {
+          "200": {
+            "description": "Diagnostics report.",
+            "content": {"application/json": {"schema": {"$ref": "#/components/schemas/DiagnosticsResponse"}}}
           }
         }
       }
@@ -91,6 +120,46 @@ const openAPISpec = `{
           },
           "400": {
             "description": "The request body was empty or malformed JSON; the body is the ErrorEnvelope (EMPTY_QUERY or QUERY_SYNTAX_ERROR).",
+            "content": {"application/json": {"schema": {"$ref": "#/components/schemas/ErrorEnvelope"}}}
+          }
+        }
+      }
+    },
+    "/environment": {
+      "get": {
+        "operationId": "getEnvironment",
+        "tags": ["environment"],
+        "summary": "Describe the caller's writable learner workspace.",
+        "description": "A signed-in learner gets their own database, copied from the sealed template and created on first use. An anonymous caller has no workspace and is told so honestly (exists=false, writable=false) rather than being shown the shared dataset as if it were theirs. A gateway with no database answers 503 ENVIRONMENT_UNAVAILABLE.",
+        "responses": {
+          "200": {
+            "description": "The caller's workspace facts.",
+            "content": {"application/json": {"schema": {"$ref": "#/components/schemas/EnvironmentResponse"}}}
+          },
+          "503": {
+            "description": "No workspace can be provided (no database, or the capacity cap is reached); the body is the ErrorEnvelope with code ENVIRONMENT_UNAVAILABLE.",
+            "content": {"application/json": {"schema": {"$ref": "#/components/schemas/ErrorEnvelope"}}}
+          }
+        }
+      }
+    },
+    "/environment/reset": {
+      "post": {
+        "operationId": "postEnvironmentReset",
+        "tags": ["environment"],
+        "summary": "Restore the sealed dataset, discarding the learner's own changes.",
+        "description": "Drops the caller's environment database and copies the sealed template again. Destructive to the caller's own workspace only. Requires a signed-in account; an anonymous caller is refused with AUTH_REQUIRED.",
+        "responses": {
+          "200": {
+            "description": "The workspace was restored; duration_ms is the measured end-to-end reset time in milliseconds.",
+            "content": {"application/json": {"schema": {"$ref": "#/components/schemas/EnvironmentResetResponse"}}}
+          },
+          "401": {
+            "description": "No valid session (AUTH_REQUIRED).",
+            "content": {"application/json": {"schema": {"$ref": "#/components/schemas/ErrorEnvelope"}}}
+          },
+          "503": {
+            "description": "No workspace can be provided; the body is the ErrorEnvelope with code ENVIRONMENT_UNAVAILABLE.",
             "content": {"application/json": {"schema": {"$ref": "#/components/schemas/ErrorEnvelope"}}}
           }
         }
@@ -552,6 +621,38 @@ const openAPISpec = `{
           "duration_ms": {"type": "string"}
         }
       },
+      "Environment": {
+        "type": "object",
+        "description": "The caller's learner workspace (ADR 0003). exists and writable are always present; the rest are facts read from the environment when it exists.",
+        "required": ["exists", "writable"],
+        "properties": {
+          "account": {"type": "string"},
+          "database": {"type": "string", "description": "The environment database name; derived from the account id, never interpolated from it."},
+          "exists": {"type": "boolean", "description": "Whether the caller's environment database currently exists."},
+          "writable": {"type": "boolean", "description": "Whether a learner statement may write. False is correct for the anonymous shared dataset."},
+          "tables": {"type": "integer", "description": "Tables in the dataset schema, present only when the environment exists."},
+          "created_at": {"type": "string", "format": "date-time"},
+          "reset_at": {"type": "string", "format": "date-time"},
+          "idle_until": {"type": "string", "format": "date-time", "description": "When an idle environment is reaped if it goes unused."}
+        }
+      },
+      "EnvironmentResponse": {
+        "type": "object",
+        "required": ["ok", "environment"],
+        "properties": {
+          "ok": {"type": "boolean"},
+          "environment": {"$ref": "#/components/schemas/Environment"}
+        }
+      },
+      "EnvironmentResetResponse": {
+        "type": "object",
+        "required": ["ok", "duration_ms", "environment"],
+        "properties": {
+          "ok": {"type": "boolean"},
+          "duration_ms": {"type": "number", "description": "Measured end-to-end reset time in milliseconds."},
+          "environment": {"$ref": "#/components/schemas/Environment"}
+        }
+      },
       "HealthResponse": {
         "type": "object",
         "properties": {
@@ -649,6 +750,71 @@ const openAPISpec = `{
         "type": "object",
         "properties": {
           "ok": {"type": "boolean"}
+        }
+      },
+      "DiagnosticsResponse": {
+        "type": "object",
+        "properties": {
+          "build": {"type": "string", "description": "Gateway build (git short hash), or \"dev\"."},
+          "engine": {
+            "type": "object",
+            "properties": {
+              "name": {"type": "string"},
+              "ready": {"type": "boolean"},
+              "reason": {"type": "string", "description": "Empty when ready; otherwise why statements cannot run."},
+              "version": {"type": "string", "description": "PostgreSQL server version, empty when unavailable."},
+              "pool": {
+                "type": "object",
+                "properties": {
+                  "max_conns": {"type": "integer"},
+                  "total_conns": {"type": "integer"},
+                  "idle_conns": {"type": "integer"},
+                  "acquired_conns": {"type": "integer"},
+                  "constructing_conns": {"type": "integer"}
+                }
+              },
+              "limits": {
+                "type": "object",
+                "properties": {
+                  "max_rows": {"type": "integer"},
+                  "max_bytes": {"type": "integer"},
+                  "timeout_ms": {"type": "integer"},
+                  "max_concurrent": {"type": "integer"}
+                }
+              }
+            }
+          },
+          "store": {
+            "type": "object",
+            "properties": {
+              "kind": {"type": "string", "enum": ["postgres", "memory"]},
+              "persistent": {"type": "boolean", "description": "False when the gateway is on the in-memory store and a restart would lose accounts and progress."}
+            }
+          },
+          "dataset": {
+            "type": "object",
+            "properties": {
+              "schema": {"type": "string"},
+              "version": {"type": "integer"}
+            }
+          },
+          "progress": {
+            "type": "object",
+            "properties": {"version": {"type": "integer"}}
+          },
+          "learner": {
+            "type": "object",
+            "description": "Sandbox facts read over the learner connection. Absent when no database is configured.",
+            "properties": {
+              "current_user": {"type": "string"},
+              "search_path": {"type": "string"},
+              "database": {"type": "string"},
+              "can_read_app": {"type": ["boolean", "string"], "description": "False is correct: learner SQL must not reach gateway metadata. \"unknown\" means the check could not run."},
+              "unavailable": {"type": "boolean"},
+              "reason": {"type": "string"}
+            }
+          },
+          "metrics": {"type": "array", "items": {"type": "string"}, "description": "Metric names this build reports."}
         }
       },
       "ErrorEnvelope": {

@@ -1,10 +1,13 @@
 package httpapi
 
 import (
+	"context"
 	"encoding/json"
+	"fmt"
 	"io"
 	"net/http"
 	"strings"
+	"time"
 
 	"github.com/querycraft/sqlquery/backend/internal/dataset"
 	"github.com/querycraft/sqlquery/backend/internal/engine"
@@ -43,7 +46,37 @@ func (s *Server) handleQuery(w http.ResponseWriter, r *http.Request) {
 	if !readJSON(w, r, &req) {
 		return
 	}
-	res := engine.Execute(r.Context(), s.exec, req.SQL, s.limits(req.Limits))
+	start := time.Now()
+	limits := s.limits(req.Limits)
+	// The concurrency budget is spent out of the same deadline the query gets,
+	// so a gateway at capacity fails fast with QUERY_TIMEOUT instead of either
+	// queueing forever or letting a request wait longer than its own timeout.
+	ctx, cancel := context.WithTimeout(r.Context(), limits.Timeout())
+	defer cancel()
+	release, admitted := s.enter(ctx)
+	if !admitted {
+		res := s.busyResult(ctx, start)
+		s.recordStatement(res)
+		writeJSON(w, http.StatusBadRequest, res)
+		return
+	}
+	defer release()
+
+	// ADR 0003: a signed-in learner's statement runs in their own writable
+	// environment; an anonymous caller stays on the shared, read-only dataset.
+	exec, err := s.statementExecutor(ctx, r)
+	if err != nil {
+		res := engine.Failing(engine.CodeEnvironmentUnavailable,
+			"The learner workspace is unavailable.", engine.RedactSecrets(err.Error()),
+			engine.RequestIDFromContext(ctx))
+		res.DurationMS = engine.RoundMS(time.Since(start))
+		s.recordStatement(res)
+		writeJSON(w, http.StatusBadRequest, res)
+		return
+	}
+
+	res := engine.Execute(ctx, exec, req.SQL, limits)
+	s.recordStatement(res)
 	status := http.StatusOK
 	if res.Status != "succeeded" {
 		status = http.StatusBadRequest
@@ -56,8 +89,48 @@ func (s *Server) handleEvaluate(w http.ResponseWriter, r *http.Request) {
 	if !readJSON(w, r, &req) {
 		return
 	}
+	start := time.Now()
 	req.Limits = s.limits(req.Limits)
-	resp := eval.Evaluate(r.Context(), s.exec, req)
+	ctx, cancel := context.WithTimeout(r.Context(), req.Limits.Timeout())
+	defer cancel()
+	// Grading shares the statement budget with /query: it runs the learner's
+	// SQL (and, for an exercise with no expected result, its reference query)
+	// on the same connection pool.
+	release, admitted := s.enter(ctx)
+	if !admitted {
+		qr := s.busyResult(ctx, start)
+		s.recordStatement(qr)
+		writeJSON(w, http.StatusOK, eval.Response{
+			QR:         qr,
+			Checks:     []eval.CheckResult{},
+			Passed:     false,
+			DurationMS: fmt.Sprintf("%.1f", engine.RoundMS(time.Since(start))),
+		})
+		return
+	}
+	defer release()
+
+	// Grading runs the learner's SQL (and, for an exercise without an expected
+	// result, its reference query) on the same executor the identity routes to,
+	// so a signed-in learner is graded against their own workspace.
+	exec, err := s.statementExecutor(ctx, r)
+	if err != nil {
+		qr := engine.Failing(engine.CodeEnvironmentUnavailable,
+			"The learner workspace is unavailable.", engine.RedactSecrets(err.Error()),
+			engine.RequestIDFromContext(ctx))
+		qr.DurationMS = engine.RoundMS(time.Since(start))
+		s.recordStatement(qr)
+		writeJSON(w, http.StatusOK, eval.Response{
+			QR:         qr,
+			Checks:     []eval.CheckResult{},
+			Passed:     false,
+			DurationMS: fmt.Sprintf("%.1f", engine.RoundMS(time.Since(start))),
+		})
+		return
+	}
+
+	resp := eval.Evaluate(ctx, exec, req)
+	s.recordStatement(resp.QR)
 	writeJSON(w, http.StatusOK, resp)
 }
 

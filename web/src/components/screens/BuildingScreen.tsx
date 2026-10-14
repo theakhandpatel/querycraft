@@ -5,7 +5,7 @@ import { COURSES } from '../../data/curriculum';
 import { courseExerciseTotal, moduleExerciseBlocks } from '../../lib/model';
 import { executionEngineLabel, generationProvenance } from '../../lib/provenance';
 import { runPipeline } from '../../lib/pipeline';
-import type { Block } from '../../types';
+import type { Block, Course } from '../../types';
 
 const PIPE_STEPS = [
   ['Interpret your goal', 'Identify target skills, starting level, and what success looks like'],
@@ -30,15 +30,18 @@ const PLAN_LINES: string[] = [
 type Measured = { ran: number; failed: number; rows: number; ms: number };
 
 /** Exercises in the draft that carry a reference query we can actually run. */
-function referenceExercises(): Block[] {
-  return (COURSES[0].modules ?? [])
+function referenceExercises(course: Course): Block[] {
+  return (course.modules ?? [])
     .flatMap((m) => moduleExerciseBlocks(m))
     .filter((b) => typeof b.solution === 'string' && b.solution.trim().length > 0);
 }
 
 export default function BuildingScreen() {
   const s = useStore();
-  const exerciseTotal = courseExerciseTotal(COURSES[0]);
+  /* The draft this build is for; COURSES[0] is only a fallback for the
+     standalone route. */
+  const draftCourse = s.draftCourse ?? COURSES[0];
+  const exerciseTotal = courseExerciseTotal(draftCourse);
   const [states, setStates] = useState(PIPE_STEPS.map(() => 'queued'));
   const [log, setLog] = useState<{ t: string; html: string }[]>([]);
   const [logOpen, setLogOpen] = useState(true);
@@ -91,7 +94,7 @@ export default function BuildingScreen() {
       /* Step 5 — Execute and verify. Every reference query in the draft runs on
          the configured engine; the duration and the counts are the real ones. */
       mark(4, 'running');
-      const exercises = referenceExercises();
+      const exercises = referenceExercises(draftCourse);
       emit(`Running ${exercises.length} reference queries on <span class="hi">${executionEngineLabel(s.api)}</span> …`);
       const startedAt = performance.now();
       let ran = 0;
@@ -132,7 +135,7 @@ export default function BuildingScreen() {
       if (signal.aborted) return;
       try {
         const draft = await s.api.draftCourse({
-          title: COURSES[0].title,
+          title: draftCourse.title,
           exercises: exerciseTotal,
           steps: PIPE_STEPS.map(() => ''),
         });
@@ -204,7 +207,7 @@ export default function BuildingScreen() {
         </div>
         <div className="card">
           <h2>Why this takes a moment</h2>
-          <div className="reportrow mt-8"><span>Chapters planned</span><span>{COURSES[0].modules!.length}</span></div>
+          <div className="reportrow mt-8"><span>Chapters planned</span><span>{(draftCourse.modules ?? []).length}</span></div>
           <div className="reportrow"><span>Exercises with result contracts</span><span>{exerciseTotal}</span></div>
           <div className="reportrow">
             <span>Reference queries executed</span>

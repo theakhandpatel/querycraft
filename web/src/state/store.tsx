@@ -86,6 +86,28 @@ function saveJSON(k: string, v: unknown): void {
   } catch (e) {}
 }
 
+/** A short course blurb the draft owns, derived from the learner's own goal.
+    It is never the built-in course's blurb. */
+function blurbFromGoal(goal: string): string {
+  const g = goal.trim().replace(/\s+/g, ' ');
+  if (!g) return 'A course shaped around the skill you want to build, with exercises that run on real PostgreSQL.';
+  const short = g.length > 150 ? g.slice(0, 147).trimEnd() + '…' : g;
+  return `Built from your goal: ${short}`;
+}
+
+/** Clone the reference curriculum into a draft course's own modules, giving
+    every module and exercise a course-scoped id so progress and attempts never
+    leak between the draft and the built-in course. Each block is copied
+    shallowly, so `checks[].test` functions survive by reference. */
+function draftModulesFor(suffix: string): CourseModule[] {
+  return MODULES.map((m) => ({
+    ...m,
+    id: `${m.id}${suffix}`,
+    objectives: [...m.objectives],
+    blocks: (m.blocks || []).map((b) => (b.id ? { ...b, id: `${b.id}${suffix}` } : { ...b })),
+  }));
+}
+
 /** Everything screens receive from useStore(). */
 export interface StoreValue {
   COURSES: Course[];
@@ -93,6 +115,7 @@ export interface StoreValue {
   progress: Progress;
   uiState: UiState;
   course: Course;
+  draftCourse: Course | null;
   modules: CourseModule[];
   pct: number;
   activeLesson: number;
@@ -278,6 +301,9 @@ export function StoreProvider({ children }: { children: React.ReactNode }) {
   const [reviewGoal, setReviewGoal] = useState('Learn to answer realistic product and business questions with SQL, then explain the reasoning behind your query.');
   const [courseSubtitle, setCourseSubtitle] = useState('A practical progression from multi-table queries to analytical SQL and query reasoning.');
   const [contextState, setContextState] = useState('AI-generated');
+  /* The most recently built draft, so review/building can target it without
+     reaching for COURSES[0]. It is added to COURSES for the catalog helpers. */
+  const [draftCourseId, setDraftCourseId] = useState<string | null>(null);
   const [session, setSession] = useState<AuthSession | null>(null);
   const [authReady, setAuthReady] = useState(false);
   const [authNotice, setAuthNotice] = useState<string | null>(null);
@@ -506,6 +532,7 @@ export function StoreProvider({ children }: { children: React.ReactNode }) {
   }, [api, syncProgress, uiState.selectedCourseId, authReady, session]);
 
   const course = currentCourseOf(uiState);
+  const draftCourse = draftCourseId ? COURSES.find((c) => c.id === draftCourseId) ?? null : null;
   const modules = activeModulesOf(course);
   const pct = lessonPercentOf(course, progress);
 
@@ -596,12 +623,12 @@ export function StoreProvider({ children }: { children: React.ReactNode }) {
   );
   const resumeCourse = useCallback(() => openLessonIn(uiState.selectedCourseId, nextChapterIndexOf(course, progress)), [openLessonIn, uiState.selectedCourseId, course, progress]);
   const startLearning = useCallback(() => {
-    const c = COURSES[0];
+    const c = (draftCourseId && COURSES.find((x) => x.id === draftCourseId)) || COURSES[0];
     c.enrolled = true;
     selectCourse(c.id);
     showScreen('course');
     toast('Added to My learning.');
-  }, [selectCourse, showScreen, toast]);
+  }, [draftCourseId, selectCourse, showScreen, toast]);
 
   /* ---------- progress mutations ---------- */
   const saveProgress = useCallback(
@@ -1072,9 +1099,28 @@ export function StoreProvider({ children }: { children: React.ReactNode }) {
       const g = (goal || '').trim();
       const advanced = /advanced|window|analytics|cohort|query plan|performance|retention/i.test(g);
       const title = advanced ? 'SQL Analytics in the Real World' : 'SQL Joins and Interview Practice';
-      COURSES[0].title = title;
+      /* A fresh draft per run: its own id, its own modules, its own ids inside
+         them. Nothing here touches an existing course object. */
+      const id = `created-${Date.now()}`;
+      const subtitle = 'A draft shaped around your goal. Explore the chapters, sample chapter, data model, and validation notes before starting.';
+      const modules = draftModulesFor(`@${id}`);
+      const draft: Course = {
+        id,
+        title,
+        subtitle,
+        source: 'created',
+        enrolled: true,
+        built: true,
+        modules,
+        blurb: blurbFromGoal(g),
+        domain: 'Commerce & retail',
+        level: advanced ? 'Intermediate' : 'Beginner → intermediate',
+        minutes: modules.reduce((total, m) => total + (m.minutes || 0), 0),
+      };
+      COURSES.push(draft);
+      setDraftCourseId(id);
       setReviewGoal(g || 'Learn to answer realistic product and business questions with SQL, then explain the reasoning behind your query.');
-      setCourseSubtitle('A draft shaped around your goal. Explore the chapters, sample chapter, data model, and validation notes before starting.');
+      setCourseSubtitle(subtitle);
       if (hasContext) setContextState('User context added');
       if (g) setGoalInput(g);
       bumpCatalog();
@@ -1090,6 +1136,7 @@ export function StoreProvider({ children }: { children: React.ReactNode }) {
     progress,
     uiState,
     course,
+    draftCourse,
     modules,
     pct,
     activeLesson,
