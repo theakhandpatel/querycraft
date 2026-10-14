@@ -1,0 +1,284 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://querycraft.app/contracts/ai.schema.json",
+  "title": "AI generation contracts (M4)",
+  "description": "The seam between the Go generation service and any client. The model is an untrusted content generator; the Go service enforces policy (technical design 11). These schemas describe the request the learner sends, the artifact the service is allowed to activate, the stage evidence that justifies activation, and the tutoring/critique/defect surfaces. Error codes in $defs/error are an AI envelope and are separate from the closed QueryResult enum in query-result.schema.json; any embedded QueryResult still uses that closed enum.",
+  "$defs": {
+    "errorCode": {
+      "enum": [
+        "AI_UNAVAILABLE",
+        "AI_INVALID_REQUEST",
+        "AI_INVALID_ARTIFACT",
+        "AI_REFERENCE_FAILED",
+        "AI_CROSS_CHECK_FAILED",
+        "AI_REPAIR_EXHAUSTED",
+        "AI_NOT_FOUND",
+        "AI_PATCH_UNVERIFIED",
+        "AI_PATCH_UNAPPROVED",
+        "ENVIRONMENT_UNAVAILABLE"
+      ]
+    },
+    "error": {
+      "type": "object",
+      "required": ["code", "message"],
+      "properties": {
+        "code": { "$ref": "#/$defs/errorCode" },
+        "stage": { "type": "string" },
+        "message": { "type": "string" },
+        "detail": { "type": ["string", "null"] }
+      }
+    },
+    "resultContract": {
+      "type": "object",
+      "required": ["columns", "column_order", "row_order", "duplicates", "numeric_tolerance"],
+      "properties": {
+        "columns": { "type": "array", "items": { "type": "string" } },
+        "column_order": { "enum": ["exact", "ignored"] },
+        "row_order": { "enum": ["exact", "ignored"] },
+        "duplicates": { "enum": ["preserved", "ignored"] },
+        "numeric_tolerance": { "type": "number", "minimum": 0 }
+      }
+    },
+    "setupPlan": {
+      "description": "What the challenge runs against. `statements` is empty for a challenge over the sealed dataset; when non-empty it must only create and populate scratch objects, and it is applied in a throwaway environment that is never the learner workspace.",
+      "type": "object",
+      "required": ["dataset", "schema_version", "seed_version", "statements"],
+      "properties": {
+        "dataset": { "type": "string" },
+        "schema_version": { "type": "integer", "minimum": 1 },
+        "seed_version": { "type": "integer", "minimum": 1 },
+        "statements": { "type": "array", "items": { "type": "string" } }
+      }
+    },
+    "provenance": {
+      "description": "Everything needed to reproduce or invalidate the artifact. `required_result` is the contract the run was checked against, so a later evaluator change is visible rather than silent.",
+      "type": "object",
+      "required": [
+        "provider",
+        "model",
+        "provider_version",
+        "pipeline_version",
+        "evaluator_version",
+        "dataset_version",
+        "created_at"
+      ],
+      "properties": {
+        "provider": { "type": "string" },
+        "model": { "type": "string" },
+        "provider_version": { "type": "string" },
+        "pipeline_version": { "type": "string" },
+        "evaluator_version": { "type": "string" },
+        "dataset_version": { "type": "integer" },
+        "created_at": { "type": "string" },
+        "repairs": { "type": "integer", "minimum": 0 }
+      }
+    },
+    "challengeCheck": {
+      "type": "object",
+      "required": ["label", "code"],
+      "properties": {
+        "label": { "type": "string" },
+        "code": { "type": "string" },
+        "pattern": { "type": "string" }
+      }
+    },
+    "challengeArtifact": {
+      "description": "A challenge the service is allowed to activate. It is only ever written to the active set after every stage in $defs/outcome has passed.",
+      "type": "object",
+      "required": [
+        "id",
+        "version",
+        "title",
+        "prompt",
+        "difficulty",
+        "setup",
+        "reference_solution",
+        "result_contract",
+        "objectives",
+        "hints",
+        "provenance"
+      ],
+      "properties": {
+        "id": { "type": "string" },
+        "version": { "type": "integer", "minimum": 1 },
+        "lesson_id": { "type": "string" },
+        "dialect": { "enum": ["postgresql"] },
+        "type": { "enum": ["complete", "write", "modify", "predict", "fix", "combine", "solve"] },
+        "title": { "type": "string" },
+        "prompt": { "type": "string" },
+        "difficulty": { "enum": ["beginner", "intermediate", "advanced"] },
+        "objectives": { "type": "array", "items": { "type": "string" } },
+        "hints": { "type": "array", "items": { "type": "string" } },
+        "setup": { "$ref": "#/$defs/setupPlan" },
+        "reference_solution": { "type": "string" },
+        "cross_check_solution": { "type": "string" },
+        "result_contract": { "$ref": "#/$defs/resultContract" },
+        "checks": { "type": "array", "items": { "$ref": "#/$defs/challengeCheck" } },
+        "provenance": { "$ref": "#/$defs/provenance" }
+      }
+    },
+    "stage": {
+      "description": "One step of the 11.1 pipeline. A stage is `done` only when it actually ran; `skipped` is reported rather than hidden.",
+      "type": "object",
+      "required": ["name", "state"],
+      "properties": {
+        "name": { "type": "string" },
+        "state": { "enum": ["done", "failed", "skipped"] },
+        "detail": { "type": "string" },
+        "ms": { "type": "number", "minimum": 0 }
+      }
+    },
+    "attempt": {
+      "type": "object",
+      "required": ["number", "stage", "detail"],
+      "properties": {
+        "number": { "type": "integer", "minimum": 1 },
+        "stage": { "type": "string" },
+        "detail": { "type": "string" }
+      }
+    },
+    "evidence": {
+      "description": "Measured facts from the run, not claims. Zero means the check did not run or found nothing.",
+      "type": "object",
+      "properties": {
+        "reference_rows": { "type": "integer", "minimum": 0 },
+        "cross_check_rows": { "type": "integer", "minimum": 0 },
+        "fixtures_rejected": { "type": "integer", "minimum": 0 },
+        "fixtures_total": { "type": "integer", "minimum": 0 },
+        "repairs": { "type": "integer", "minimum": 0 },
+        "scratch_database": { "type": "string" }
+      }
+    },
+    "outcome": {
+      "description": "The POST /challenges/generate and POST /courses/generate response. `active` is the only status that puts the artifact in front of learners.",
+      "type": "object",
+      "required": ["status", "stages", "attempts"],
+      "properties": {
+        "status": { "enum": ["active", "rejected", "unavailable", "failed"] },
+        "kind": { "enum": ["challenge", "course"] },
+        "artifact": { "oneOf": [{ "type": "null" }, { "$ref": "#/$defs/challengeArtifact" }] },
+        "stages": { "type": "array", "items": { "$ref": "#/$defs/stage" } },
+        "attempts": { "type": "array", "items": { "$ref": "#/$defs/attempt" } },
+        "evidence": { "$ref": "#/$defs/evidence" },
+        "error": { "oneOf": [{ "type": "null" }, { "$ref": "#/$defs/error" }] }
+      }
+    },
+    "generationRequest": {
+      "description": "What the learner asks for. Every field is optional except a topic or a title; the service validates the rest.",
+      "type": "object",
+      "properties": {
+        "kind": { "enum": ["challenge", "course"] },
+        "title": { "type": "string" },
+        "topics": { "type": "array", "items": { "type": "string" } },
+        "difficulty": { "enum": ["beginner", "intermediate", "advanced"] },
+        "scenario": { "type": "string" },
+        "constraints": { "type": "array", "items": { "type": "string" } },
+        "exercise_count": { "type": "integer", "minimum": 1, "maximum": 40 },
+        "steps": { "type": "array", "items": { "type": "string" } }
+      }
+    },
+    "availability": {
+      "description": "GET /capabilities > ai. `configured` is about a provider; `available` also requires a scratch environment. Nothing else in the app depends on either.",
+      "type": "object",
+      "required": ["configured", "available", "provider", "reason"],
+      "properties": {
+        "configured": { "type": "boolean" },
+        "available": { "type": "boolean" },
+        "provider": { "type": "string" },
+        "model": { "type": "string" },
+        "deterministic": { "type": "boolean" },
+        "reason": { "type": "string" }
+      }
+    },
+    "tutorRequest": {
+      "type": "object",
+      "required": ["sql", "objective"],
+      "properties": {
+        "challenge_id": { "type": "string" },
+        "sql": { "type": "string" },
+        "objective": { "type": "string" },
+        "error_code": { "type": "string" },
+        "error_message": { "type": "string" },
+        "hint_level": { "type": "integer", "minimum": 0, "maximum": 3 },
+        "result_summary": { "type": "string" }
+      }
+    },
+    "tutorResponse": {
+      "description": "Tutoring never contains the reference solution; `reveals_solution` must be false, and the service refuses to emit a response that trips it.",
+      "type": "object",
+      "required": ["message", "hint_level", "reveals_solution"],
+      "properties": {
+        "message": { "type": "string" },
+        "hint_level": { "type": "integer", "minimum": 0, "maximum": 3 },
+        "reveals_solution": { "type": "boolean" },
+        "provenance": { "$ref": "#/$defs/provenance" }
+      }
+    },
+    "defectReport": {
+      "type": "object",
+      "required": ["challenge_id", "description"],
+      "properties": {
+        "challenge_id": { "type": "string" },
+        "description": { "type": "string" },
+        "sql": { "type": "string" },
+        "expected": { "type": "string" },
+        "observed": { "type": "string" }
+      }
+    },
+    "defectVerdict": {
+      "description": "A defect is only ever 'reproduced' or 'not_reproduced' after the service has executed something. A patch proposal is evidence, not an action; `applied` stays false until the learner approves it.",
+      "type": "object",
+      "required": ["verified", "applied", "summary"],
+      "properties": {
+        "verified": { "type": "boolean" },
+        "applied": { "type": "boolean" },
+        "summary": { "type": "string" },
+        "patch": { "oneOf": [{ "type": "null" }, { "$ref": "#/$defs/patchProposal" }] },
+        "evidence": { "$ref": "#/$defs/evidence" },
+        "error": { "oneOf": [{ "type": "null" }, { "$ref": "#/$defs/error" }] }
+      }
+    },
+    "patchProposal": {
+      "type": "object",
+      "required": ["id", "challenge_id", "summary", "changes"],
+      "properties": {
+        "id": { "type": "string" },
+        "challenge_id": { "type": "string" },
+        "summary": { "type": "string" },
+        "changes": {
+          "type": "array",
+          "items": {
+            "type": "object",
+            "required": ["field", "from", "to"],
+            "properties": {
+              "field": { "type": "string" },
+              "from": { "type": "string" },
+              "to": { "type": "string" }
+            }
+          }
+        }
+      }
+    },
+    "patchDecision": {
+      "type": "object",
+      "required": ["patch_id", "approved", "approved_by"],
+      "properties": {
+        "patch_id": { "type": "string" },
+        "approved": { "type": "boolean" },
+        "approved_by": { "type": "string" }
+      }
+    },
+    "record": {
+      "description": "A stored challenge. `outcome` is the evidence captured at activation, kept with the artifact so a later reader can see why it was allowed in.",
+      "type": "object",
+      "required": ["artifact", "outcome", "status", "created_at"],
+      "properties": {
+        "artifact": { "$ref": "#/$defs/challengeArtifact" },
+        "outcome": { "$ref": "#/$defs/outcome" },
+        "status": { "enum": ["active", "rejected"] },
+        "owner_id": { "type": "string" },
+        "created_at": { "type": "string" }
+      }
+    }
+  }
+}
