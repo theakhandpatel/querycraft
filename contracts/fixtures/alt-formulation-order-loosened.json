@@ -1,0 +1,17 @@
+{
+  "note": "Valid alternative formulation: the same data selected and ordered differently is accepted because column_order and row_order are both ignored.",
+  "contract": {
+    "columns": ["name", "price"],
+    "rows": [["Ada", 1.0], ["Grace", 2.0]],
+    "column_order": "ignored",
+    "row_order": "ignored",
+    "duplicates": "preserved",
+    "numeric_tolerance": 0
+  },
+  "actual_result": {
+    "status": "succeeded",
+    "columns": ["price", "name"],
+    "rows": [[2.0, "Grace"], [1.0, "Ada"]]
+  },
+  "expected_outcome": { "passed": true, "codes": [] }
+}

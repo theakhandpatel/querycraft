@@ -1,0 +1,17 @@
+{
+  "note": "Duplicates are preserved by default, so an exact multiset passes.",
+  "contract": {
+    "columns": ["category"],
+    "rows": [["Electronics"], ["Electronics"]],
+    "column_order": "exact",
+    "row_order": "ignored",
+    "duplicates": "preserved",
+    "numeric_tolerance": 0
+  },
+  "actual_result": {
+    "status": "succeeded",
+    "columns": ["category"],
+    "rows": [["Electronics"], ["Electronics"]]
+  },
+  "expected_outcome": { "passed": true, "codes": [] }
+}

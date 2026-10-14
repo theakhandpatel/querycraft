@@ -1,0 +1,82 @@
+import React from 'react';
+import Icon from '../ui/Icon';
+import { useStore } from '../../state/store';
+import { COURSES } from '../../data/curriculum';
+import { courseExerciseTotal } from '../../lib/model';
+import type { Course } from '../../types';
+
+type ViewCourse = Course & { blurb?: string; domain?: string; minutes?: number; source?: string };
+
+const FILTERS = [
+  { key: 'all', label: 'All courses' },
+  { key: 'enrolled', label: 'Enrolled' },
+  { key: 'mine', label: 'Created by you' },
+  { key: 'new', label: 'Not started' },
+];
+
+export default function LibraryScreen() {
+  const s = useStore();
+  const f = s.uiState.libraryFilter || 'all';
+  /* Authoring is the admin surface; learners can browse and enroll only. */
+  const isAdmin = s.role === 'admin';
+  const courses = COURSES.filter((c) => {
+    if (f === 'enrolled' && !c.enrolled) return false;
+    if (f === 'mine' && c.source !== 'created') return false;
+    if (f === 'new' && c.enrolled) return false;
+    return true;
+  }) as ViewCourse[];
+
+  return (
+    <div className="content">
+      <div className="pagehead">
+        <div>
+          <div className="eyebrow">Library</div>
+          <h1>Find your next course</h1>
+          <p>Preview what a course teaches, then enroll to add it to your learning list with its own progress and notes.</p>
+        </div>
+        {isAdmin && (
+          <button className="primary" onClick={() => s.showScreen('create')}><Icon name="sparkles" />Create your own</button>
+        )}
+      </div>
+
+      <div className="filterbar">
+        {FILTERS.map((x) => (
+          <button
+            key={x.key}
+            className={`filt${x.key === f ? ' active' : ''}`}
+            onClick={() => s.setLibraryFilter(x.key)}
+          >{x.label}</button>
+        ))}
+      </div>
+
+      <div className="grid3">
+        {courses.map((c) => {
+          const tag = c.source === 'created' ? <span className="enrolltag mine">You built this</span> : c.enrolled ? <span className="enrolltag">Enrolled</span> : null;
+          let btn;
+          if (c.built && c.enrolled) btn = <button className="small primary" onClick={() => { s.selectCourse(c.id); s.showScreen('course'); }}><Icon name="play" />Continue</button>;
+          else if (c.built) btn = <button className="small primary" onClick={() => s.enrollCourse(c.id)}>Enroll<Icon name="plus" /></button>;
+          else btn = <button className="small" onClick={() => s.toast('Preview: this course would generate with the same pipeline.')}><Icon name="eye" />Preview</button>;
+          return (
+            <div className="coursecard" key={c.id}>
+              <div className="coursemeta">{tag}<span className="pill subtle">{c.level}</span></div>
+              <h2>{c.title}</h2>
+              <p>{c.blurb}</p>
+              <div className="reportrow"><span>Chapters</span><span>{c.modules ? `${c.modules.length} · ${courseExerciseTotal(c)} exercises` : '—'}</span></div>
+              <div className="reportrow"><span>Est. time</span><span>{c.minutes} min · {c.domain}</span></div>
+              <div className="actions mt-8">
+                {btn}
+                {isAdmin && (
+                  <button className="small ghost" onClick={() => s.showScreen('create')}>Remix</button>
+                )}
+              </div>
+            </div>
+          );
+        })}
+      </div>
+
+      <div className="callout mt-16">
+        A library course is a starting point. When you enroll, you get your own copy — prompts, datasets and exercises are yours to change, and fixes are proposed by AI but only applied with your approval.
+      </div>
+    </div>
+  );
+}

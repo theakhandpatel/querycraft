@@ -1,0 +1,17 @@
+{
+  "note": "A difference outside the contract numeric_tolerance fails.",
+  "contract": {
+    "columns": ["price"],
+    "rows": [[10.0]],
+    "column_order": "exact",
+    "row_order": "ignored",
+    "duplicates": "preserved",
+    "numeric_tolerance": 0.25
+  },
+  "actual_result": {
+    "status": "succeeded",
+    "columns": ["price"],
+    "rows": [[10.5]]
+  },
+  "expected_outcome": { "passed": false, "codes": ["VALUE_MISMATCH"] }
+}

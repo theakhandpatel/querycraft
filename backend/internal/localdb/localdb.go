@@ -1,0 +1,280 @@
+// Package localdb boots a real PostgreSQL server for the gateway when no
+// external database is configured.
+//
+// The point is that the gateway owns the database without Docker: it downloads
+// prebuilt PostgreSQL binaries once, initialises a data directory inside the
+// repo, starts the server, and applies the shared commerce dataset. Everything
+// above this package talks the ordinary PostgreSQL wire protocol, so pointing
+// QC_DATABASE_URL at a container or a managed server replaces it with no code
+// change at all.
+package localdb
+
+import (
+	"context"
+	"errors"
+	"fmt"
+	"log/slog"
+	"net/url"
+	"os"
+	"path/filepath"
+	"time"
+
+	embeddedpostgres "github.com/fergusstrange/embedded-postgres"
+	"github.com/jackc/pgx/v5"
+
+	"github.com/querycraft/sqlquery/backend/internal/dataset"
+)
+
+// Config describes the local server to start.
+type Config struct {
+	DataPath     string // cluster data directory, e.g. .data/pg/data
+	RuntimePath  string // where extracted binaries live, e.g. .data/pg/runtime
+	BinariesPath string // download cache for the PostgreSQL binaries
+	Port         uint32
+	User         string
+	Password     string
+	Database     string
+}
+
+// Server is a running embedded PostgreSQL instance.
+type Server struct {
+	pg  *embeddedpostgres.EmbeddedPostgres
+	DSN string
+
+	// adopted is true when this Server attached to a postmaster that was already
+	// running for the same data directory instead of starting one. We do not own
+	// an adopted server, so Stop leaves it alone.
+	adopted bool
+
+	// learnerPassword is the password the restricted execution role is given,
+	// so the learner DSN differs from the admin DSN only by username.
+	learnerPassword string
+
+	log *slog.Logger
+}
+
+// DSNFor builds the connection string for a local server.
+func (c Config) DSNFor() string {
+	return fmt.Sprintf(
+		"postgres://%s:%s@127.0.0.1:%d/%s?sslmode=disable",
+		url.QueryEscape(c.User), url.QueryEscape(c.Password), c.Port, url.PathEscape(c.Database),
+	)
+}
+
+// Start boots the server, waits for it to accept connections, and applies the
+// commerce schema and seed if this data directory has never been initialised.
+//
+// The dataset is applied once: re-applying it on every boot would drop and
+// recreate the tables, discarding anything the learner has stored alongside it.
+func Start(ctx context.Context, log *slog.Logger, cfg Config) (*Server, error) {
+	// A previous gateway may have died without a clean shutdown — a SIGHUP when
+	// its parent shell exits, or a SIGKILL — which leaves the postmaster
+	// running. Adopting it is the right move for a restart: the cluster, the
+	// dataset and everything saved to it are still there. Only adopt a server
+	// whose data directory proves it is ours, so we never attach to an
+	// unrelated PostgreSQL that happens to hold the port.
+	if srv, ok, err := adopt(ctx, log, cfg); err != nil {
+		return nil, err
+	} else if ok {
+		return srv, nil
+	}
+
+	ep := embeddedpostgres.NewDatabase(
+		embeddedpostgres.DefaultConfig().
+			Username(cfg.User).
+			Password(cfg.Password).
+			Database(cfg.Database).
+			Port(cfg.Port).
+			DataPath(cfg.DataPath).
+			RuntimePath(cfg.RuntimePath).
+			BinariesPath(cfg.BinariesPath).
+			StartTimeout(90 * time.Second),
+	)
+
+	log.Info("starting embedded PostgreSQL", "port", cfg.Port, "data", cfg.DataPath)
+	if err := ep.Start(); err != nil {
+		return nil, fmt.Errorf("start embedded postgres: %w", err)
+	}
+
+	srv := &Server{pg: ep, DSN: cfg.DSNFor(), log: log, learnerPassword: cfg.Password}
+
+	if err := srv.waitReady(ctx, 30*time.Second); err != nil {
+		_ = ep.Stop()
+		return nil, err
+	}
+	if err := srv.applyDataset(ctx); err != nil {
+		_ = ep.Stop()
+		return nil, err
+	}
+	log.Info("embedded PostgreSQL ready", "port", cfg.Port)
+	return srv, nil
+}
+
+// adopt attaches to a postmaster already serving cfg's data directory.
+//
+// The second return value says whether the directory is ours; the third carries
+// a real setup failure. Swallowing that failure made a broken migration look
+// like "no database here", and the caller then tried to start a second server
+// on a busy port, hiding the actual cause behind a port error.
+func adopt(ctx context.Context, log *slog.Logger, cfg Config) (*Server, bool, error) {
+	if _, err := os.Stat(filepath.Join(cfg.DataPath, "postmaster.pid")); err != nil {
+		return nil, false, nil
+	}
+	srv := &Server{DSN: cfg.DSNFor(), adopted: true, log: log, learnerPassword: cfg.Password}
+	if err := srv.waitReady(ctx, 3*time.Second); err != nil {
+		// A pid file with nothing behind it is stale, not ours.
+		return nil, false, nil
+	}
+	if err := srv.applyDataset(ctx); err != nil {
+		return nil, true, fmt.Errorf("prepare existing cluster: %w", err)
+	}
+	log.Info("adopted the PostgreSQL server already running for this cluster",
+		"port", cfg.Port, "data", cfg.DataPath)
+	return srv, true, nil
+}
+
+// waitReady polls until the server accepts a connection or the deadline passes.
+func (s *Server) waitReady(ctx context.Context, timeout time.Duration) error {
+	deadline := time.Now().Add(timeout)
+	var last error
+	for time.Now().Before(deadline) {
+		attempt, cancel := context.WithTimeout(ctx, 3*time.Second)
+		conn, err := pgx.Connect(attempt, s.DSN)
+		if err == nil {
+			err = conn.Ping(attempt)
+			_ = conn.Close(attempt)
+		}
+		cancel()
+		if err == nil {
+			return nil
+		}
+		last = err
+		select {
+		case <-ctx.Done():
+			return ctx.Err()
+		case <-time.After(400 * time.Millisecond):
+		}
+	}
+	return fmt.Errorf("embedded postgres did not become ready: %w", last)
+}
+
+// legacyPublicTables are the table names an earlier layout created in `public`
+// before the dataset and the gateway metadata moved into their own schemas.
+// legacyPublicTable names a pre-migration table, its authoritative replacement,
+// and which schema that replacement lives in.
+type legacyPublicTable struct {
+	name      string
+	authority string // schema holding the real table
+}
+
+// Order matters: children before the rows they reference, because order_items
+// holds foreign keys to orders and products, so dropping a parent first fails
+// with a dependency error. CASCADE covers anything else attached to them.
+var legacyPublicTables = []legacyPublicTable{
+	{"order_items", "dataset"},
+	{"orders", "dataset"},
+	{"products", "dataset"},
+	{"customers", "dataset"},
+	{"dataset_meta", "dataset"},
+	{"progress", "app"},
+	{"events", "app"},
+}
+
+// dropLegacyPublicTables removes those stale duplicates. Idempotent, and a
+// no-op on any database that never had them.
+func dropLegacyPublicTables(ctx context.Context, conn *pgx.Conn, log *slog.Logger) error {
+	for _, table := range legacyPublicTables {
+		// Only drop a duplicate: the authoritative table must already exist,
+		// otherwise the public copy may still be the only one.
+		var duplicate bool
+		q := fmt.Sprintf(
+			"SELECT to_regclass('public.%s') IS NOT NULL AND to_regclass('%s.%s') IS NOT NULL",
+			table.name, table.authority, table.name,
+		)
+		if err := conn.QueryRow(ctx, q).Scan(&duplicate); err != nil {
+			return fmt.Errorf("check legacy table public.%s: %w", table.name, err)
+		}
+		if !duplicate {
+			continue
+		}
+		if _, err := conn.Exec(ctx, `DROP TABLE IF EXISTS "public"."`+table.name+`" CASCADE`); err != nil {
+			return fmt.Errorf("drop legacy table public.%s: %w", table.name, err)
+		}
+		log.Info("dropped legacy duplicate table left over from the previous schema layout",
+			"table", "public."+table.name, "replaced_by", table.authority+"."+table.name)
+	}
+	return nil
+}
+
+// applyDataset loads schema.sql + seed.sql when the dataset is absent.
+func (s *Server) applyDataset(ctx context.Context) error {
+	conn, err := pgx.Connect(ctx, s.DSN)
+	if err != nil {
+		return fmt.Errorf("connect for dataset check: %w", err)
+	}
+	defer func() { _ = conn.Close(context.WithoutCancel(ctx)) }()
+
+	// The restricted execution role is (re)asserted on every boot, including
+	// clusters that already hold the dataset: without it the gateway would run
+	// learner SQL as the superuser that owns this database.
+	if err := dataset.EnsureLearnerRole(ctx, conn, s.learnerPassword); err != nil {
+		return fmt.Errorf("ensure learner role: %w", err)
+	}
+
+	var present bool
+	if err := conn.QueryRow(ctx, "SELECT to_regclass('dataset.customers') IS NOT NULL").Scan(&present); err != nil {
+		return fmt.Errorf("check dataset presence: %w", err)
+	}
+	if present {
+		// A cluster created before the dataset moved into its own schema still
+		// holds the old copies in `public`. They are on the execution search path
+		// (`dataset, public`), so any name missing from `dataset` would silently
+		// resolve to stale rows. Remove them, but only now that the authoritative
+		// copy exists, so this can never destroy the only dataset.
+		if err := dropLegacyPublicTables(ctx, conn, s.log); err != nil {
+			return err
+		}
+		return nil
+	}
+
+	s.log.Info("applying commerce dataset")
+	// Schema and seed are multi-statement scripts with their own BEGIN/COMMIT,
+	// so they must run over the simple query protocol. The order is load-bearing
+	// and iteration over a map is randomized — use a slice, or the seed fails
+	// with "relation dataset.customers does not exist" roughly half the time and
+	// the gateway boots into ENVIRONMENT_UNAVAILABLE.
+	for _, step := range []struct{ name, script string }{
+		{"schema", dataset.SchemaSQL()},
+		{"seed", dataset.SeedSQL()},
+	} {
+		if _, err := conn.PgConn().Exec(ctx, step.script).ReadAll(); err != nil {
+			return fmt.Errorf("apply dataset %s: %w", step.name, err)
+		}
+	}
+	return nil
+}
+
+// Stop shuts the server down. Safe to call on a nil receiver, and a no-op for a
+// server this process adopted rather than started.
+func (s *Server) Stop() error {
+	if s == nil || s.pg == nil {
+		return nil
+	}
+	if err := s.pg.Stop(); err != nil && !errors.Is(err, os.ErrProcessDone) {
+		return fmt.Errorf("stop embedded postgres: %w", err)
+	}
+	return nil
+}
+
+// DefaultDataDir returns the cluster directory used when none is configured.
+func DefaultDataDir(root string) string {
+	if root == "" {
+		root = ".data/pg"
+	}
+	return root
+}
+
+// BinariesDir is where the PostgreSQL binaries are cached between runs.
+func BinariesDir(root string) string {
+	return filepath.Join(DefaultDataDir(root), "binaries")
+}

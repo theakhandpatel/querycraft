@@ -1,0 +1,34 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://querycraft.app/contracts/query-result.schema.json",
+  "title": "QueryResult",
+  "type": "object",
+  "required": ["status", "columns", "rows", "row_count", "truncated", "duration_ms", "error", "engine"],
+  "properties": {
+    "status": { "enum": ["succeeded", "failed"] },
+    "columns": {
+      "type": "array",
+      "items": { "type": "object", "required": ["name", "type"], "properties": { "name": { "type": "string" }, "type": { "type": "string" } } }
+    },
+    "rows": { "type": "array", "items": { "type": "array" } },
+    "row_count": { "type": "integer", "minimum": 0 },
+    "truncated": { "type": "boolean" },
+    "duration_ms": { "type": "number", "minimum": 0 },
+    "error": {
+      "oneOf": [
+        { "type": "null" },
+        {
+          "type": "object",
+          "required": ["code", "message"],
+          "properties": {
+            "code": { "enum": ["EMPTY_QUERY", "QUERY_SYNTAX_ERROR", "QUERY_RUNTIME_ERROR", "QUERY_TIMEOUT", "RESULT_LIMIT_EXCEEDED", "ENVIRONMENT_UNAVAILABLE", "PERSISTENCE_FAILED", "EVALUATION_ERROR"] },
+            "message": { "type": "string" },
+            "detail": { "type": ["string", "null"] }
+          }
+        }
+      ]
+    },
+    "request_id": { "type": ["string", "null"] },
+    "engine": { "type": "string" }
+  }
+}

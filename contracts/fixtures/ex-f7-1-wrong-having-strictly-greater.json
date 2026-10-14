@@ -1,0 +1,50 @@
+{
+  "note": "Wrong query for ex.f7.1: HAVING COUNT(*) > 11 drops the three statuses that sit exactly on the threshold.",
+  "contract": {
+    "columns": [
+      "status",
+      "orders"
+    ],
+    "rows": [
+      [
+        "completed",
+        37
+      ],
+      [
+        "cancelled",
+        11
+      ],
+      [
+        "refunded",
+        11
+      ],
+      [
+        "shipped",
+        11
+      ]
+    ],
+    "column_order": "ignored",
+    "row_order": "exact",
+    "duplicates": "preserved",
+    "numeric_tolerance": 0
+  },
+  "actual_result": {
+    "status": "succeeded",
+    "columns": [
+      "status",
+      "orders"
+    ],
+    "rows": [
+      [
+        "completed",
+        37
+      ]
+    ]
+  },
+  "expected_outcome": {
+    "passed": false,
+    "codes": [
+      "ROW_COUNT_MISMATCH"
+    ]
+  }
+}

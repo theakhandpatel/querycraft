@@ -1,0 +1,17 @@
+{
+  "note": "The tolerance boundary is inclusive: a difference exactly equal to the tolerance passes.",
+  "contract": {
+    "columns": ["price"],
+    "rows": [[10.0]],
+    "column_order": "exact",
+    "row_order": "ignored",
+    "duplicates": "preserved",
+    "numeric_tolerance": 0.25
+  },
+  "actual_result": {
+    "status": "succeeded",
+    "columns": ["price"],
+    "rows": [[10.25]]
+  },
+  "expected_outcome": { "passed": true, "codes": [] }
+}

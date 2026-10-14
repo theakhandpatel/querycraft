@@ -1,0 +1,17 @@
+{
+  "note": "Row order is ignored unless the contract asks for it: the same rows in a different order pass.",
+  "contract": {
+    "columns": ["name"],
+    "rows": [["Ada"], ["Grace"]],
+    "column_order": "exact",
+    "row_order": "ignored",
+    "duplicates": "preserved",
+    "numeric_tolerance": 0
+  },
+  "actual_result": {
+    "status": "succeeded",
+    "columns": ["name"],
+    "rows": [["Grace"], ["Ada"]]
+  },
+  "expected_outcome": { "passed": true, "codes": [] }
+}

@@ -1,0 +1,17 @@
+{
+  "note": "A NULL inside a row compares like any other value; row order is ignored here.",
+  "contract": {
+    "columns": ["name", "email"],
+    "rows": [["Ada", null], ["Grace", "g@example.com"]],
+    "column_order": "exact",
+    "row_order": "ignored",
+    "duplicates": "preserved",
+    "numeric_tolerance": 0
+  },
+  "actual_result": {
+    "status": "succeeded",
+    "columns": ["name", "email"],
+    "rows": [["Grace", "g@example.com"], ["Ada", null]]
+  },
+  "expected_outcome": { "passed": true, "codes": [] }
+}

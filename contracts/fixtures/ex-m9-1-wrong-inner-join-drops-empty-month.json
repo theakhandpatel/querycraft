@@ -1,0 +1,74 @@
+{
+  "note": "Wrong query for ex.m9.1: an inner join instead of a left join drops June, the month the series existed to reveal.",
+  "contract": {
+    "columns": [
+      "month",
+      "completed"
+    ],
+    "rows": [
+      [
+        "2026-01",
+        8
+      ],
+      [
+        "2026-02",
+        8
+      ],
+      [
+        "2026-03",
+        9
+      ],
+      [
+        "2026-04",
+        7
+      ],
+      [
+        "2026-05",
+        5
+      ],
+      [
+        "2026-06",
+        0
+      ]
+    ],
+    "column_order": "ignored",
+    "row_order": "exact",
+    "duplicates": "preserved",
+    "numeric_tolerance": 0
+  },
+  "actual_result": {
+    "status": "succeeded",
+    "columns": [
+      "month",
+      "completed"
+    ],
+    "rows": [
+      [
+        "2026-01",
+        8
+      ],
+      [
+        "2026-02",
+        8
+      ],
+      [
+        "2026-03",
+        9
+      ],
+      [
+        "2026-04",
+        7
+      ],
+      [
+        "2026-05",
+        5
+      ]
+    ]
+  },
+  "expected_outcome": {
+    "passed": false,
+    "codes": [
+      "ROW_COUNT_MISMATCH"
+    ]
+  }
+}

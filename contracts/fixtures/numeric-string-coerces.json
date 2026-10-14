@@ -1,0 +1,17 @@
+{
+  "note": "String-vs-number: a numeric string is coerced only because the other side is a real number, so stringified reference data still passes.",
+  "contract": {
+    "columns": ["price"],
+    "rows": [["59.00"]],
+    "column_order": "exact",
+    "row_order": "ignored",
+    "duplicates": "preserved",
+    "numeric_tolerance": 0
+  },
+  "actual_result": {
+    "status": "succeeded",
+    "columns": ["price"],
+    "rows": [[59.0]]
+  },
+  "expected_outcome": { "passed": true, "codes": [] }
+}

@@ -1,0 +1,17 @@
+{
+  "note": "Column names are compared verbatim: there is no case normalization.",
+  "contract": {
+    "columns": ["name"],
+    "rows": [["Ada"]],
+    "column_order": "ignored",
+    "row_order": "ignored",
+    "duplicates": "preserved",
+    "numeric_tolerance": 0
+  },
+  "actual_result": {
+    "status": "succeeded",
+    "columns": ["Name"],
+    "rows": [["Ada"]]
+  },
+  "expected_outcome": { "passed": false, "codes": ["COLUMN_MISMATCH"] }
+}

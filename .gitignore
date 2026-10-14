@@ -1,0 +1,18 @@
+node_modules/
+/web/dist/
+.worktrees/
+.od-source/
+*.log
+.env
+.env.*
+!.env.example
+
+# Embedded PostgreSQL cluster (started by the gateway when no DSN is set).
+.data/
+
+# Go build output
+backend/bin/
+
+# The embedded SPA is a build artifact; keep only the placeholder.
+backend/internal/webui/dist/*
+!backend/internal/webui/dist/.gitkeep

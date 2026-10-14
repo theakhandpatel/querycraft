@@ -1,0 +1,45 @@
+{
+  "note": "Wrong query for ex.f4.1: WHERE city = NULL is unknown for every row, so the result is empty.",
+  "contract": {
+    "columns": [
+      "name",
+      "city"
+    ],
+    "rows": [
+      [
+        "Bo Ivanov",
+        "Unknown"
+      ],
+      [
+        "Dara Novak",
+        "Unknown"
+      ],
+      [
+        "Luca Novak",
+        "Unknown"
+      ],
+      [
+        "Tess Larsen",
+        "Unknown"
+      ]
+    ],
+    "column_order": "ignored",
+    "row_order": "exact",
+    "duplicates": "preserved",
+    "numeric_tolerance": 0
+  },
+  "actual_result": {
+    "status": "succeeded",
+    "columns": [
+      "name",
+      "city"
+    ],
+    "rows": []
+  },
+  "expected_outcome": {
+    "passed": false,
+    "codes": [
+      "ROW_COUNT_MISMATCH"
+    ]
+  }
+}

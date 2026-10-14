@@ -1,0 +1,90 @@
+{
+  "note": "Alternative formulation for ex.f6.1: the same rows with the columns in the opposite order are accepted because column_order is ignored.",
+  "contract": {
+    "columns": [
+      "name",
+      "stock",
+      "stock_level"
+    ],
+    "rows": [
+      [
+        "Discontinued Camp Stove",
+        0,
+        "out"
+      ],
+      [
+        "Harbor Rain Shell",
+        9,
+        "low"
+      ],
+      [
+        "Summit Hiking Poles",
+        11,
+        "low"
+      ],
+      [
+        "Trail Runner Jacket",
+        12,
+        "low"
+      ],
+      [
+        "Solar Camp Lantern",
+        16,
+        "low"
+      ],
+      [
+        "Rope Dog Leash",
+        35,
+        "ok"
+      ]
+    ],
+    "column_order": "ignored",
+    "row_order": "exact",
+    "duplicates": "preserved",
+    "numeric_tolerance": 0
+  },
+  "actual_result": {
+    "status": "succeeded",
+    "columns": [
+      "stock_level",
+      "stock",
+      "name"
+    ],
+    "rows": [
+      [
+        "out",
+        0,
+        "Discontinued Camp Stove"
+      ],
+      [
+        "low",
+        9,
+        "Harbor Rain Shell"
+      ],
+      [
+        "low",
+        11,
+        "Summit Hiking Poles"
+      ],
+      [
+        "low",
+        12,
+        "Trail Runner Jacket"
+      ],
+      [
+        "low",
+        16,
+        "Solar Camp Lantern"
+      ],
+      [
+        "ok",
+        35,
+        "Rope Dog Leash"
+      ]
+    ]
+  },
+  "expected_outcome": {
+    "passed": true,
+    "codes": []
+  }
+}

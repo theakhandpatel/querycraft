@@ -1,0 +1,17 @@
+{
+  "note": "duplicates preserved counts rows, so an extra duplicate is a row-count mismatch.",
+  "contract": {
+    "columns": ["category"],
+    "rows": [["Electronics"]],
+    "column_order": "exact",
+    "row_order": "ignored",
+    "duplicates": "preserved",
+    "numeric_tolerance": 0
+  },
+  "actual_result": {
+    "status": "succeeded",
+    "columns": ["category"],
+    "rows": [["Electronics"], ["Electronics"]]
+  },
+  "expected_outcome": { "passed": false, "codes": ["ROW_COUNT_MISMATCH"] }
+}

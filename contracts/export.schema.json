@@ -1,0 +1,134 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://querycraft.app/contracts/export.schema.json",
+  "title": "ExportBundle",
+  "description": "The workbook export document (technical-design.md 8.3), and the input the import validates before it writes. One self-contained JSON file holding every workbook entity the learner owns, plus the content versions the data was produced against. Credential-free by construction: the schema forbids unknown properties at every level, so a token, session or password field makes the document invalid rather than silently imported.",
+  "type": "object",
+  "required": ["format_version", "exported_at", "content_versions", "progress", "drafts"],
+  "additionalProperties": false,
+  "properties": {
+    "format_version": {
+      "description": "Bumped when the shape changes in a way an older reader cannot accept. Import refuses any value it does not implement.",
+      "type": "integer",
+      "minimum": 1
+    },
+    "exported_at": {
+      "description": "ISO-8601 UTC instant the document was written. Never used for conflict resolution.",
+      "type": "string",
+      "pattern": "^[0-9]{4}-[0-9]{2}-[0-9]{2}T[0-9]{2}:[0-9]{2}:[0-9]{2}(\\.[0-9]+)?Z$"
+    },
+    "content_versions": {
+      "description": "The content the data was produced against (design 7.3).",
+      "type": "object",
+      "required": ["dataset_version", "progress_version"],
+      "additionalProperties": false,
+      "properties": {
+        "dataset_version": { "type": "integer", "minimum": 1 },
+        "progress_version": { "type": "integer", "minimum": 1 }
+      }
+    },
+    "progress": { "$ref": "#/$defs/Progress" },
+    "drafts": {
+      "description": "Editor text per cell id, so an in-progress answer is not lost.",
+      "type": "object",
+      "additionalProperties": { "type": "string" }
+    }
+  },
+  "$defs": {
+    "Progress": {
+      "type": "object",
+      "required": ["version", "seeded", "events", "passed", "accepted", "firstTry", "done", "notes", "saved", "attempts", "attemptsByDay", "timeMs"],
+      "additionalProperties": false,
+      "properties": {
+        "version": { "type": "integer", "minimum": 1 },
+        "seeded": { "type": "boolean" },
+        "events": { "type": "array", "items": { "$ref": "#/$defs/ProgressEvent" } },
+        "passed": { "$ref": "#/$defs/BoolMap" },
+        "accepted": { "$ref": "#/$defs/BoolMap" },
+        "firstTry": { "$ref": "#/$defs/BoolMap" },
+        "done": { "$ref": "#/$defs/BoolMap" },
+        "notes": { "type": "array", "items": { "$ref": "#/$defs/NoteItem" } },
+        "saved": { "type": "array", "items": { "$ref": "#/$defs/SavedItem" } },
+        "attempts": { "type": "integer", "minimum": 0 },
+        "attemptsByDay": {
+          "description": "Attempt volume for the last seven days, oldest first. Presentation only; the view recomputes it from the events.",
+          "type": "array",
+          "items": { "type": "integer", "minimum": 0 }
+        },
+        "timeMs": {
+          "description": "Measured active reading/practice time per course id, in milliseconds. Never an estimate.",
+          "type": "object",
+          "additionalProperties": { "type": "integer", "minimum": 0 }
+        }
+      }
+    },
+    "BoolMap": {
+      "type": "object",
+      "additionalProperties": { "type": "boolean" }
+    },
+    "ProgressEvent": {
+      "description": "One attempt or help view. Immutable: import unions events and never re-grades or deletes one.",
+      "type": "object",
+      "required": ["ts", "id", "kind", "title", "course", "lesson"],
+      "additionalProperties": false,
+      "properties": {
+        "ts": { "type": "integer" },
+        "id": { "type": "string" },
+        "attemptId": {
+          "description": "Client request id (design 8.2): unique per attempt, which is what lets two attempts at one exercise both survive.",
+          "type": "string"
+        },
+        "kind": { "$ref": "#/$defs/EventKind" },
+        "title": { "type": "string" },
+        "course": { "type": "string" },
+        "lesson": { "type": ["integer", "null"] },
+        "datasetVersion": { "type": "integer", "minimum": 1 },
+        "exerciseVersion": { "type": "integer", "minimum": 1 }
+      }
+    },
+    "EventKind": {
+      "enum": ["passed", "failed", "accepted", "error", "solution", "hint", "bookmark"]
+    },
+    "NoteItem": {
+      "type": "object",
+      "required": ["course", "lesson", "kind", "ts", "text"],
+      "additionalProperties": false,
+      "properties": {
+        "course": { "type": "string" },
+        "lesson": { "type": "integer", "minimum": 0 },
+        "kind": { "enum": ["note", "bookmark"] },
+        "ts": { "type": "integer" },
+        "text": { "type": "string" },
+        "section": { "type": "integer", "minimum": 0 }
+      }
+    },
+    "SavedItem": {
+      "type": "object",
+      "required": ["course", "lesson", "name"],
+      "additionalProperties": false,
+      "properties": {
+        "course": { "type": "string" },
+        "lesson": { "type": "integer", "minimum": 0 },
+        "name": { "type": "string" },
+        "sql": { "type": "string" },
+        "exercise": { "type": "string" },
+        "contract": { "$ref": "#/$defs/ResultContract" },
+        "datasetVersion": { "type": "integer", "minimum": 1 },
+        "exerciseVersion": { "type": "integer", "minimum": 1 },
+        "ts": { "type": "integer" }
+      }
+    },
+    "ResultContract": {
+      "type": "object",
+      "required": ["columns"],
+      "additionalProperties": false,
+      "properties": {
+        "columns": { "type": "array", "items": { "type": "string" } },
+        "column_order": { "enum": ["exact", "ignored"] },
+        "row_order": { "enum": ["exact", "ignored"] },
+        "duplicates": { "enum": ["preserved", "ignored"] },
+        "numeric_tolerance": { "type": "number", "minimum": 0 }
+      }
+    }
+  }
+}

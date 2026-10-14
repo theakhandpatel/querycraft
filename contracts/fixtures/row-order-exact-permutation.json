@@ -1,0 +1,17 @@
+{
+  "note": "row_order exact rejects a permutation; every row is present but misplaced, so the codes are VALUE_MISMATCH plus ROW_ORDER_MISMATCH.",
+  "contract": {
+    "columns": ["name"],
+    "rows": [["Ada"], ["Grace"]],
+    "column_order": "exact",
+    "row_order": "exact",
+    "duplicates": "preserved",
+    "numeric_tolerance": 0
+  },
+  "actual_result": {
+    "status": "succeeded",
+    "columns": ["name"],
+    "rows": [["Grace"], ["Ada"]]
+  },
+  "expected_outcome": { "passed": false, "codes": ["ROW_ORDER_MISMATCH", "VALUE_MISMATCH"] }
+}

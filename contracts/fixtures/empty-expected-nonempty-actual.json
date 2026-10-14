@@ -1,0 +1,17 @@
+{
+  "note": "An empty reference against a non-empty result is a row-count mismatch, not a pass.",
+  "contract": {
+    "columns": ["name"],
+    "rows": [],
+    "column_order": "exact",
+    "row_order": "ignored",
+    "duplicates": "preserved",
+    "numeric_tolerance": 0
+  },
+  "actual_result": {
+    "status": "succeeded",
+    "columns": ["name"],
+    "rows": [["Ada"]]
+  },
+  "expected_outcome": { "passed": false, "codes": ["ROW_COUNT_MISMATCH"] }
+}

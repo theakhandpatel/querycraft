@@ -1,0 +1,58 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://querycraft.app/contracts/evaluation.schema.json",
+  "title": "Evaluation",
+  "description": "The POST /answers/evaluate response: the learner's QueryResult (qr), the graded checks, the overall pass flag and the evaluation duration (a string, e.g. \"8.4\").",
+  "type": "object",
+  "required": ["qr", "checks", "passed", "duration_ms"],
+  "properties": {
+    "qr": {
+      "type": "object",
+      "required": ["status", "columns", "rows", "row_count", "truncated", "duration_ms", "error", "engine"],
+      "properties": {
+        "status": { "enum": ["succeeded", "failed"] },
+        "columns": {
+          "type": "array",
+          "items": { "type": "object", "required": ["name", "type"], "properties": { "name": { "type": "string" }, "type": { "type": "string" } } }
+        },
+        "rows": { "type": "array", "items": { "type": "array" } },
+        "row_count": { "type": "integer", "minimum": 0 },
+        "truncated": { "type": "boolean" },
+        "duration_ms": { "type": "number", "minimum": 0 },
+        "error": {
+          "oneOf": [
+            { "type": "null" },
+            {
+              "type": "object",
+              "required": ["code", "message"],
+              "properties": {
+                "code": { "enum": ["EMPTY_QUERY", "QUERY_SYNTAX_ERROR", "QUERY_RUNTIME_ERROR", "QUERY_TIMEOUT", "RESULT_LIMIT_EXCEEDED", "ENVIRONMENT_UNAVAILABLE", "PERSISTENCE_FAILED", "EVALUATION_ERROR"] },
+                "message": { "type": "string" },
+                "detail": { "type": ["string", "null"] }
+              }
+            }
+          ]
+        },
+        "request_id": { "type": ["string", "null"] },
+        "engine": { "type": "string" }
+      }
+    },
+    "checks": {
+      "type": "array",
+      "items": {
+        "type": "object",
+        "required": ["label", "code", "ok"],
+        "properties": {
+          "label": { "type": "string" },
+          "code": {
+            "description": "Feedback code for this check, from the shared evaluation code set (NormalizeCode clamps unknown codes to VALUE_MISMATCH).",
+            "enum": ["VALUE_MISMATCH", "COLUMN_MISMATCH", "COLUMN_ORDER_MISMATCH", "ROW_COUNT_MISMATCH", "ROW_ORDER_MISMATCH", "FILTER_MISSING", "AGGREGATION_MISSING", "GROUPING_MISSING", "JOIN_MISSING", "JOIN_TYPE_MISMATCH", "CTE_MISSING", "WINDOW_MISSING", "PARTITION_MISSING", "WINDOW_ORDER_MISSING", "RANK_FUNCTION_MISMATCH", "GRAIN_ERROR", "EXPLANATION_MISSING", "EVALUATION_ERROR"]
+          },
+          "ok": { "type": "boolean" }
+        }
+      }
+    },
+    "passed": { "type": "boolean" },
+    "duration_ms": { "type": "string" }
+  }
+}

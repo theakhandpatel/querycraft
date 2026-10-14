@@ -1,0 +1,29 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://querycraft.app/contracts/exercise.schema.json",
+  "title": "ExerciseSpec",
+  "type": "object",
+  "required": ["id", "version", "lesson_id", "type", "prompt", "setup", "result_contract"],
+  "properties": {
+    "id": { "type": "string" },
+    "version": { "type": "integer", "minimum": 1 },
+    "lesson_id": { "type": "string" },
+    "type": { "enum": ["complete", "write", "modify", "predict", "fix", "combine", "solve"] },
+    "prompt": { "type": "string" },
+    "setup": { "type": "object", "required": ["dataset", "schema_version", "seed_version"], "properties": { "dataset": { "type": "string" }, "schema_version": { "type": "integer" }, "seed_version": { "type": "integer" } } },
+    "result_contract": {
+      "type": "object",
+      "required": ["columns", "column_order", "row_order", "duplicates", "numeric_tolerance"],
+      "properties": {
+        "columns": { "type": "array", "items": { "type": "string" } },
+        "column_order": { "enum": ["exact", "ignored"] },
+        "row_order": { "enum": ["exact", "ignored"] },
+        "duplicates": { "enum": ["preserved", "ignored"] },
+        "numeric_tolerance": { "type": "number", "minimum": 0 }
+      }
+    },
+    "reference_solution": { "type": "string" },
+    "hints": { "type": "array", "items": { "type": "string" } },
+    "difficulty": { "enum": ["beginner", "intermediate", "advanced"] }
+  }
+}

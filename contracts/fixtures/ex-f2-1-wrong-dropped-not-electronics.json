@@ -1,0 +1,77 @@
+{
+  "note": "Wrong query for ex.f2.1: the NOT-category filter is omitted, so the expensive Electronics row comes back as an extra row.",
+  "contract": {
+    "columns": [
+      "name",
+      "category",
+      "price"
+    ],
+    "rows": [
+      [
+        "Summit Hiking Poles",
+        "Outdoor",
+        96.4
+      ],
+      [
+        "Harbor Rain Shell",
+        "Outdoor",
+        118
+      ],
+      [
+        "Trail Runner Jacket",
+        "Outdoor",
+        139
+      ],
+      [
+        "Granite Cookware Set",
+        "Kitchen",
+        210
+      ]
+    ],
+    "column_order": "ignored",
+    "row_order": "exact",
+    "duplicates": "preserved",
+    "numeric_tolerance": 0
+  },
+  "actual_result": {
+    "status": "succeeded",
+    "columns": [
+      "name",
+      "category",
+      "price"
+    ],
+    "rows": [
+      [
+        "Summit Hiking Poles",
+        "Outdoor",
+        96.4
+      ],
+      [
+        "Harbor Rain Shell",
+        "Outdoor",
+        118
+      ],
+      [
+        "Nimbus Headphones",
+        "Electronics",
+        129
+      ],
+      [
+        "Trail Runner Jacket",
+        "Outdoor",
+        139
+      ],
+      [
+        "Granite Cookware Set",
+        "Kitchen",
+        210
+      ]
+    ]
+  },
+  "expected_outcome": {
+    "passed": false,
+    "codes": [
+      "ROW_COUNT_MISMATCH"
+    ]
+  }
+}

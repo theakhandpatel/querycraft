@@ -1,0 +1,17 @@
+{
+  "note": "A failed execution is an execution failure, not a wrong answer: it never passes and emits no comparison codes.",
+  "contract": {
+    "columns": ["n"],
+    "rows": [[1]],
+    "column_order": "exact",
+    "row_order": "ignored",
+    "duplicates": "preserved",
+    "numeric_tolerance": 0
+  },
+  "actual_result": {
+    "status": "failed",
+    "columns": [],
+    "rows": []
+  },
+  "expected_outcome": { "passed": false, "codes": [] }
+}

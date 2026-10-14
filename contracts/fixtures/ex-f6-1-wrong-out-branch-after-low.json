@@ -1,0 +1,92 @@
+{
+  "note": "Wrong query for ex.f6.1: the stock = 0 branch is tested after stock < 20, so zero stock is labelled low instead of out.",
+  "contract": {
+    "columns": [
+      "name",
+      "stock",
+      "stock_level"
+    ],
+    "rows": [
+      [
+        "Discontinued Camp Stove",
+        0,
+        "out"
+      ],
+      [
+        "Harbor Rain Shell",
+        9,
+        "low"
+      ],
+      [
+        "Summit Hiking Poles",
+        11,
+        "low"
+      ],
+      [
+        "Trail Runner Jacket",
+        12,
+        "low"
+      ],
+      [
+        "Solar Camp Lantern",
+        16,
+        "low"
+      ],
+      [
+        "Rope Dog Leash",
+        35,
+        "ok"
+      ]
+    ],
+    "column_order": "ignored",
+    "row_order": "exact",
+    "duplicates": "preserved",
+    "numeric_tolerance": 0
+  },
+  "actual_result": {
+    "status": "succeeded",
+    "columns": [
+      "name",
+      "stock",
+      "stock_level"
+    ],
+    "rows": [
+      [
+        "Discontinued Camp Stove",
+        0,
+        "low"
+      ],
+      [
+        "Harbor Rain Shell",
+        9,
+        "low"
+      ],
+      [
+        "Summit Hiking Poles",
+        11,
+        "low"
+      ],
+      [
+        "Trail Runner Jacket",
+        12,
+        "low"
+      ],
+      [
+        "Solar Camp Lantern",
+        16,
+        "low"
+      ],
+      [
+        "Rope Dog Leash",
+        35,
+        "ok"
+      ]
+    ]
+  },
+  "expected_outcome": {
+    "passed": false,
+    "codes": [
+      "VALUE_MISMATCH"
+    ]
+  }
+}

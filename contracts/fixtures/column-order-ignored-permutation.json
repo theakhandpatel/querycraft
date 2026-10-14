@@ -1,0 +1,17 @@
+{
+  "note": "Column order is ignored unless the contract asks for it; values are aligned by column name.",
+  "contract": {
+    "columns": ["name", "price"],
+    "rows": [["Widget", 10.0]],
+    "column_order": "ignored",
+    "row_order": "ignored",
+    "duplicates": "preserved",
+    "numeric_tolerance": 0
+  },
+  "actual_result": {
+    "status": "succeeded",
+    "columns": ["price", "name"],
+    "rows": [[10.0, "Widget"]]
+  },
+  "expected_outcome": { "passed": true, "codes": [] }
+}

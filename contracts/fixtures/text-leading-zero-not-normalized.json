@@ -1,0 +1,17 @@
+{
+  "note": "Two text values are compared verbatim: \"042\" is not \"42\" (no implicit text normalization).",
+  "contract": {
+    "columns": ["code"],
+    "rows": [["042"]],
+    "column_order": "exact",
+    "row_order": "ignored",
+    "duplicates": "preserved",
+    "numeric_tolerance": 0
+  },
+  "actual_result": {
+    "status": "succeeded",
+    "columns": ["code"],
+    "rows": [["42"]]
+  },
+  "expected_outcome": { "passed": false, "codes": ["VALUE_MISMATCH"] }
+}

@@ -1,0 +1,17 @@
+{
+  "note": "An empty result is a valid result and compares like any other.",
+  "contract": {
+    "columns": ["name"],
+    "rows": [],
+    "column_order": "exact",
+    "row_order": "ignored",
+    "duplicates": "preserved",
+    "numeric_tolerance": 0
+  },
+  "actual_result": {
+    "status": "succeeded",
+    "columns": ["name"],
+    "rows": []
+  },
+  "expected_outcome": { "passed": true, "codes": [] }
+}

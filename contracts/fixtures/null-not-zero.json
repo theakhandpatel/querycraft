@@ -1,0 +1,17 @@
+{
+  "note": "NULL is distinct from zero.",
+  "contract": {
+    "columns": ["qty"],
+    "rows": [[null]],
+    "column_order": "exact",
+    "row_order": "ignored",
+    "duplicates": "preserved",
+    "numeric_tolerance": 0
+  },
+  "actual_result": {
+    "status": "succeeded",
+    "columns": ["qty"],
+    "rows": [[0]]
+  },
+  "expected_outcome": { "passed": false, "codes": ["VALUE_MISMATCH"] }
+}

@@ -1,0 +1,54 @@
+{
+  "note": "Wrong query for ex.f3.1: OFFSET is missing, so the first page is returned where the third page was asked for.",
+  "contract": {
+    "columns": [
+      "name",
+      "price"
+    ],
+    "rows": [
+      [
+        "Linen Duvet Cover",
+        84
+      ],
+      [
+        "Pulse Fitness Tracker",
+        74.25
+      ],
+      [
+        "Bamboo Shelf",
+        72.3
+      ]
+    ],
+    "column_order": "ignored",
+    "row_order": "exact",
+    "duplicates": "preserved",
+    "numeric_tolerance": 0
+  },
+  "actual_result": {
+    "status": "succeeded",
+    "columns": [
+      "name",
+      "price"
+    ],
+    "rows": [
+      [
+        "Granite Cookware Set",
+        210
+      ],
+      [
+        "Trail Runner Jacket",
+        139
+      ],
+      [
+        "Nimbus Headphones",
+        129
+      ]
+    ]
+  },
+  "expected_outcome": {
+    "passed": false,
+    "codes": [
+      "VALUE_MISMATCH"
+    ]
+  }
+}

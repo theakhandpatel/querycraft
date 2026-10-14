@@ -1,0 +1,17 @@
+{
+  "note": "A renamed column does not satisfy the contract: names are matched, not aliases.",
+  "contract": {
+    "columns": ["name"],
+    "rows": [["Ada"]],
+    "column_order": "ignored",
+    "row_order": "ignored",
+    "duplicates": "preserved",
+    "numeric_tolerance": 0
+  },
+  "actual_result": {
+    "status": "succeeded",
+    "columns": ["product_name"],
+    "rows": [["Ada"]]
+  },
+  "expected_outcome": { "passed": false, "codes": ["COLUMN_MISMATCH"] }
+}

@@ -1,0 +1,52 @@
+{
+  "note": "Alternative formulation for ex.f3.1: the same rows with the columns in the opposite order are accepted because column_order is ignored.",
+  "contract": {
+    "columns": [
+      "name",
+      "price"
+    ],
+    "rows": [
+      [
+        "Linen Duvet Cover",
+        84
+      ],
+      [
+        "Pulse Fitness Tracker",
+        74.25
+      ],
+      [
+        "Bamboo Shelf",
+        72.3
+      ]
+    ],
+    "column_order": "ignored",
+    "row_order": "exact",
+    "duplicates": "preserved",
+    "numeric_tolerance": 0
+  },
+  "actual_result": {
+    "status": "succeeded",
+    "columns": [
+      "price",
+      "name"
+    ],
+    "rows": [
+      [
+        84,
+        "Linen Duvet Cover"
+      ],
+      [
+        74.25,
+        "Pulse Fitness Tracker"
+      ],
+      [
+        72.3,
+        "Bamboo Shelf"
+      ]
+    ]
+  },
+  "expected_outcome": {
+    "passed": true,
+    "codes": []
+  }
+}

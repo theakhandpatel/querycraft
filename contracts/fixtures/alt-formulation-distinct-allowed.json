@@ -1,0 +1,17 @@
+{
+  "note": "Valid alternative formulation: a DISTINCT-style answer is accepted when duplicates are ignored.",
+  "contract": {
+    "columns": ["category"],
+    "rows": [["Books"], ["Electronics"]],
+    "column_order": "exact",
+    "row_order": "ignored",
+    "duplicates": "ignored",
+    "numeric_tolerance": 0
+  },
+  "actual_result": {
+    "status": "succeeded",
+    "columns": ["category"],
+    "rows": [["Electronics"], ["Books"], ["Electronics"]]
+  },
+  "expected_outcome": { "passed": true, "codes": [] }
+}

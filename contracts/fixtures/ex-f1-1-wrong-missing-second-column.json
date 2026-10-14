@@ -1,0 +1,61 @@
+{
+  "note": "Wrong query for ex.f1.1: DISTINCT applied to category alone drops the active column, so the projection is wrong before any value is compared.",
+  "contract": {
+    "columns": [
+      "category",
+      "active"
+    ],
+    "rows": [
+      [
+        "Electronics",
+        true
+      ],
+      [
+        "Home",
+        true
+      ],
+      [
+        "Kitchen",
+        true
+      ],
+      [
+        "Outdoor",
+        false
+      ],
+      [
+        "Outdoor",
+        true
+      ]
+    ],
+    "column_order": "ignored",
+    "row_order": "exact",
+    "duplicates": "preserved",
+    "numeric_tolerance": 0
+  },
+  "actual_result": {
+    "status": "succeeded",
+    "columns": [
+      "category"
+    ],
+    "rows": [
+      [
+        "Electronics"
+      ],
+      [
+        "Home"
+      ],
+      [
+        "Kitchen"
+      ],
+      [
+        "Outdoor"
+      ]
+    ]
+  },
+  "expected_outcome": {
+    "passed": false,
+    "codes": [
+      "COLUMN_MISMATCH"
+    ]
+  }
+}

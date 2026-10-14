@@ -1,0 +1,17 @@
+{
+  "note": "NULL only equals NULL.",
+  "contract": {
+    "columns": ["email"],
+    "rows": [[null]],
+    "column_order": "exact",
+    "row_order": "ignored",
+    "duplicates": "preserved",
+    "numeric_tolerance": 0
+  },
+  "actual_result": {
+    "status": "succeeded",
+    "columns": ["email"],
+    "rows": [[null]]
+  },
+  "expected_outcome": { "passed": true, "codes": [] }
+}

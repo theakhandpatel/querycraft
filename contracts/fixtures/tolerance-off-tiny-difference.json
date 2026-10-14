@@ -1,0 +1,17 @@
+{
+  "note": "With no tolerance, any numeric difference fails: numbers are never rounded.",
+  "contract": {
+    "columns": ["price"],
+    "rows": [[10.0]],
+    "column_order": "exact",
+    "row_order": "ignored",
+    "duplicates": "preserved",
+    "numeric_tolerance": 0
+  },
+  "actual_result": {
+    "status": "succeeded",
+    "columns": ["price"],
+    "rows": [[10.000001]]
+  },
+  "expected_outcome": { "passed": false, "codes": ["VALUE_MISMATCH"] }
+}

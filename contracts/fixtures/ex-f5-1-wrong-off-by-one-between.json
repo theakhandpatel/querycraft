@@ -1,0 +1,82 @@
+{
+  "note": "Wrong query for ex.f5.1: BETWEEN 25 AND 90 excludes the 20-24 band, so the cheapest qualifying product is dropped.",
+  "contract": {
+    "columns": [
+      "name",
+      "price"
+    ],
+    "rows": [
+      [
+        "Maple Cutting Board",
+        24
+      ],
+      [
+        "Ceramic Vase",
+        33.2
+      ],
+      [
+        "Cedar Desk Lamp",
+        42.5
+      ],
+      [
+        "Wool Throw Blanket",
+        55
+      ],
+      [
+        "Copper Kettle",
+        65.75
+      ],
+      [
+        "Bamboo Shelf",
+        72.3
+      ],
+      [
+        "Linen Duvet Cover",
+        84
+      ]
+    ],
+    "column_order": "ignored",
+    "row_order": "exact",
+    "duplicates": "preserved",
+    "numeric_tolerance": 0
+  },
+  "actual_result": {
+    "status": "succeeded",
+    "columns": [
+      "name",
+      "price"
+    ],
+    "rows": [
+      [
+        "Ceramic Vase",
+        33.2
+      ],
+      [
+        "Cedar Desk Lamp",
+        42.5
+      ],
+      [
+        "Wool Throw Blanket",
+        55
+      ],
+      [
+        "Copper Kettle",
+        65.75
+      ],
+      [
+        "Bamboo Shelf",
+        72.3
+      ],
+      [
+        "Linen Duvet Cover",
+        84
+      ]
+    ]
+  },
+  "expected_outcome": {
+    "passed": false,
+    "codes": [
+      "ROW_COUNT_MISMATCH"
+    ]
+  }
+}

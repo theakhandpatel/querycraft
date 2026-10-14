@@ -1,0 +1,59 @@
+# Querycraft gateway — local PostgreSQL for development, preview and the gated
+# integration tests.
+#
+#   docker compose up -d db
+#
+# ONE server, ONE database per environment. The init script mounted from
+# deploy/postgres/initdb/ creates both:
+#
+#   querycraft       dev / preview
+#   querycraft_test  the gated integration tests
+#
+# Inside each database, two schemas keep concerns apart:
+#
+#   dataset   learner-visible commerce tables (customers, products, orders,
+#             order_items, dataset_meta) — the only schema a learner query sees
+#             on its search_path, and the only one a restricted role needs.
+#   app       gateway metadata (progress, events, content_docs), never on the
+#             learner search_path.
+#
+# Point the gateway at one environment by choosing its database in the DSN
+# (the gateway reads it from QC_DATABASE_URL; everything is created on first
+# connect, so no manual schema setup is needed):
+#
+#   export QC_DATABASE_URL='postgres://querycraft:querycraft@localhost:5432/querycraft?sslmode=disable'
+#   export QC_ADMIN_DATABASE_URL="$QC_DATABASE_URL"   # optional: persist progress/events
+#   (cd backend && go run ./cmd/api)
+#
+# Switch environments by switching databases — e.g. a shared preview database:
+#
+#   export QC_DATABASE_URL='postgres://querycraft:querycraft@localhost:5432/querycraft_preview?sslmode=disable'
+#
+# The test database drives the skipped-by-default integration test:
+#
+#   (cd backend && QC_TEST_DATABASE_URL='postgres://querycraft:querycraft@localhost:5432/querycraft_test?sslmode=disable' go test ./internal/httpapi -run TestGatewayIntegration -v)
+
+services:
+  db:
+    image: postgres:16-alpine
+    container_name: querycraft-db
+    environment:
+      POSTGRES_USER: querycraft
+      POSTGRES_PASSWORD: querycraft
+      POSTGRES_DB: querycraft
+    ports:
+      - "5432:5432"
+    volumes:
+      - querycraft-pgdata:/var/lib/postgresql/data
+      # Creates querycraft + querycraft_test on first init (one DB per
+      # environment); safe to re-run and does not add a second service.
+      - ./deploy/postgres/initdb:/docker-entrypoint-initdb.d:ro
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U querycraft -d querycraft"]
+      interval: 5s
+      timeout: 5s
+      retries: 10
+      start_period: 10s
+
+volumes:
+  querycraft-pgdata:
