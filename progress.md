@@ -18,29 +18,52 @@ Status legend: **done** (verified), **wip** (in flight), **todo**, **blocked**.
 
 > Complete the app. Do not stop until it is complete.
 
-**"Complete" means:** every known open item is closed and every gate is green,
-with the app runnable end-to-end from a clean checkout (`make build && make serve`,
-`make verify` / `make verify-mock`). Committing and releasing the pending tags
-remain the owner's call (AGENTS.md: do not commit or tag without asking), so
-completion is *code-complete + gate-green + honestly tracked here*, not a tag.
+**COMPLETE (2026-10-16).** Every known open item is closed and every gate is
+green, with the app runnable end-to-end from a clean checkout. Committing and
+releasing the pending tags remain the owner's call (AGENTS.md: do not commit or
+tag without asking), so completion is *code-complete + gate-green + honestly
+tracked here*, not a tag.
+
+Final state — all items closed:
+
+| # | Item | State |
+| --- | --- | --- |
+| 1 | Agent-run audit trail (transcripts: owner-scoped, redacted, bounded, over HTTP) | **done — verified** |
+| 2 | Design craft pass on `web/` (Impeccable) + generated `PRODUCT.md`/`DESIGN.md` | **done — verified** |
+| 3 | `exercise_count` unsatisfiable request | **done — verified** |
+| 4 | Backend simplification pass in `internal/**` | **done — verified** |
+| 5 | App metadata → SQLite (Postgres stays the practice engine) | **done — merged & verified** |
+| 6 | Outline approval (pause after the outline, approve/discard, then build) | **done — verified** |
+| A1 | Release blocker — account-scoped local progress | **done — verified** |
+| A2 | Release blocker — empty-admin-password exposure | **done — verified** |
+| A3 | Release blocker — brittle `audit-shell` | **done — verified** |
+| F2 | Architecture review finding — dialect-aware `POST /environment/reset` | **done — verified** |
+| F4 | Architecture review finding — SQLite per-account cache bound/reaper | **done — merged & verified** |
+| F5 | Login throttling (the blank admin address was brute-forceable) | **done — merged & verified** |
+| F6 | Self-hosted fonts (offline-first) | **done — verified** |
+
+Verification on the final quiet tree (nothing writing):
+`make test` green (web typecheck + cgo-free + all audits + all 15 Go packages);
+`make verify` green (one binary, SPA + API + auth on embedded PostgreSQL 18.3);
+`make verify-mock` green (honest degradation with no database). Full history and
+per-item evidence in the sections below.
+
+**The one open caveat, stated plainly:** a single rare flake —
+`TestSQLiteResetDoesNotTouchAnotherAccount` failed **once** in ~90 runs and has
+not reproduced under isolation, the full tree, CPU load or shuffled order. It is
+instrumented to print the whole `QueryResult` on failure so the next occurrence
+names its own cause. Watched, not claimed fixed.
+
+Deliberately **not** done (post-v1 by the independent architecture review, not
+gaps in this goal): unify grading into one executable spec across adapters (F1,
+which means rewriting 175 authored checks) and split `store.Store` from
+`ai.Depot` (F6-store). Both are recorded as the first post-v1 work.
 
 The remaining open items, in dependency order:
 
 | # | Item | Owner | State |
 | --- | --- | --- | --- |
 | 1 | Agent-run audit trail (transcripts: owner-scoped, redacted, bounded, over HTTP) | delegated | **done — verified** |
-| 2 | Design craft pass on `web/` (Impeccable) + generated `PRODUCT.md`/`DESIGN.md` | delegated | **done — verified** |
-| 3 | `exercise_count` unsatisfiable request (a request for fewer exercises than chapters can never be satisfied) | delegated | **done — verified** |
-| 4 | Backend simplification pass in `internal/**` — verify what (if anything) landed; close the track | — | **done — verified** |
-| 5 | App metadata → SQLite (users/sessions/progress/events/courses/challenges/patches/transcripts), PostgreSQL stays the practice engine | worktree | **done — merged & verified** |
-| 6 | Outline approval — pause after the outline, learner approves or discards, then chapters build | — | **done — verified** (`docs/outline-approval-design.md`) |
-| A1 | Release blocker — account-scoped local progress (was: progress bled across accounts on a shared browser) | delegated | **done — verified** |
-| A2 | Release blocker — empty-admin-password exposure (loopback default + refusal on non-loopback + hint only when true) | delegated | **done — verified** |
-| A3 | Release blocker — brittle `audit-shell` (was red on a correct stylesheet) | — | **done — verified** |
-| F2 | Architecture review finding — dialect-aware `POST /environment/reset` | — | **done — verified** |
-| F4 | Architecture review finding — SQLite per-account cache has no bound/reaper (unlike `envdb`) | worktree | **done — merged & verified** |
-| F5 | Login throttling (release follow-up: the blank admin address was brute-forceable) | worktree | **done — merged & verified** |
-| F6 | Self-hosted fonts (was a render-blocking third-party `<link>` on an offline-first app) | Luna/Codex | **done — verified** |
 
 **Full end-to-end gates green on the quiet tree (2026-10-16):**
 `make test` (web typecheck + cgo-free + all 24 audits + all 15 Go packages),
@@ -58,9 +81,6 @@ isolation, the full tree, real CPU load, shuffled order, or 20× repeated
 (`status` + `error`) so the next occurrence names its own cause instead of
 forcing another guessing round. Not claimed fixed; watched, not dismissed, and
 the F4 eviction path (`MaxAccounts` 8) cannot be the cause in a 2-account test.
-
-Items 4 and 5 share `backend/internal/store`, so they run in sequence, not
-in parallel.
 
 ### Parallel worktrees (owner-set, 2026-10-16)
 
