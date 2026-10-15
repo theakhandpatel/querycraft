@@ -32,7 +32,7 @@ The remaining open items, in dependency order:
 | 2 | Design craft pass on `web/` (Impeccable) + generated `PRODUCT.md`/`DESIGN.md` | delegated | **done — verified** |
 | 3 | `exercise_count` unsatisfiable request (a request for fewer exercises than chapters can never be satisfied) | delegated | **done — verified** |
 | 4 | Backend simplification pass in `internal/**` — verify what (if anything) landed; close the track | — | **done — verified** |
-| 5 | App metadata → SQLite (users/sessions/progress/events/courses/challenges/patches/transcripts), PostgreSQL stays the practice engine | worktree | **wip — running** (additive, reversible; Postgres stays default) |
+| 5 | App metadata → SQLite (users/sessions/progress/events/courses/challenges/patches/transcripts), PostgreSQL stays the practice engine | worktree | **done — merged & verified** |
 | 6 | Outline approval — pause after the outline, learner approves or discards, then chapters build | — | **done — verified** (`docs/outline-approval-design.md`) |
 | A1 | Release blocker — account-scoped local progress (was: progress bled across accounts on a shared browser) | delegated | **done — verified** |
 | A2 | Release blocker — empty-admin-password exposure (loopback default + refusal on non-loopback + hint only when true) | delegated | **done — verified** |
@@ -487,6 +487,46 @@ grading into one executable spec (F1) and splitting `store.Store` from
 `ai.Depot` (F6) — are **post-v1** by its own ranking, and F1 means rewriting 175
 authored checks. Item 4 was "close the simplification track", not "do the
 post-v1 refactor early".
+
+Item 5 (app metadata → SQLite) — **done, merged and verified (2026-10-16).**
+Worktree `t3-7a66dc85`, branch `t3/sqlite-metadata-store`, commit `2cd4b8068`.
+**Additive and reversible by construction**: SQLite is selected only when
+`QC_ADMIN_DATABASE_URL` is empty *and* `QC_METADATA=sqlite`; a configured metadata
+DSN still selects PostgreSQL and the Postgres store's behaviour is unchanged.
+The only edit to `store.go` is a comment. Files: `store/sqlite.go` (343) +
+`store/sqlite_depot.go` (354, the `ai.Depot` half) + `store/sqlite_test.go`
+(367), plus `cmd/api/main.go`/`main_test.go`, `httpapi/metrics.go`,
+`httpapi/openapi.go`, `README.md`.
+
+Verified **on the branch before merging**, then again on the merged tree:
+`go build`/`vet`/`gofmt` clean; **`CGO_ENABLED=0 go build ./...` clean** (the
+single binary stays cgo-free); `go test ./... -count=1` green on all 15
+packages.
+
+The evidence that matters most:
+
+- **Parity, not self-consistency.** `TestPersistentStoreParity` takes a
+  `storeFactory` map and applies **the same case table to Postgres (the
+  reference) and SQLite (the additive backend)** — round trip/deep copy,
+  newest-first ordering, owner attribution, upsert, legacy/absent rows, sessions,
+  patch approval. Both subtrees pass. `TestSQLiteStoreSurvivesCloseAndReopen`
+  proves the file is the store.
+- **Live persistence smoke test (not just unit tests).** Booted the built binary
+  with `QC_METADATA=sqlite` and no admin DSN: `/diagnostics` reported
+  `{"kind":"sqlite","persistent":true}`, signup returned 201, and a real ~90 KB
+  `metadata.sqlite` was created. Then **across a full process restart** on the
+  same file, correct-password login returned **200** and wrong-password **401** —
+  the account genuinely survived, which is the whole point of the item.
+- **Honest diagnostics.** `Kind()` returns `"sqlite"` and the `/diagnostics`
+  `persistent` flag (and the OpenAPI enum) were updated so the gateway does not
+  claim persistence it lacks — or deny persistence it has.
+- Driver choice, and it is the right one: plain `database/sql` over
+  `modernc.org/sqlite`, **not** the hand-written raw driver (`sqlite_raw.go`),
+  because that driver exists to work around a DATE-typing defect in the learner
+  query engine and metadata timestamps are canonical UTC text — the workaround
+  is not needed here.
+
+`make verify` green on the merged tree (Postgres default path unchanged).
 
 Item 6 (outline approval) — **done and verified (2026-10-16).** Verified against
 disk, not the agent's summary: `go build ./...` + `go vet` clean, `gofmt -l`
