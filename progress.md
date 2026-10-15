@@ -38,6 +38,7 @@ The remaining open items, in dependency order:
 | A2 | Release blocker — empty-admin-password exposure (loopback default + refusal on non-loopback + hint only when true) | delegated | **done — verified** |
 | A3 | Release blocker — brittle `audit-shell` (was red on a correct stylesheet) | — | **done — verified** |
 | F2 | Architecture review finding — dialect-aware `POST /environment/reset` (a SQLite chapter's "restore my data" reset PostgreSQL today) | — | **done — verified** |
+| F4 | Architecture review finding — SQLite per-account cache has no bound/reaper (unlike `envdb`) | worktree | **done — merged & verified** |
 
 Items 4 and 5 share `backend/internal/store`, so they run in sequence, not
 in parallel.
@@ -256,7 +257,39 @@ the render-blocking third-party Google Fonts `<link>` in `web/index.html:8-10`
 (should be self-hosted for an offline-first app), and ~9 px internal min-content
 deltas at 320 px only (no page scroll).
 
-Release blockers A1 + A2 — **done and verified (2026-10-15/16).** Verified against
+F4 (SQLite workspace cache bound) — **done, merged and verified (2026-10-16).**
+Implemented in worktree `t3-779bab08`, branch `t3/sqlite-workspace-eviction`,
+commit `769385b69`. Verified on the branch before merging (`go build`/`vet`/
+`gofmt` clean, **all 15 packages green**, targeted SQLite/Reset/Evict tests
+green), then `git merge --no-ff` into main — auto-merged only `backend/README.md`
+(the branch added three env-table rows; item 6 added two route rows, a different
+region). Merged tree re-verified green on all 15 packages.
+
+What it does: `byAccount` now holds `*accountEnvironment{exec, lastUsed}` with an
+LRU eviction and an idle reaper, mirroring `envdb.Manager`'s shape without its
+Postgres mechanics. `SQLiteOptions{MaxAccounts: 8, IdleTTL: 15m}` (configurable
+via `QC_SQLITE_MAX_ACCOUNTS` / `QC_SQLITE_IDLE`); `NewSQLiteEnvironments(root)`
+is unchanged and delegates, so nothing existing breaks. Eviction closes a pool
+only — the learner's file stays on disk and re-opens, so the isolation guarantee
+and the F2 `Reset` semantics are untouched. New `sqlite_cache_test.go` (359
+lines, real SQLite over a temp root) proves the bound holds across 10 accounts,
+an evicted account re-opens its own file and cannot see a neighbour's, the idle
+pool is reaped while its rows survive, `Reset` stays bounded, and 24 concurrent
+workers force evictions race-free. The agent's honest caveat: the full-package
+`-race` run validated the immediately-prior revision (before its final test-helper
+refactor); the committed code's new tests were re-run under `-race -count=5`.
+
+Item 6's remaining edits — **committed** as `45a76ebaa` ("Outline approval … and
+the rest of item 6") so the worktree branch could merge onto a clean tree; its
+`ai/` changes were already captured by the checkpoint `e7f39de1a`.
+
+One flake observed: the first post-merge `go test ./...` printed a bare `FAIL`,
+but four subsequent full runs were clean and a targeted re-run of the three
+suspect packages passed. Cause is unproven; most likely contention from two
+worktree agents running `-race` suites concurrently. Recorded, not dismissed —
+re-check on the next quiet-tree gate.
+
+
 disk, not the agent's summary: `go test ./... -count=1` green on **all 15
 packages**; `go build`/`go vet` clean; `web` `npm run typecheck` + `npm run build`
 clean.
@@ -274,6 +307,11 @@ OpenAPI documents the parameter. Three new tests in `dialect_test.go` assert by
 (31→30, the row gone), one learner's reset does not touch another's file, and an
 anonymous caller is refused. `go build ./... && go vet ./...` clean; full
 `go test ./... -count=1` green on all 15 packages (including `httpapi`, 49 s).
+
+Release blockers A1 + A2 — **done and verified (2026-10-15/16).** Verified against
+disk, not the agent's summary: `go test ./... -count=1` green on **all 15
+packages**; `go build`/`go vet` clean; `web` `npm run typecheck` + `npm run build`
+clean.
 
 *A1 (progress bleed).* The fix is real and covers all three failure points:
 storage is owner-scoped (`progressKeyFor` → `qc.progress.<userId>`, `.local` for
