@@ -120,6 +120,9 @@ echoed back. CORS is open (`Access-Control-Allow-Origin: *`), permits the
 | `QC_MAX_BYTES` | `1048576` (1 MiB) | Maximum serialized result bytes per query. |
 | `QC_TIMEOUT_MS` | `5000` | Hard per-query timeout in milliseconds. |
 | `QC_MAX_CONCURRENT` | `4` | Advertised maximum concurrent queries (`/capabilities`). |
+| `QC_SQLITE_DATA` | `.data/sqlite` (derived from `QC_PG_DATA`) | Data root for the SQLite dialect: `<root>/accounts/<hash>.db` per learner and `<root>/commerce.db` shared read-only. |
+| `QC_SQLITE_MAX_ACCOUNTS` | `8` | Maximum per-account SQLite executors cached at once. Past the bound the least-recently-used pool is closed and evicted; the learner's file stays on disk and re-opens on their next statement. |
+| `QC_SQLITE_IDLE` | `15m` | Idle window for a cached SQLite executor, as a Go duration (`15m`, `1h`). A pool unused for this long is closed on the next access; the file is untouched. |
 
 ## The local database (no Docker)
 
