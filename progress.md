@@ -246,7 +246,17 @@ finished track against the real files, and advances the first unblocked item.
 Three batches were killed by restarts before this; the fourth is the first to
 land work.
 
-Drive tick (latest, uptime): **one live track — item 5, `SQLite metadata store
+Drive tick (latest): **one live track — item 5, `SQLite metadata store
+(worktree)`** — running (`working`), no pending question. It has started
+writing: `backend/internal/store/sqlite.go` (253 lines) now exists in the
+worktree, using `database/sql` over `modernc.org/sqlite` directly (not the raw
+driver — correct for metadata, which is all text/jsonb). Its own note confirms
+the additive split and that, finding no existing shared parity table, it is
+adding a **backend-parameterized parity harness** so the SQLite store is checked
+against the Postgres semantics rather than only itself. Left alone. Main
+checkout clean.
+
+Drive tick (previous): **one live track — item 5, `SQLite metadata store
 (worktree)`** — running (`working`), no pending question. Its worktree
 (`t3-7a66dc85`, branch `t3/sqlite-metadata-store`) is still at the branch point
 with nothing written; the agent's activity is ~1 min old and it kept a todo list
