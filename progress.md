@@ -308,6 +308,35 @@ OpenAPI documents the parameter. Three new tests in `dialect_test.go` assert by
 anonymous caller is refused. `go build ./... && go vet ./...` clean; full
 `go test ./... -count=1` green on all 15 packages (including `httpapi`, 49 s).
 
+Login throttling — **done, merged and verified (2026-10-16).** Worktree
+`t3-665821a8`, branch `t3/login-rate-throttling`, commit `a3821f367`. Verified on
+the branch (build/vet/gofmt clean, all 15 packages green, `-race` throttle tests
+green), then merged. Resolved one conflict: both this branch and the F4 branch
+added rows to the same `backend/README.md` env table — kept both, since both are
+real. The merged tree is green on all 15 packages.
+
+What it does: an in-process fixed-window failure counter keyed by
+`ip \x00 normalized-email` (`login_throttle.go`, one mutex, no new dependency).
+Keyed on `r.RemoteAddr`, **not** `X-Forwarded-For` (caller-supplied); the
+password is never stored. At the cap, the record nearest expiry is evicted, so
+the map cannot grow unbounded; `now` is injectable so the window is tested
+without sleeping. `handleLogin` checks the throttle first and answers
+`429 AUTH_RATE_LIMITED` with `Retry-After`, identical for known and unknown
+addresses (it never consults the store, so it cannot enumerate accounts); below
+the limit the existing 401 is untouched; a success resets. Limits configurable
+via `QC_LOGIN_MAX_FAILURES` (5) / `QC_LOGIN_WINDOW_MS` (900000) /
+`QC_LOGIN_MAX_TRACKED` (4096); `newLoginThrottle` falls back to defaults when
+non-positive, so zero cannot silently disable it. 7 tests through the real
+handler. The agent's declared limits, recorded honestly: it is in-process, so it
+does not survive a restart and is not a distributed defence — the README says so.
+It flagged one web-side gap, which is now **fixed**: the sign-in screen had no
+`AUTH_RATE_LIMITED` case, so a throttled learner saw "email or password is
+incorrect" — a lie, since their credentials may be fine. `AuthScreen.tsx` now
+answers "Too many failed sign-ins. Wait a few minutes and try again."
+(`76527e38c`).
+
+
+
 Release blockers A1 + A2 — **done and verified (2026-10-15/16).** Verified against
 disk, not the agent's summary: `go test ./... -count=1` green on **all 15
 packages**; `go build`/`go vet` clean; `web` `npm run typecheck` + `npm run build`
