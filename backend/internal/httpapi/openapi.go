@@ -764,7 +764,7 @@ const openAPISpec = `{
         "operationId": "login",
         "tags": ["auth"],
         "summary": "Exchange credentials for a session token.",
-        "description": "An unknown email and a wrong password return the same 401 so the endpoint cannot enumerate accounts.",
+        "description": "An unknown email and a wrong password return the same 401 so the endpoint cannot enumerate accounts. Repeated failures from one address against one account are refused with 429 AUTH_RATE_LIMITED (bounded per (address, email); a success clears the count).",
         "requestBody": {
           "required": true,
           "content": {"application/json": {"schema": {"$ref": "#/components/schemas/LoginRequest"}}}
@@ -780,6 +780,11 @@ const openAPISpec = `{
           },
           "401": {
             "description": "Email or password is incorrect (AUTH_INVALID_CREDENTIALS).",
+            "content": {"application/json": {"schema": {"$ref": "#/components/schemas/ErrorEnvelope"}}}
+          },
+          "429": {
+            "description": "Too many failed sign-in attempts for this address and account (AUTH_RATE_LIMITED). The Retry-After header carries whole seconds until the window ends. The body does not distinguish a known from an unknown address.",
+            "headers": {"Retry-After": {"description": "Whole seconds until the fixed window ends.", "schema": {"type": "integer"}}},
             "content": {"application/json": {"schema": {"$ref": "#/components/schemas/ErrorEnvelope"}}}
           }
         }
@@ -1750,7 +1755,7 @@ const openAPISpec = `{
               "code": {
                 "type": "string",
                 "description": "Stable gateway error code. The envelope adds NOT_FOUND (unknown dataset) to the QueryResult error set.",
-                "enum": ["EMPTY_QUERY", "QUERY_SYNTAX_ERROR", "QUERY_RUNTIME_ERROR", "QUERY_TIMEOUT", "RESULT_LIMIT_EXCEEDED", "ENVIRONMENT_UNAVAILABLE", "PERSISTENCE_FAILED", "EVALUATION_ERROR", "NOT_FOUND", "AUTH_REQUIRED", "AUTH_INVALID_INPUT", "AUTH_INVALID_CREDENTIALS", "AUTH_EMAIL_TAKEN"]
+                "enum": ["EMPTY_QUERY", "QUERY_SYNTAX_ERROR", "QUERY_RUNTIME_ERROR", "QUERY_TIMEOUT", "RESULT_LIMIT_EXCEEDED", "ENVIRONMENT_UNAVAILABLE", "PERSISTENCE_FAILED", "EVALUATION_ERROR", "NOT_FOUND", "AUTH_REQUIRED", "AUTH_INVALID_INPUT", "AUTH_INVALID_CREDENTIALS", "AUTH_EMAIL_TAKEN", "AUTH_RATE_LIMITED"]
               },
               "message": {"type": "string"},
               "detail": {"type": ["string", "null"]}
