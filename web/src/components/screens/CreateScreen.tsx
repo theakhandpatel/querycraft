@@ -14,6 +14,10 @@ export default function CreateScreen() {
   const [showOptional, setShowOptional] = useState(false);
   const [level, setLevel] = useState('');
   const [source, setSource] = useState('');
+  /* The outline pause is opt-in. Off is today's flow: one run, outline into
+     chapters. On stops the run after the outline so the index can be approved
+     before the expensive chapter phase is paid for. */
+  const [approveOutline, setApproveOutline] = useState(false);
   const goalRef = React.useRef<HTMLTextAreaElement>(null);
 
   function design() {
@@ -26,7 +30,7 @@ export default function CreateScreen() {
     /* The learner's own words about their level and their source material travel
        with the request, so the generation is shaped by them rather than by a
        boolean that only says some context exists. */
-    s.submitBuild(g, { level, source });
+    s.submitBuild(g, { level, source, requireApproval: approveOutline });
     s.showScreen('building');
   }
 
@@ -48,6 +52,10 @@ export default function CreateScreen() {
           <div className="actions">
             <button className="small ghost" onClick={() => setShowOptional((v) => !v)}><Icon name="plus" />Add context or source material</button>
             <button className="small ghost" onClick={() => setGoal('I know basic SQL. Build me a challenging PostgreSQL course on analytics: multi-table joins, CTEs, window functions, cohort retention, and query optimization. Use a realistic e-commerce dataset and interview-style problems.')}>Use a detailed example</button>
+            <label style={{ display: 'inline-flex', alignItems: 'center', gap: 6, cursor: 'pointer', fontSize: 12, color: 'var(--text-2)' }}>
+              <input type="checkbox" checked={approveOutline} onChange={(e) => setApproveOutline(e.target.checked)} />
+              Show me the outline before the chapters are written
+            </label>
           </div>
           <button className="primary" onClick={design}>Design my course<Icon name="arrow-right" /></button>
         </div>

@@ -5,7 +5,7 @@ import { COURSES } from '../../data/curriculum';
 import { courseExerciseTotal, moduleExerciseBlocks } from '../../lib/model';
 import { executionEngineLabel, generationProvenance, provenanceLabel } from '../../lib/provenance';
 import { runPipeline } from '../../lib/pipeline';
-import { authoredReport, reportFromOutcome, type DraftReport } from '../../lib/draft';
+import { authoredReport, courseFromPlan, reportFromOutcome, type DraftReport } from '../../lib/draft';
 import { jobIsRunning, outcomeFromJob } from '../../api/ai';
 import type { AiCourseRecord, AiJob, AiJobHandle, AiOutcome, AiStage } from '../../api/aiContract';
 import type { Block, Course } from '../../types';
@@ -149,6 +149,16 @@ export default function BuildingScreen() {
      blocking run, which reports only when it is over. */
   const [job, setJob] = useState<AiJob | null>(null);
   const [recordStatus, setRecordStatus] = useState<string | null>(null);
+  /* The paused run's outcome: the outline is stored and the learner must
+     approve it (Build it) or discard it. Null for every other run. */
+  const [awaiting, setAwaiting] = useState<AiOutcome | null>(null);
+  const [approving, setApproving] = useState(false);
+  const [discarding, setDiscarding] = useState(false);
+  /* The approval action and the discard action belong to one run (their abort
+     signal, log and settle path), so the effect installs them here and the
+     buttons call them. */
+  const approveRef = useRef<(() => void) | null>(null);
+  const discardRef = useRef<((courseId: string) => void) | null>(null);
   /* Cancel must actually cancel: the abort stops the pacing timers and the
      pending navigation, so leaving this screen never bounces the learner back
      into the review it just aborted.
@@ -242,6 +252,10 @@ export default function BuildingScreen() {
         /* One adoption path, whoever obtained the outcome: a request that was
            held open to the end, or a job that was polled to its end. */
         const settle = (outcome: AiOutcome): void => {
+          /* Any settled run supersedes the pause: if this is the approval's
+             outcome, the decision point is over. The awaiting branch below
+             re-arms it when the outcome is itself a pause. */
+          setAwaiting(null);
           setGenerated(outcome);
 
           /* The checklist follows the gateway's own stage report. */
@@ -270,6 +284,37 @@ export default function BuildingScreen() {
 
           if (outcome.error) {
             emit(`<span class="fail">✕</span> generation ${outcome.status} · ${esc(outcome.error.code)} — ${esc(outcome.error.message)}`);
+          }
+
+          /* The pause. The run stopped after storing the outline, and the
+             index on the right is what the learner decides on — so instead of
+             a failure card this becomes a decision point: build the chapters,
+             or discard the course. */
+          if (outcome.status === 'awaiting_approval') {
+            const plan = outcome.plan;
+            if (!plan) {
+              setFailure({
+                title: 'The outline could not be read',
+                detail: 'The gateway paused the run but the stored outline did not come back. Nothing was written.',
+                exercises: [],
+              });
+              return;
+            }
+            setAwaiting(outcome);
+            setRecordStatus('building');
+            setBuilt((prev) => prev ?? courseFromPlan(plan, goal));
+            mark(1, 'done');
+            mark(2, 'queued');
+            const count = plan.chapters.length;
+            emit(`<span class="hi">→</span> the outline is stored: <span class="hi">${count}</span> chapter${count === 1 ? '' : 's'} planned — approve it to write them, or discard it`);
+            for (const ch of plan.chapters) {
+              emit(`&nbsp;&nbsp;${esc(ch.id)} — ${esc(ch.title)}`);
+            }
+            emit('<span class="caret"></span>');
+            approveRef.current = () => {
+              void runApproval(plan.id);
+            };
+            return;
           }
 
           if (outcome.status !== 'active' || !outcome.plan) {
@@ -314,6 +359,64 @@ export default function BuildingScreen() {
           emit('<span class="caret"></span>');
           finish();
         };
+
+        /* Build it. The approval is a second run — the stored outline continued
+           into its chapter phase — and it is watched exactly as the first one
+           was, so the checklist and the stream keep reporting the gateway's own
+           work. A gateway that answers the blocking ask is settled directly. */
+        const runApproval = async (courseId: string): Promise<void> => {
+          if (signal.aborted) return;
+          setApproving(true);
+          setAwaiting(null);
+          approveRef.current = null;
+          mark(1, 'done');
+          mark(2, 'running');
+          emit(`<span class="hi">→</span> approval sent — writing every chapter of <span class="mono">${esc(courseId)}</span>`);
+          let answer;
+          try {
+            answer = await s.api.approveCourse(courseId);
+          } catch (e) {
+            setApproving(false);
+            emit(`<span class="fail">✕</span> the approval could not be sent — ${esc(e instanceof Error ? e.message : String(e))}`);
+            setFailure({
+              title: 'The course could not be built',
+              detail: 'The gateway did not accept the approval. The outline is still stored, so you can approve it again or discard it.',
+              exercises: [],
+            });
+            return;
+          }
+          if (signal.aborted) return;
+          let built: AiOutcome | null = null;
+          if (answer.job) {
+            built = await watchJob(answer.job);
+          } else if (answer.outcome) {
+            built = answer.outcome;
+          }
+          setApproving(false);
+          if (signal.aborted || !built) return;
+          settle(built);
+          if (answer.job) s.runSettled(answer.job.id);
+        };
+
+        /* Discard. It is the existing course delete: the row the outline wrote
+           goes, and the run that was waiting on it is over. */
+        const discardOutline = async (courseId: string): Promise<void> => {
+          setDiscarding(true);
+          try {
+            await s.api.deleteCourse(courseId);
+          } catch {
+            /* A course the gateway has already forgotten is gone, which is what
+               was asked for; anything else keeps it there to try again. */
+          }
+          if (signal.aborted) return;
+          setDiscarding(false);
+          setAwaiting(null);
+          setBuilt(null);
+          emit('<span class="hi">discarded</span> the outline and the course were removed');
+          s.toast('Outline discarded.');
+          s.showScreen('create');
+        };
+        discardRef.current = discardOutline;
 
         /* Follow a background run to its end, drawing the gateway's own live
            view as it goes. Two things happen here that a blocking request
@@ -429,6 +532,10 @@ export default function BuildingScreen() {
           scenario: [s.buildContext.level, s.buildContext.source].filter(Boolean).join('\n') || undefined,
           difficulty: undefined,
           exercise_count: 8,
+          /* The learner asked to see the index first. This is the one field that
+             separates the paused run from today's: without it the gateway runs
+             outline into chapters in one request. */
+          require_approval: s.buildContext.requireApproval === true ? true : undefined,
         };
 
         /* Ask for a job first. A blocking request holds this screen on one
@@ -572,6 +679,8 @@ export default function BuildingScreen() {
         clearTimeout(navTimer.current);
         navTimer.current = null;
       }
+      approveRef.current = null;
+      discardRef.current = null;
       setStates(PIPE_STEPS.map(() => 'queued'));
       setLog([]);
       setJob(null);
@@ -593,6 +702,38 @@ export default function BuildingScreen() {
         </div>
         <button onClick={() => { abortRef.current?.abort(); s.showScreen('create'); }}>Cancel</button>
       </div>
+
+      {awaiting?.plan && (
+        <div className="card" style={{ borderColor: 'var(--green)' }}>
+          <h2>Your outline is ready to approve</h2>
+          <p className="mt-8" style={{ fontSize: 13 }}>
+            The gateway designed the index below and stored it. Nothing is written to your learning yet — approve it to
+            build the chapters, or discard it and the course is removed.
+          </p>
+          <div className="mt-12">
+            <div className="reportrow"><span><strong>{awaiting.plan.title}</strong></span><span className="muted">{awaiting.plan.chapters.length} chapter{awaiting.plan.chapters.length === 1 ? '' : 's'}</span></div>
+            {awaiting.plan.subtitle && <div className="reportrow"><span className="muted">{awaiting.plan.subtitle}</span><span /></div>}
+            {awaiting.plan.chapters.map((ch) => (
+              <div className="reportrow" key={ch.id}>
+                <span>
+                  <span className="mono" style={{ fontSize: 12 }}>{ch.id}</span>
+                  &nbsp; {ch.title}
+                  {ch.summary ? <><br /><span className="muted" style={{ fontSize: 12 }}>{ch.summary}</span></> : null}
+                </span>
+                <span className="muted">{ch.objectives.length} objective{ch.objectives.length === 1 ? '' : 's'}</span>
+              </div>
+            ))}
+          </div>
+          <div className="actions mt-12">
+            <button className="primary" disabled={approving} onClick={() => approveRef.current?.()}>
+              {approving ? 'Building the chapters …' : 'Build it'}
+            </button>
+            <button className="ghost" disabled={discarding || approving} onClick={() => { if (awaiting.plan) discardRef.current?.(awaiting.plan.id); }}>
+              {discarding ? 'Discarding …' : 'Discard'}
+            </button>
+          </div>
+        </div>
+      )}
 
       {failure && (
         <div className="card" style={{ borderColor: 'var(--amber)' }}>
@@ -687,7 +828,7 @@ export default function BuildingScreen() {
           {generated && (
             <div className="reportrow">
               <span>Generation</span>
-              <span className={generated.status === 'active' || generated.status === 'unavailable' ? undefined : 'fail'}>
+              <span className={generated.status === 'active' || generated.status === 'unavailable' || generated.status === 'awaiting_approval' ? undefined : 'fail'}>
                 {generated.status}{generated.error ? ` · ${generated.error.code}` : ''}
               </span>
             </div>

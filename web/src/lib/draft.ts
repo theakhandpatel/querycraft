@@ -51,7 +51,7 @@ export interface DraftReport {
   goal: string;
   /** ISO timestamp of when the run finished. */
   at: string;
-  outcome: 'active' | 'rejected' | 'unavailable' | 'failed';
+  outcome: 'active' | 'rejected' | 'unavailable' | 'failed' | 'awaiting_approval';
   provider?: string;
   model?: string;
   pipelineVersion?: string;

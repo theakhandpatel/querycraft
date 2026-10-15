@@ -644,6 +644,31 @@ func TestAPausedCourseIsApprovedOverTheRealRoutes(t *testing.T) {
 		t.Fatalf("a pause is not a failure, but the job carries an error: %+v", paused.Job.Error)
 	}
 
+	// The run's transcript records the same non-terminal status, and it is a
+	// status the run contract admits — the pause is a real ending, not one the
+	// contract would refuse.
+	w = doAs(t, s, token, http.MethodGet, "/runs/"+submitted.Job.ID, "")
+	if w.Code != http.StatusOK {
+		t.Fatalf("GET /runs/%s status = %d body = %s", submitted.Job.ID, w.Code, w.Body.String())
+	}
+	var run struct {
+		Run struct {
+			Status string `json:"status"`
+		} `json:"run"`
+	}
+	mustDecode(t, w, &run)
+	if run.Run.Status != ai.StatusAwaitingApproval {
+		t.Fatalf("the paused run's transcript says %q, want %q", run.Run.Status, ai.StatusAwaitingApproval)
+	}
+	// The transcript validates against the shared run contract, which is where
+	// the new status had to be admitted: a response carrying a status the
+	// contract refuses is a contract the gateway is not keeping.
+	runContract := loadContract(t, "run.schema.json")
+	decodedRun := decodeResponseObject(t, w.Body.Bytes())
+	if vs := validateSchema(contractDef(t, runContract, "#/$defs/runTranscript"), decodedRun["run"], ""); len(vs) > 0 {
+		t.Fatalf("the paused run's transcript violates contracts/run.schema.json:\n%s", formatViolations(vs))
+	}
+
 	// The stored record is a building course carrying the outline's chapters,
 	// with no content yet: this is what the learner approves.
 	w = doAs(t, s, token, http.MethodGet, "/courses/"+paused.Job.CourseID, "")

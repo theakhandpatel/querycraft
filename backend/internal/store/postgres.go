@@ -85,13 +85,18 @@ CREATE INDEX IF NOT EXISTS challenges_created_key ON app.challenges (created_at 
 /* Generated courses (M7), the multi-chapter counterpart of app.challenges. The
  * plan is stored whole: the chapters, the markdown and every exercise's
  * expected rows are one artifact, and the outcome that admitted it sits beside
- * it so a later reader can see what was measured before the course existed. */
+ * it so a later reader can see what was measured before the course existed.
+ * request is the generation request that produced the plan; it is kept because
+ * a course can pause after its outline and be continued later, and the chapter
+ * phase rebuilds its own prompt from the learner's own words. A row written
+ * before the request was kept carries none, which the resume path handles. */
 CREATE TABLE IF NOT EXISTS app.courses (
     id         text PRIMARY KEY,
     owner_id   text NOT NULL DEFAULT '',
     status     text NOT NULL DEFAULT 'active',
     plan       jsonb NOT NULL,
     outcome    jsonb NOT NULL,
+    request    jsonb,
     created_at timestamptz NOT NULL DEFAULT now()
 );
 CREATE INDEX IF NOT EXISTS courses_created_key ON app.courses (created_at DESC, id DESC);

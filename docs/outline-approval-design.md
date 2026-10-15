@@ -1,9 +1,36 @@
 # Design — outline approval (pause after the outline)
 
-Status: **designed, not built.** Chosen scope (owner, 2026-10-15): the *cheap
+Status: **built** (2026-10-16). Chosen scope (owner, 2026-10-15): the *cheap
 subset* — the run pauses with the outline stored and waits for the learner to
 approve it or discard it. **No** edit-and-regenerate loop in v1; a fresh outline
 is a fresh run.
+
+## What was built (and where it differs from the design above)
+
+- `StatusAwaitingApproval` the outcome status; it is returned by
+  `POST /courses/generate` when the request sets `require_approval: true`, and it
+  is the status the run's transcript records. The pause is opt-in: a request
+  without the flag is one run, outline into chapters, exactly as before.
+- `POST /courses/{id}/build` continues the stored outline. It also accepts the
+  same `Prefer: respond-async` ask as `/courses/generate`, so the approval is a
+  job the screen can watch; the blocking envelope is the default. A course that
+  is not `building` is refused with `409`, not silently re-run.
+- `CourseRecord.Request` persists the generation request (the one data change).
+  When it is absent — a record stored before the field existed — the resume
+  recovers the goal from the plan's title and the exercise budget from the
+  plan's own exercise count, and leaves the rest at their defaults rather than
+  inventing words the learner never said.
+- The stored row's `status` stays `building`; `awaiting_approval` is the *run's*
+  status. `active` remains the only status that puts a course in front of
+  learners.
+- `discarded` is a job-view status, not an outcome one: `DELETE /courses/{id}`
+  (the discard) ends the paused job so a poller is told why the run it watched
+  will never continue. The run's transcript still says `awaiting_approval`,
+  because that is where the run itself stopped.
+- The one deliberate addition to the contract: `contracts/ai.schema.json`
+  (`outcome.status`, `generationRequest.require_approval`) and
+  `contracts/run.schema.json` (`runStatus`). The enums genuinely had to grow —
+  a response or transcript carrying the new status must validate.
 
 ## Why
 
@@ -97,11 +124,20 @@ generation.
 ## Test plan
 
 - The outline phase stops with `awaiting_approval` and a stored `building` course
-  whose `plan.chapters` carry the outline's titles.
-- Approve runs the chapter phase and activates the course; a chapter already
-  verified before the pause is not re-asked for.
-- Discard deletes the row and ends the run `discarded`.
-- Another account's course id is 404 on build, exactly as on delete.
+  whose `plan.chapters` carry the outline's titles
+  (`TestTheOutlinePhaseStopsAwaitingApproval`).
+- Approve runs the chapter phase and activates the course
+  (`TestApprovingAPausedCourseRunsTheChapterPhase`); a chapter already verified
+  before the pause is not re-asked for
+  (`TestAnAlreadyVerifiedChapterIsNotAskedForAgain`) — the stored chapter is
+  replayed into the conversation as an already-resolved turn.
+- Discard deletes the row and ends the run `discarded`
+  (`TestAPausedCourseCanBeDiscarded`).
+- Another account's course id is 404 on build
+  (`TestApprovingAnotherAccountsCourseIs404`), exactly as on delete.
 - Default (no approval requested) is byte-compatible with today: one run,
-  outline → active.
+  outline → active (`TestTheDefaultCourseRunIsUnchanged`).
 - Existing M8 tests stay green unchanged.
+- The end-to-end path is also driven over the real routes:
+  `TestAPausedCourseIsApprovedOverTheRealRoutes` submits, pauses, reads the
+  index, approves, and reads the activated course back with its measured rows.

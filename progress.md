@@ -33,7 +33,7 @@ The remaining open items, in dependency order:
 | 3 | `exercise_count` unsatisfiable request (a request for fewer exercises than chapters can never be satisfied) | delegated | **done — verified** |
 | 4 | Backend simplification pass in `internal/**` — verify what (if anything) landed; close the track | — | **todo** |
 | 5 | App metadata → SQLite (users/sessions/progress/events/courses/challenges/patches/transcripts), PostgreSQL stays the practice engine | — | **todo** (owner-raised; lands after 4, which also touches `internal/store`) |
-| 6 | Outline approval — pause after the outline, learner approves or discards, then chapters build | — | **wip — running** (`docs/outline-approval-design.md`; owner chose the *pause + approve only* slice) |
+| 6 | Outline approval — pause after the outline, learner approves or discards, then chapters build | — | **done — verified** (`docs/outline-approval-design.md`) |
 | A1 | Release blocker — account-scoped local progress (was: progress bled across accounts on a shared browser) | delegated | **done — verified** |
 | A2 | Release blocker — empty-admin-password exposure (loopback default + refusal on non-loopback + hint only when true) | delegated | **done — verified** |
 | A3 | Release blocker — brittle `audit-shell` (was red on a correct stylesheet) | — | **done — verified** |
@@ -41,6 +41,39 @@ The remaining open items, in dependency order:
 
 Items 4 and 5 share `backend/internal/store`, so they run in sequence, not
 in parallel.
+
+### Parallel worktrees (owner-set, 2026-10-16)
+
+The owner asked for parallel work in separate worktrees, merged when done.
+
+**Blocker found and fixed first:** `delegate_task isolation:"worktree"` starts from
+the parent's *committed HEAD*, and HEAD was `7c951de11 "M4 step 1"` while M5–M8
+lived only as 233 uncommitted files. A worktree would have handed an agent a
+three-milestones-old app (no SQLite, no perf lab, no course generation) that
+cannot verify anything. So the owner approved a **checkpoint commit**:
+`e7f39de1a`, a verified-green snapshot (`go test ./... -count=1` all 15 packages;
+`web` typecheck + build clean) with the full M5–M8 app. Agent tooling dirs
+(`.agents/ .codex/ .gemini/ .opencode/ .impeccable/`) were gitignored so they
+never enter the product repo. No tag, no push — a checkpoint, not a release.
+
+**First two parallel worktree tracks** (both branch from `e7f39de1a`, verified to
+contain M6/M8):
+
+| Track | Worktree | Branch | Scope |
+| --- | --- | --- | --- |
+| Login throttling | `t3-665821a8` | `t3/665821a8` | per-IP/account failed-login throttle on `POST /auth/login`, 429, bounded map |
+| SQLite env cap + reaper | `t3-779bab08` | `t3/sqlite-workspace-eviction` | bound the `byAccount` executor cache (F4), idle eviction, keep isolation |
+
+Both are asked to **commit in their worktree** and report branch + sha, so they
+can be merged back after verification. Main checkout continues item 6 while they
+run — genuinely parallel, disjoint files.
+
+Also landed this session (Luna, Codex `gpt-6-luna` xhigh/priority — verified live
+first): **self-hosted fonts.** `web/public/fonts/*.woff2` (14 subsets, 220 KB),
+`web/src/styles/fonts.css` imported by `querycraft.css`, Google Fonts `<link>`s
+removed from `index.html`. Verified: `typecheck`+`build` clean, `dist/` has **0**
+`fonts.googleapis.com`/`gstatic.com` references and all 14 woff2 copied. The app
+now renders fully offline, which is its own premise.
 
 ### Polish stream (owner-set, 2026-10-16) — small refinements toward a good v1
 
@@ -193,15 +226,20 @@ finished track against the real files, and advances the first unblocked item.
 Three batches were killed by restarts before this; the fourth is the first to
 land work.
 
-Drive tick (latest, uptime ~149 min, no restart; date rolled to 2026-10-16):
-A1, A2 and F2 have all landed and been verified since the earlier ticks (see
-their sections). The only in-flight track is **item 6 (outline approval) —
-running, `working`, no pending questions**, so it is left alone. It has landed
-`StatusAwaitingApproval` in `backend/internal/ai/api.go:94` and is still
-building; `ai/` was last written 00:15 and its thread's last activity is seconds
-old, so it is progressing, not stalled. `gofmt -l` is clean on every package it
-is not editing; full gates still deferred until it stops writing. The polish
-stream (see its section) is being kept to files item 6 is not in.
+Drive tick (latest, uptime ~228 min, no restart): **two worktree tracks running,
+both far along, neither blocked.**
+- Login throttling — worktree `t3-665821a8`, running: has written
+  `login_throttle.go` + `login_throttle_test.go` and edited `auth.go`,
+  `server.go`, `openapi.go`, `cmd/api/main.go`, `backend/README.md` (7 files).
+  **Its branch builds clean.**
+- SQLite env cap + reaper — worktree `t3-779bab08`, running: `sqlite.go` +
+  new `sqlite_cache_test.go` + `cmd/api/main.go` + `backend/README.md`
+  (4 files). **Its branch builds clean.**
+
+Item 6 is done and verified (see above). Both worktree agents are still running —
+almost certainly their own gate suites — so they are left alone. Neither branch
+has committed yet. Main checkout is quiet; full gates run once the worktrees land
+and are merged.
 
 Item 2 (craft pass) — **done and verified (2026-10-15).** The agent's report was
 checked against disk: `npm run typecheck` and `npm run build` both clean; the
@@ -266,6 +304,27 @@ were updated to loopback so the gates still boot (`Makefile:27`
 blank login 200; non-loopback+password → starts, hint false, blank login 401.
 
 Not built (declared out of scope): login throttling. Recommended follow-up.
+
+Item 6 (outline approval) — **done and verified (2026-10-16).** Verified against
+disk, not the agent's summary: `go build ./...` + `go vet` clean, `gofmt -l`
+clean, **`go test ./... -count=1` green on all 15 packages**, and `web`
+`npm run typecheck` + `npm run build` clean. Route registered
+(`server.go:197 POST /courses/{id}/build`); `StatusAwaitingApproval`
+(`api.go:94`) and `GenerationRequest.RequireApproval` (`:163`); the resume data
+change is real — `CourseRecord.Request *GenerationRequest` (`course.go:170`)
+persisted as a nullable `request jsonb` (`postgres.go:99`), nil-tolerant for
+legacy rows. 5 new `ai` tests + 6 new `httpapi` tests exist, including the
+verbatim end-to-end (submit → pause → read the index → approve → active) and
+`TestTheDefaultCourseRunIsUnchanged`. The default path is genuinely unchanged:
+the pause is gated on `req.RequireApproval` (`course_agent.go:754`), so a client
+that never sets the flag sees exactly the old behaviour. Frontend: the opt-in
+checkbox ("Show me the outline before the chapters are written",
+`CreateScreen.tsx:57`) and the index with **Build it** / **Discard**
+(`BuildingScreen.tsx:729`). Contract changes it declared and justified:
+`contracts/ai.schema.json` (new status + `require_approval`) and
+`contracts/run.schema.json` (`runStatus`) — required, because a response or
+transcript carrying the new status must validate.
+
 
 Item 3 (`exercise_count`) — **done and verified (2026-10-15).** Verified against
 disk: `go build ./internal/ai/` + `go vet` clean (the only build failure on the

@@ -37,15 +37,26 @@ func (p *Postgres) SaveCourse(ctx context.Context, rec ai.CourseRecord) error {
 	if err != nil {
 		return fmt.Errorf("encode course outcome: %w", err)
 	}
+	/* The request is nullable: a record with none (a row written before it was
+	 * kept) stores NULL, and a read hands back a nil pointer, which the resume
+	 * path reads as "recover what the plan knows". */
+	var request []byte
+	if rec.Request != nil {
+		request, err = json.Marshal(rec.Request)
+		if err != nil {
+			return fmt.Errorf("encode course request: %w", err)
+		}
+	}
 	_, err = p.pool.Exec(ctx,
-		`INSERT INTO app.courses (id, owner_id, status, plan, outcome, created_at)
-		 VALUES ($1, $2, $3, $4, $5, $6)
+		`INSERT INTO app.courses (id, owner_id, status, plan, outcome, request, created_at)
+		 VALUES ($1, $2, $3, $4, $5, $6, $7)
 		 ON CONFLICT (id) DO UPDATE SET
 		     owner_id = EXCLUDED.owner_id,
 		     status   = EXCLUDED.status,
 		     plan     = EXCLUDED.plan,
-		     outcome  = EXCLUDED.outcome`,
-		rec.Plan.ID, rec.OwnerID, status, plan, outcome, created)
+		     outcome  = EXCLUDED.outcome,
+		     request  = EXCLUDED.request`,
+		rec.Plan.ID, rec.OwnerID, status, plan, outcome, request, created)
 	return err
 }
 
@@ -55,17 +66,18 @@ func (p *Postgres) Course(ctx context.Context, id string) (ai.CourseRecord, bool
 		rec     ai.CourseRecord
 		plan    []byte
 		outcome []byte
+		request []byte
 	)
 	err := p.pool.QueryRow(ctx,
-		`SELECT owner_id, status, plan, outcome, created_at FROM app.courses WHERE id = $1`, id).
-		Scan(&rec.OwnerID, &rec.Status, &plan, &outcome, &rec.CreatedAt)
+		`SELECT owner_id, status, plan, outcome, request, created_at FROM app.courses WHERE id = $1`, id).
+		Scan(&rec.OwnerID, &rec.Status, &plan, &outcome, &request, &rec.CreatedAt)
 	if errors.Is(err, pgx.ErrNoRows) {
 		return ai.CourseRecord{}, false, nil
 	}
 	if err != nil {
 		return ai.CourseRecord{}, false, err
 	}
-	if err := decodeCourse(&rec, plan, outcome); err != nil {
+	if err := decodeCourse(&rec, plan, outcome, request); err != nil {
 		return ai.CourseRecord{}, false, err
 	}
 	return rec, true, nil
@@ -74,7 +86,7 @@ func (p *Postgres) Course(ctx context.Context, id string) (ai.CourseRecord, bool
 // Courses implements ai.Depot, newest first.
 func (p *Postgres) Courses(ctx context.Context) ([]ai.CourseRecord, error) {
 	rows, err := p.pool.Query(ctx,
-		`SELECT owner_id, status, plan, outcome, created_at
+		`SELECT owner_id, status, plan, outcome, request, created_at
 		   FROM app.courses ORDER BY created_at DESC, id DESC`)
 	if err != nil {
 		return nil, err
@@ -87,11 +99,12 @@ func (p *Postgres) Courses(ctx context.Context) ([]ai.CourseRecord, error) {
 			rec     ai.CourseRecord
 			plan    []byte
 			outcome []byte
+			request []byte
 		)
-		if err := rows.Scan(&rec.OwnerID, &rec.Status, &plan, &outcome, &rec.CreatedAt); err != nil {
+		if err := rows.Scan(&rec.OwnerID, &rec.Status, &plan, &outcome, &request, &rec.CreatedAt); err != nil {
 			return nil, err
 		}
-		if err := decodeCourse(&rec, plan, outcome); err != nil {
+		if err := decodeCourse(&rec, plan, outcome, request); err != nil {
 			return nil, err
 		}
 		out = append(out, rec)
@@ -106,13 +119,23 @@ func (p *Postgres) DeleteCourse(ctx context.Context, id string) error {
 	return err
 }
 
-// decodeCourse turns the two jsonb columns back into the ai types.
-func decodeCourse(rec *ai.CourseRecord, plan, outcome []byte) error {
+// decodeCourse turns the jsonb columns back into the ai types. request is
+// nullable, so a NULL column leaves the record's Request nil rather than
+// failing the read — a course stored before the request was kept is still a
+// course.
+func decodeCourse(rec *ai.CourseRecord, plan, outcome, request []byte) error {
 	if err := json.Unmarshal(plan, &rec.Plan); err != nil {
 		return fmt.Errorf("decode course plan: %w", err)
 	}
 	if err := json.Unmarshal(outcome, &rec.Outcome); err != nil {
 		return fmt.Errorf("decode course outcome: %w", err)
+	}
+	if len(request) > 0 {
+		var req ai.GenerationRequest
+		if err := json.Unmarshal(request, &req); err != nil {
+			return fmt.Errorf("decode course request: %w", err)
+		}
+		rec.Request = &req
 	}
 	return nil
 }

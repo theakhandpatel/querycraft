@@ -68,6 +68,7 @@ const PATHS = {
   one: 'GET /courses/cte-revenue',
   missing: 'GET /courses/nope',
   remove: 'DELETE /courses/cte-revenue',
+  build: 'POST /courses/cte-revenue/build',
   submit: 'POST /courses/generate',
   job: 'GET /generation/gen-1',
   jobMissing: 'GET /generation/nope',
@@ -423,6 +424,18 @@ console.log('a generation job is read while the run is still going');
   const sent = recorded.find((r) => r.key === PATHS.submit);
   check('the submission asks the gateway not to hold the request open', sent !== undefined, recorded.map((r) => r.key));
 
+  /* The pause is opt-in and travels as one extra field. A course request that
+     asks for it must say so, and one that does not must stay byte-compatible. */
+  recorded.length = 0;
+  canned = { [PATHS.submit]: { status: 202, json: { ok: true, job: { id: 'gen-1', kind: 'course', status: 'running' } } } };
+  await run(methods.submitGeneration({ title: 'CTEs', kind: 'course', require_approval: true }, 'course'));
+  const paused = recorded.find((r) => r.key === PATHS.submit);
+  check('a course request can ask for the outline pause', String(paused?.body ?? '').includes('require_approval'), paused?.body);
+  recorded.length = 0;
+  await run(methods.submitGeneration({ title: 'CTEs', kind: 'course' }, 'course'));
+  const plain = recorded.find((r) => r.key === PATHS.submit);
+  check('a course request without the flag carries no approval field', !String(plain?.body ?? '').includes('require_approval'), plain?.body);
+
   /* A gateway that ignored the async ask answers with the blocking envelope.
      There is no job to poll, and the caller is told so rather than given a
      handle to a run that does not exist. */
@@ -485,6 +498,53 @@ console.log('a finished job and the record it stored make one outcome');
   check('the stored record decides the outcome when the job word drifts', drifted.status === 'active', drifted.status);
   const goneQuiet = ai.outcomeFromJob({ ...JOB, status: 'no-such-state', course_id: undefined }, null);
   check('a run with no record and no known state is reported failed, not active', goneQuiet.status === 'failed', goneQuiet.status);
+
+  /* The outline pause: a run that stopped awaiting approval is finished, not
+     still going, and its outcome names the stored outline. A discarded run is
+     the learner removing the course, which is a refusal, not an unknown. */
+  const paused = ai.outcomeFromJob({ ...JOB, status: 'awaiting_approval' }, BUILDING_RECORD);
+  check('an awaiting-approval run is not still going', ai.jobIsRunning({ status: 'awaiting_approval' }) === false);
+  check('a discarded run is not still going', ai.jobIsRunning({ status: 'discarded' }) === false);
+  check('an awaiting-approval outcome keeps the pause', paused.status === 'awaiting_approval', paused.status);
+  check('an awaiting-approval outcome carries the stored outline', paused.plan?.id === 'cte-revenue', paused.plan);
+  const discarded = ai.outcomeFromJob({ ...JOB, status: 'discarded' }, null);
+  check('a discarded run is reported as a refusal, not an unknown', discarded.status === 'rejected', discarded.status);
+}
+
+/* ---------- approving a paused course goes through the gateway ---------- */
+
+console.log('approving a course continues it and comes back as a job or an outcome');
+{
+  recorded.length = 0;
+  canned = { [PATHS.build]: { status: 202, json: { ok: true, job: { id: 'gen-build', kind: 'course', status: 'running' } } } };
+  const answered = await run(methods.approveCourse('cte-revenue'));
+  check('the approval is accepted as a job to watch', answered.job?.id === 'gen-build', answered);
+  check('a job answer carries no outcome', answered.outcome === null, answered.outcome);
+  const sent = recorded.find((r) => r.key === PATHS.build);
+  check('the approval addresses the stored course by id', sent !== undefined, recorded.map((r) => r.key));
+  check('the approval asks the gateway not to hold the request open', String(sent?.key ?? '').includes('build'), sent !== undefined);
+
+  /* A gateway that answered the blocking ask returns the outcome envelope,
+     which is settled directly: a refusal is data to render, not an exception. */
+  canned = { [PATHS.build]: { status: 201, json: OUTCOME } };
+  const blocking = await run(methods.approveCourse('cte-revenue'));
+  check('a blocking approval carries no job', blocking.job === null, blocking.job);
+  check('a blocking approval is settled from the outcome', blocking.outcome?.status === 'active', blocking.outcome);
+
+  /* A course that is not awaiting approval is a refusal, not a fabricated job. */
+  canned = { [PATHS.build]: { status: 409, json: { error: { code: 'AI_INVALID_REQUEST', message: 'not awaiting approval' } } } };
+  const refused = await runFail(methods.approveCourse('cte-revenue'));
+  check('approving a finished course is a typed refusal', refused?.code === 'AI_INVALID_REQUEST', refused);
+
+  /* A course that is gone is a not-found, the same as a read or a delete. */
+  canned = { [PATHS.build]: { status: 404, json: { error: { code: 'NOT_FOUND', message: 'unknown course' } } } };
+  const gone = await runFail(methods.approveCourse('cte-revenue'));
+  check('approving a course that is gone is a typed not-found', gone?.code === 'NOT_FOUND', gone);
+
+  /* The offline adapters have no store to continue. */
+  const browser = ai.browserAiMethods();
+  const offline = await runFail(browser.approveCourse('cte-revenue'));
+  check('a browser cannot approve a course', offline?.code === 'AI_UNAVAILABLE', offline);
 }
 
 /* ---------- a run a reload can come back to ----------

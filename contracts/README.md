@@ -36,6 +36,7 @@ against its schema. The full map:
 | `PUT /progress/{course}` | `openapi.json` → `OkResponse` |
 | `POST /events` | `openapi.json` → `EventResponse` |
 | `POST /courses/generate` | `ai.schema.json` → `outcome` |
+| `POST /courses/{id}/build` | `ai.schema.json` → `outcome` (or `openapi.json` → `AIJobSubmitted` with `Prefer: respond-async`) |
 | `POST /challenges/generate` | `ai.schema.json` → `outcome` |
 | `GET /challenges` | `ai.schema.json` → `record[]` |
 | `GET /challenges/{id}` | `ai.schema.json` → `record` |

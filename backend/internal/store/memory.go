@@ -180,6 +180,15 @@ func (m *Memory) DeleteCourse(_ context.Context, id string) error {
 // inner slice would still alias.
 func cloneCourse(rec ai.CourseRecord) ai.CourseRecord {
 	out := rec
+	/* The request is a pointer, so a shallow copy would let a caller mutate the
+	   stored request through the copy it was handed. */
+	if rec.Request != nil {
+		req := *rec.Request
+		req.Topics = append([]string(nil), rec.Request.Topics...)
+		req.Constraints = append([]string(nil), rec.Request.Constraints...)
+		req.Steps = append([]string(nil), rec.Request.Steps...)
+		out.Request = &req
+	}
 	out.Plan.Objectives = append([]string(nil), rec.Plan.Objectives...)
 	out.Plan.Setup.Statements = append([]string(nil), rec.Plan.Setup.Statements...)
 	out.Plan.Chapters = make([]ai.CourseChapter, len(rec.Plan.Chapters))
