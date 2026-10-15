@@ -1,0 +1,200 @@
+[
+  {
+    "table": "customers",
+    "column": "id",
+    "pg_type": "integer",
+    "sqlite_type": "INTEGER",
+    "affinity": "INTEGER",
+    "mismatch": false,
+    "note": "Same declared type and affinity. In SQLite INTEGER PRIMARY KEY is an alias for the rowid, so identity needs no AUTOINCREMENT and no GENERATED clause; the seed supplies explicit ids exactly as the PostgreSQL seed does."
+  },
+  {
+    "table": "customers",
+    "column": "name",
+    "pg_type": "text",
+    "sqlite_type": "TEXT",
+    "affinity": "TEXT",
+    "mismatch": false,
+    "note": "Same declared type and affinity. TEXT affinity never converts a number to text, so the storage class of this column is always TEXT."
+  },
+  {
+    "table": "customers",
+    "column": "email",
+    "pg_type": "text",
+    "sqlite_type": "TEXT",
+    "affinity": "TEXT",
+    "mismatch": false,
+    "note": "Same declared type and affinity, nullable in both. NULL is SQLite's own NULL and is reported as JSON null in both dialects."
+  },
+  {
+    "table": "customers",
+    "column": "city",
+    "pg_type": "text",
+    "sqlite_type": "TEXT",
+    "affinity": "TEXT",
+    "mismatch": false,
+    "note": "Same declared type and affinity, nullable in both; the repeated cities the joins lessons rely on are unchanged."
+  },
+  {
+    "table": "customers",
+    "column": "signup_date",
+    "pg_type": "date",
+    "sqlite_type": "DATE",
+    "affinity": "NUMERIC",
+    "mismatch": true,
+    "note": "SQLite has no date type. A DATE declaration only selects NUMERIC affinity, and ISO-8601 text is not a numeric literal, so the stored class stays TEXT (measured: typeof(signup_date) = 'text'). This is the column that exercises dynamic typing honestly: declared affinity NUMERIC, stored class TEXT. Compare and format it as text; a host Date object must not be reconstructed from it."
+  },
+  {
+    "table": "products",
+    "column": "id",
+    "pg_type": "integer",
+    "sqlite_type": "INTEGER",
+    "affinity": "INTEGER",
+    "mismatch": false,
+    "note": "Same declared type and affinity; INTEGER PRIMARY KEY is the rowid alias, and the seed reuses the PostgreSQL ids 1..20."
+  },
+  {
+    "table": "products",
+    "column": "name",
+    "pg_type": "text",
+    "sqlite_type": "TEXT",
+    "affinity": "TEXT",
+    "mismatch": false,
+    "note": "Same declared type and affinity; the product names are identical to the PostgreSQL seed."
+  },
+  {
+    "table": "products",
+    "column": "category",
+    "pg_type": "text",
+    "sqlite_type": "TEXT",
+    "affinity": "TEXT",
+    "mismatch": false,
+    "note": "Same declared type and affinity. The repeated categories (Electronics, Home, Outdoor, Kitchen) cover the GROUP BY lessons unchanged."
+  },
+  {
+    "table": "products",
+    "column": "price",
+    "pg_type": "numeric(10,2)",
+    "sqlite_type": "NUMERIC",
+    "affinity": "NUMERIC",
+    "mismatch": true,
+    "note": "SQLite has no fixed-scale decimal. NUMERIC affinity stores a value in its smallest lossless class, so the same column reports INTEGER 59 for 59.00 and REAL 42.5 for 42.50 (measured on SQLite 3.31.1): the two-decimal scale is not preserved and the storage class varies per row. TEXT was rejected for exact scale because a TEXT-affinity money column turns `WHERE price > 100` into a lexicographic compare — measured: it returns '59.00' and '9.99'. Display scale with printf('%.2f', price) and keep a result contract's numeric_tolerance at 0 only for values that survive the round trip."
+  },
+  {
+    "table": "products",
+    "column": "stock",
+    "pg_type": "integer",
+    "sqlite_type": "INTEGER",
+    "affinity": "INTEGER",
+    "mismatch": false,
+    "note": "Same declared type and affinity; the zero-stock product 20 (a required edge case) is unchanged."
+  },
+  {
+    "table": "products",
+    "column": "active",
+    "pg_type": "boolean",
+    "sqlite_type": "BOOLEAN",
+    "affinity": "NUMERIC",
+    "mismatch": true,
+    "note": "SQLite has no boolean type. A BOOLEAN declaration selects NUMERIC affinity and the seed stores 1/0 (measured: typeof(active) = 'integer'); TRUE and FALSE are only keywords for 1 and 0. The value is reported as an integer and is never coerced to true/false, so a contract must compare against 1/0. The domain is unenforced: nothing stops an UPDATE setting active = 7."
+  },
+  {
+    "table": "orders",
+    "column": "id",
+    "pg_type": "integer",
+    "sqlite_type": "INTEGER",
+    "affinity": "INTEGER",
+    "mismatch": false,
+    "note": "Same declared type and affinity. The seed keeps the PostgreSQL order ids 1001..1080 untouched, so the joins lessons answer the same questions."
+  },
+  {
+    "table": "orders",
+    "column": "customer_id",
+    "pg_type": "integer",
+    "sqlite_type": "INTEGER",
+    "affinity": "INTEGER",
+    "mismatch": false,
+    "note": "Same declared type and affinity. REFERENCES customers(id) is declared in both, but SQLite does not enforce foreign keys unless the connection sets PRAGMA foreign_keys = ON — the seed only inserts valid ids, so the data satisfies the constraint either way."
+  },
+  {
+    "table": "orders",
+    "column": "ordered_at",
+    "pg_type": "timestamp",
+    "sqlite_type": "TIMESTAMP",
+    "affinity": "NUMERIC",
+    "mismatch": true,
+    "note": "SQLite has no timestamp type. TIMESTAMP selects NUMERIC affinity and the seed stores the ISO-8601 text 'YYYY-MM-DD HH:MM' (measured: typeof(ordered_at) = 'text'). TEXT is deliberate: it is the one text form PostgreSQL prints for a naive timestamp, so a lesson comparing the two dialects sees the same characters. Report it verbatim as a string; never materialise a Date."
+  },
+  {
+    "table": "orders",
+    "column": "status",
+    "pg_type": "text",
+    "sqlite_type": "TEXT",
+    "affinity": "TEXT",
+    "mismatch": false,
+    "note": "Same declared type and affinity. The five status values spread across five months (a required edge case) are unchanged, so the GROUP BY and filter lessons work in both dialects."
+  },
+  {
+    "table": "order_items",
+    "column": "id",
+    "pg_type": "integer",
+    "sqlite_type": "INTEGER",
+    "affinity": "INTEGER",
+    "mismatch": false,
+    "note": "Same declared type and affinity; the seed keeps the PostgreSQL ids 1..160."
+  },
+  {
+    "table": "order_items",
+    "column": "order_id",
+    "pg_type": "integer",
+    "sqlite_type": "INTEGER",
+    "affinity": "INTEGER",
+    "mismatch": false,
+    "note": "Same declared type and affinity. As with orders.customer_id, the REFERENCES clause is declared but only enforced when PRAGMA foreign_keys = ON; the seed is internally consistent either way."
+  },
+  {
+    "table": "order_items",
+    "column": "product_id",
+    "pg_type": "integer",
+    "sqlite_type": "INTEGER",
+    "affinity": "INTEGER",
+    "mismatch": false,
+    "note": "Same declared type and affinity. Product 20 is never ordered (a required edge case), so the LEFT JOIN lessons have the same anti-join answer."
+  },
+  {
+    "table": "order_items",
+    "column": "quantity",
+    "pg_type": "integer",
+    "sqlite_type": "INTEGER",
+    "affinity": "INTEGER",
+    "mismatch": false,
+    "note": "Same declared type and affinity. CHECK (quantity > 0) is declared in both and SQLite does enforce CHECK constraints, so the constraint is equally real."
+  },
+  {
+    "table": "order_items",
+    "column": "unit_price",
+    "pg_type": "numeric(10,2)",
+    "sqlite_type": "NUMERIC",
+    "affinity": "NUMERIC",
+    "mismatch": true,
+    "note": "Same divergence as products.price: no fixed scale, and NUMERIC affinity stores the values in the smallest lossless class (measured: typeof(unit_price) IN ('integer','real')). SUM(unit_price) therefore returns a REAL, which is what a money aggregate in this dialect is. The values are identical to the PostgreSQL seed; only the reported representation differs."
+  },
+  {
+    "table": "dataset_meta",
+    "column": "dataset",
+    "pg_type": "text",
+    "sqlite_type": "TEXT",
+    "affinity": "TEXT",
+    "mismatch": false,
+    "note": "Same declared type and affinity. The single row ('commerce', 1) is the dialect's marker that it seeded the same dataset_version; a host that supports more than one dataset would add rows here."
+  },
+  {
+    "table": "dataset_meta",
+    "column": "version",
+    "pg_type": "integer",
+    "sqlite_type": "INTEGER",
+    "affinity": "INTEGER",
+    "mismatch": false,
+    "note": "Same declared type and affinity. dataset_version 1 is shared by schema.sql, schema.sqlite.sql and both seeds; the audit reads it from each file rather than trusting this note."
+  }
+]

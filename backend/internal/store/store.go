@@ -9,6 +9,8 @@ import (
 	"encoding/json"
 	"errors"
 	"time"
+
+	"github.com/querycraft/sqlquery/backend/internal/ai"
 )
 
 // ErrEmailTaken is returned when a signup reuses an existing address. Handlers
@@ -64,4 +66,13 @@ type Store interface {
 	Kind() string
 
 	Close() error
+
+	// ai.Depot is the M4 challenge store. A generated challenge and the
+	// evidence that admitted it are persisted together, so a later reader can
+	// see why an artifact was allowed in front of learners. Patch proposals
+	// live here too, unapplied until the learner approves them. The agent-run
+	// transcripts (app.runs) are also part of this seam: ai.Depot carries
+	// SaveRun/Run/Runs, so the audit trail is owner-scoped by the same store
+	// that scopes everything else.
+	ai.Depot
 }

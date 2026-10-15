@@ -38,6 +38,7 @@ func TestWritableTemplateGrantsLearnerDDLAndDML(t *testing.T) {
 		DataPath:     filepath.Join(root, "pg", "data"),
 		RuntimePath:  filepath.Join(root, "pg", "runtime"),
 		BinariesPath: binaries,
+		TempDir:      filepath.Join(root, "tmp"),
 		Port:         port,
 		User:         "querycraft",
 		Password:     clusterPassword,

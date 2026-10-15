@@ -50,7 +50,7 @@ const evaluateBody = `{
     "lesson_id": "where",
     "type": "solve",
     "prompt": "Count orders by status.",
-    "setup": {"dataset": "commerce", "schema_version": 1, "seed_version": 1},
+    "setup": {"dataset": "commerce", "schema_version": 1, "seed_version": 1, "dialect": "postgresql"},
     "result_contract": {
       "columns": ["status", "order_count"],
       "column_order": "exact",
@@ -352,7 +352,16 @@ func schemaArray(items map[string]any) map[string]any {
 	return map[string]any{"type": "array", "items": items}
 }
 
-func schemaString() map[string]any  { return map[string]any{"type": "string"} }
+func schemaString() map[string]any { return map[string]any{"type": "string"} }
+
+// schemaEnum is the local equivalent of a JSON Schema enum.
+func schemaEnum(values ...string) map[string]any {
+	list := make([]any, 0, len(values))
+	for _, v := range values {
+		list = append(list, v)
+	}
+	return map[string]any{"enum": list}
+}
 func schemaInteger() map[string]any { return map[string]any{"type": "integer"} }
 func schemaBoolean() map[string]any { return map[string]any{"type": "boolean"} }
 
@@ -366,8 +375,17 @@ func schemaTypes(types ...string) map[string]any {
 
 // healthSchema mirrors components.schemas.HealthResponse.
 var healthSchema = schemaObject(
-	[]string{"status", "engine", "version"},
-	map[string]any{"status": schemaString(), "engine": schemaString(), "version": schemaString()},
+	[]string{"status", "engine", "version", "dialects"},
+	map[string]any{
+		"status":   schemaString(),
+		"engine":   schemaString(),
+		"version":  schemaString(),
+		"dialects": schemaArray(schemaEnum("postgresql", "sqlite")),
+		// Additive and non-secret: whether the seeded administrator can sign in
+		// with an empty password. Optional in the schema (absent from `required`)
+		// so a gateway that does not report it still validates.
+		"admin_password_empty": schemaBoolean(),
+	},
 )
 
 // capabilitiesSchema mirrors components.schemas.CapabilitiesResponse.
@@ -378,6 +396,15 @@ var capabilitiesSchema = schemaObject(
 		"explain":        schemaBoolean(),
 		"max_concurrent": schemaInteger(),
 		"isolation":      schemaString(),
+		"plan": schemaObject(nil, map[string]any{
+			"available":             schemaBoolean(),
+			"reason":                schemaString(),
+			"datasets":              schemaArray(schemaString()),
+			"analyze_requires_auth": schemaBoolean(),
+			"timing_precision":      schemaArray(schemaString()),
+			"node_cap":              schemaInteger(),
+			"seq_scan_large_rows":   map[string]any{"type": "number"},
+		}),
 	},
 )
 
@@ -441,6 +468,31 @@ var courseGenerateSchema = schemaObject(
 	},
 )
 
+// aiOutcomeSchema mirrors components.schemas.AIOutcome. `active` is the only
+// status that makes an artifact visible to learners, which is why the status
+// enum is asserted rather than the shape of the artifact.
+var aiOutcomeSchema = schemaObject(
+	[]string{"status", "stages", "attempts"},
+	map[string]any{
+		"status":   schemaEnum("active", "rejected", "unavailable", "failed", "awaiting_approval"),
+		"kind":     schemaEnum("challenge", "course"),
+		"artifact": schemaTypes("object", "null"),
+		"stages": schemaArray(schemaObject(
+			[]string{"name", "state"},
+			map[string]any{"name": schemaString(), "state": schemaEnum("done", "failed", "skipped")},
+		)),
+		"attempts": schemaArray(schemaObject(
+			[]string{"number", "stage", "detail"},
+			map[string]any{"number": schemaInteger(), "stage": schemaString(), "detail": schemaString()},
+		)),
+		"evidence": schemaObject(nil, map[string]any{
+			"fixtures_rejected": schemaInteger(),
+			"fixtures_total":    schemaInteger(),
+		}),
+		"error": schemaTypes("object", "null"),
+	},
+)
+
 // okSchema mirrors components.schemas.OkResponse.
 var okSchema = schemaObject([]string{"ok"}, map[string]any{"ok": schemaBoolean()})
 
@@ -463,6 +515,7 @@ func decodeResponseObject(t *testing.T, body []byte) map[string]any {
 // (POST /query), otherwise the openapi.go component it is declared by.
 func TestEndpointsConformToSchemas(t *testing.T) {
 	queryResult := loadContract(t, "query-result.schema.json")
+	planContract := loadContract(t, "plan.schema.json")
 
 	unavailable := engine.UnavailableExecutor{}
 	queryBody := `{"sql":"SELECT status, count(*) FROM orders GROUP BY 1"}`
@@ -506,6 +559,66 @@ func TestEndpointsConformToSchemas(t *testing.T) {
 			schema: queryResult,
 		},
 		{
+			// contracts/plan.schema.json governs this response, success and
+			// failure alike. With no database the gateway reports
+			// ENVIRONMENT_UNAVAILABLE and never invents a plan.
+			name: "POST /explain (no database)", exec: unavailable,
+			method: http.MethodPost, path: "/explain", body: `{"sql":"SELECT 1"}`,
+			wantStatus: http.StatusBadRequest, schema: planContract,
+			extra: func(t *testing.T, decoded map[string]any) {
+				t.Helper()
+				errObj, _ := decoded["error"].(map[string]any)
+				if errObj == nil || errObj["code"] != engine.CodeEnvironmentUnavailable {
+					t.Errorf("error = %v, want %s", decoded["error"], engine.CodeEnvironmentUnavailable)
+				}
+				if decoded["plan"] != nil {
+					t.Errorf("plan = %v, want null", decoded["plan"])
+				}
+			},
+		},
+		{
+			// EXPLAIN ANALYZE executes the statement, so an anonymous request
+			// is refused — with a message that names the reason, and never a
+			// silent downgrade to a plain EXPLAIN.
+			name: "POST /explain (anonymous analyze)", exec: &planHTTPFake{plan: httpSamplePlan},
+			method: http.MethodPost, path: "/explain", body: `{"sql":"SELECT 1","analyze":true}`,
+			wantStatus: http.StatusBadRequest, schema: planContract,
+			extra: func(t *testing.T, decoded map[string]any) {
+				t.Helper()
+				errObj, _ := decoded["error"].(map[string]any)
+				if errObj == nil || errObj["code"] != engine.CodeEnvironmentUnavailable {
+					t.Fatalf("error = %v, want %s", decoded["error"], engine.CodeEnvironmentUnavailable)
+				}
+				message, _ := errObj["message"].(string)
+				if !strings.Contains(strings.ToLower(message), "analyze") {
+					t.Errorf("message %q does not name the reason", message)
+				}
+				if analyze, _ := decoded["analyze"].(bool); analyze {
+					t.Errorf("analyze = true; the refusal downgraded nothing but claims it analyzed")
+				}
+				if decoded["plan"] != nil {
+					t.Errorf("plan = %v, want null", decoded["plan"])
+				}
+			},
+		},
+		{
+			name: "POST /explain (succeeded)", exec: &planHTTPFake{plan: httpSamplePlan},
+			method: http.MethodPost, path: "/explain", body: `{"sql":"SELECT count(*) FROM orders"}`,
+			wantStatus: http.StatusOK, schema: planContract,
+			extra: func(t *testing.T, decoded map[string]any) {
+				t.Helper()
+				if decoded["status"] != "succeeded" {
+					t.Fatalf("status = %v, want succeeded", decoded["status"])
+				}
+				if _, ok := decoded["plan"].(map[string]any); !ok {
+					t.Errorf("plan = %T, want the engine's own node tree", decoded["plan"])
+				}
+				if decoded["timing_precision"] != "estimate" {
+					t.Errorf("timing_precision = %v, want estimate", decoded["timing_precision"])
+				}
+			},
+		},
+		{
 			name: "POST /answers/evaluate", exec: unavailable,
 			method: http.MethodPost, path: "/answers/evaluate", body: evaluateBody, wantStatus: http.StatusOK,
 			schema: evaluateResponseSchema(queryResult),
@@ -532,16 +645,39 @@ func TestEndpointsConformToSchemas(t *testing.T) {
 			schema:     eventSchema, auth: true,
 		},
 		{
-			name: "POST /courses/generate", exec: unavailable,
-			method: http.MethodPost, path: "/courses/generate", body: `{"title":"SQL Joins","exercises":9,"steps":["a","b","c"]}`,
-			wantStatus: http.StatusCreated,
-			schema:     courseGenerateSchema,
+			// With no generation service attached the route must say so in the
+			// envelope rather than inventing a course. 503 is the transport
+			// half of that answer; the body is the contract half.
+			name: "POST /courses/generate (AI off)", exec: unavailable,
+			method: http.MethodPost, path: "/courses/generate", body: `{"title":"SQL Joins","steps":["a","b","c"]}`,
+			wantStatus: http.StatusServiceUnavailable,
+			schema:     aiOutcomeSchema, auth: true,
 		},
 		{
-			name: "POST /challenges/generate", exec: unavailable,
-			method: http.MethodPost, path: "/challenges/generate", body: `{"topic":"joins"}`,
-			wantStatus: http.StatusCreated,
-			schema:     okSchema,
+			name: "POST /challenges/generate (AI off)", exec: unavailable,
+			method: http.MethodPost, path: "/challenges/generate", body: `{"topics":["joins"]}`,
+			wantStatus: http.StatusServiceUnavailable,
+			schema:     aiOutcomeSchema, auth: true,
+		},
+		{
+			// A generation is owner-scoped like every other write, so an
+			// anonymous caller is refused before any work starts.
+			name: "POST /courses/generate (anonymous)", exec: unavailable,
+			method: http.MethodPost, path: "/courses/generate", body: `{"title":"SQL Joins"}`,
+			wantStatus: http.StatusUnauthorized,
+			schema:     map[string]any{},
+		},
+		{
+			name: "POST /tutor (AI off)", exec: unavailable,
+			method: http.MethodPost, path: "/tutor", body: `{"sql":"SELECT 1","objective":"count rows"}`,
+			wantStatus: http.StatusServiceUnavailable,
+			schema:     map[string]any{}, auth: true,
+		},
+		{
+			name: "GET /challenges (AI off)", exec: unavailable,
+			method: http.MethodGet, path: "/challenges",
+			wantStatus: http.StatusServiceUnavailable,
+			schema:     map[string]any{}, auth: true,
 		},
 	}
 

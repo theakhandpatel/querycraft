@@ -8,10 +8,15 @@
     "build": "vite build",
     "preview": "vite preview --port 4173",
     "typecheck": "tsc --noEmit",
-    "lint": "echo \"(no linter configured)\""
+    "lint": "echo \"(no linter configured)\"",
+    "audit-ai": "./node_modules/.bin/esbuild --bundle --format=cjs --platform=node --outfile=/tmp/qc-ai.cjs src/api/ai.ts >/dev/null && ./node_modules/.bin/esbuild --bundle --format=cjs --platform=node --outfile=/tmp/qc-deadline.cjs src/api/aiDeadline.ts >/dev/null && node scripts/ai-adapters-audit.mjs",
+    "audit-course-store": "./node_modules/.bin/esbuild --bundle --format=cjs --platform=node --outfile=/tmp/qc-ai.cjs src/api/ai.ts >/dev/null && ./node_modules/.bin/esbuild --bundle --format=cjs --platform=node --outfile=/tmp/qc-draft.cjs src/lib/draft.ts >/dev/null && ./node_modules/.bin/esbuild --bundle --format=cjs --platform=node --outfile=/tmp/qc-runresume.cjs src/lib/runResume.ts >/dev/null && node scripts/course-store-audit.mjs",
+    "audit-perf": "node scripts/plan-conformance-audit.mjs",
+    "test": "npm run typecheck && npm run audit-ai && npm run audit-course-store && npm run audit-perf"
   },
   "dependencies": {
     "@electric-sql/pglite": "^0.5.9",
+    "@sqlite.org/sqlite-wasm": "^3.53.4-build2",
     "ajv": "^8.20.0",
     "dompurify": "^3.4.17",
     "effect": "^4.0.4",

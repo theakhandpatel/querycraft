@@ -9,10 +9,12 @@ import (
 	"context"
 	"errors"
 	"log/slog"
+	"net"
 	"net/http"
 	"net/url"
 	"os"
 	"os/signal"
+	"path/filepath"
 	"strconv"
 	"strings"
 	"syscall"
@@ -20,6 +22,7 @@ import (
 
 	"github.com/jackc/pgx/v5"
 
+	"github.com/querycraft/sqlquery/backend/internal/ai"
 	"github.com/querycraft/sqlquery/backend/internal/auth"
 	"github.com/querycraft/sqlquery/backend/internal/dataset"
 	"github.com/querycraft/sqlquery/backend/internal/engine"
@@ -30,6 +33,15 @@ import (
 )
 
 func main() {
+	// run owns the lifecycle, so its deferred cleanup (the embedded PostgreSQL,
+	// the pools, the store) executes even on the misconfiguration refusal below;
+	// os.Exit here would skip every defer and orphan the cluster.
+	os.Exit(run())
+}
+
+// run starts the gateway and returns the process exit code: 0 for a clean
+// signal-driven shutdown, 1 for a refusal to start.
+func run() int {
 	log := slog.New(slog.NewTextHandler(os.Stdout, &slog.HandlerOptions{Level: slog.LevelInfo}))
 
 	cfg := httpapi.Config{
@@ -38,7 +50,11 @@ func main() {
 		TimeoutMS:     envInt("QC_TIMEOUT_MS", engine.DefaultTimeoutMS),
 		MaxConcurrent: envInt("QC_MAX_CONCURRENT", 4),
 	}
-	addr := env("QC_ADDR", ":8080")
+	// Loopback by default: the seeded administrator may keep an empty password
+	// only on a loopback bind (see the refusal below), which is the zero-setup
+	// local flow. Reaching the gateway from the network is an explicit opt-in
+	// through QC_ADDR, and that opt-in requires a real admin password.
+	addr := env("QC_ADDR", defaultAddr)
 
 	// SIGHUP matters here: a terminal closing (or a parent shell exiting) sends
 	// it, and without a handler the process dies instantly, orphaning the
@@ -51,14 +67,37 @@ func main() {
 	// service, or a local server) is used when QC_DATABASE_URL is set; otherwise
 	// a real PostgreSQL is started from a repo-local data directory. Both paths
 	// speak the same wire protocol, so the swap is a configuration change.
+	// The SQLite dialect's files sit beside the embedded PostgreSQL's, under the
+	// same .data root, and can be moved independently with QC_SQLITE_DATA. The
+	// default derives from QC_PG_DATA, so relocating the data directory
+	// relocates both dialects' state together.
+	pgDataDir := env("QC_PG_DATA", localdb.DefaultDataDir("")+"/data")
+	sqliteDataDir := env("QC_SQLITE_DATA", filepath.Join(filepath.Dir(filepath.Dir(pgDataDir)), "sqlite"))
+
 	dsn := os.Getenv("QC_DATABASE_URL")
 	adminPassword := ""
 	var local *localdb.Server
 	if dsn == "" && !envBool("QC_NO_LOCAL_DB", false) {
+		runtimeDir := env("QC_PG_RUNTIME", localdb.DefaultDataDir("")+"/runtime")
+		/* The embedded server writes its postgres log into os.TempDir() and
+		   never removes it. Give it a per-run directory beside the cluster
+		   instead, so the log leaves with the process rather than accumulating
+		   in the machine-wide temp directory across every restart. */
+		logDir := ""
+		logParent := filepath.Join(filepath.Dir(runtimeDir), "tmp")
+		if err := os.MkdirAll(logParent, 0o700); err != nil {
+			log.Warn("could not create the embedded server's log directory; it will use the system temp directory", "err", err)
+		} else if dir, err := os.MkdirTemp(logParent, "run-"); err != nil {
+			log.Warn("could not create the embedded server's log directory; it will use the system temp directory", "err", err)
+		} else {
+			logDir = dir
+			defer func() { _ = os.RemoveAll(logDir) }()
+		}
 		cfg := localdb.Config{
-			DataPath:     env("QC_PG_DATA", localdb.DefaultDataDir("")+"/data"),
-			RuntimePath:  env("QC_PG_RUNTIME", localdb.DefaultDataDir("")+"/runtime"),
+			DataPath:     pgDataDir,
+			RuntimePath:  runtimeDir,
 			BinariesPath: env("QC_PG_BINARIES", localdb.BinariesDir("")),
+			TempDir:      logDir,
 			Port:         uint32(envInt("QC_PG_PORT", 54329)),
 			User:         env("QC_PG_USER", "querycraft"),
 			Password:     env("QC_PG_PASSWORD", "querycraft"),
@@ -104,8 +143,9 @@ func main() {
 	// own rows in app.progress/app.events through foreign keys, so the users
 	// table has to exist with at least one row before the first write; without
 	// this a fresh install would reject every progress save.
+	adminEmail := env("QC_ADMIN_EMAIL", "admin@querycraft.local")
 	admin, err := auth.EnsureDefaultAdmin(ctx, st, auth.DefaultAdmin{
-		Email:    env("QC_ADMIN_EMAIL", "admin@querycraft.local"),
+		Email:    adminEmail,
 		Password: os.Getenv("QC_ADMIN_PASSWORD"),
 		Name:     env("QC_ADMIN_NAME", "Administrator"),
 	}, log)
@@ -114,8 +154,33 @@ func main() {
 	} else {
 		log.Info("default administrator ready", "email", admin.Email, "passwordSet", os.Getenv("QC_ADMIN_PASSWORD") != "")
 	}
+	// Read the *stored* state rather than the environment: an operator may have
+	// set QC_ADMIN_PASSWORD on a previous boot and unset it since, and the seed
+	// deliberately never rewrites an existing account. The honest question is
+	// "does an empty password sign this account in", which is exactly
+	// auth.Verify-hash-against-"": the seeded admin's blank password is stored
+	// as a real bcrypt hash, not as an empty string, so testing the hash for
+	// emptiness would miss it.
+	adminPasswordEmpty := false
+	if err == nil {
+		if _, hash, found, herr := st.UserByEmail(ctx, admin.Email); herr == nil && found {
+			adminPasswordEmpty = auth.Verify(hash, "")
+		}
+	}
+	// An empty-password administrator is a local-development convenience, so it
+	// is allowed only on a loopback bind. Reaching the gateway over the network
+	// is an explicit opt-in (QC_ADDR), and that opt-in must not also publish a
+	// blank-password admin. Never print the password or its hash: only that it
+	// is unset.
+	if adminPasswordEmpty && !isLoopbackAddr(addr) {
+		log.Error("refusing to start: the default administrator has an empty password, which is allowed only on a loopback address; set QC_ADMIN_PASSWORD or bind QC_ADDR to 127.0.0.1", "addr", addr, "admin", admin.Email)
+		return 1
+	}
 
 	api := httpapi.New(exec, st, cfg, log)
+	// Advertised on /health so the sign-in screen shows the local-admin hint
+	// only when it is actually true. A boolean, never the password or its hash.
+	api.UseAdminPasswordEmpty(adminPasswordEmpty)
 
 	// ADR 0003: a signed-in learner gets their own writable database, copied
 	// from the sealed template and created on first use. The manager needs the
@@ -123,8 +188,9 @@ func main() {
 	// or if it cannot connect — it stays nil and the gateway answers
 	// ENVIRONMENT_UNAVAILABLE rather than inventing a workspace. Anonymous
 	// callers are unaffected: they keep the shared, read-only dataset.
+	var envManager *envdb.Manager
 	if dsn != "" {
-		envManager, err := envdb.New(ctx, envdb.Options{
+		m, err := envdb.New(ctx, envdb.Options{
 			AdminDSN:        dsn,
 			LearnerPassword: adminPassword,
 			Log:             log,
@@ -135,18 +201,67 @@ func main() {
 		} else {
 			// Registered after the local server's Stop defer, so it runs first
 			// (LIFO): dropping a learner's database needs the cluster running.
-			defer envManager.Close()
-			api.UseEnvironments(envManager)
+			defer m.Close()
+			api.UseEnvironments(m)
+			envManager = m
 		}
 	}
+
+	// M6 step 4: SQLite is the second dialect, and unlike PostgreSQL it needs no
+	// server — the executor is cgo-free SQLite over a file — so the gateway can
+	// serve it even in degraded mode. A signed-in learner gets their own
+	// writable file (ADR 0003's split, with a file in place of a copied
+	// database); an anonymous caller reads the shared fixture. If the root
+	// cannot be prepared the dialect is not registered at all, so a sqlite
+	// request is refused with DIALECT_MISMATCH instead of being answered by the
+	// wrong engine.
+	if sqliteEnvs, err := httpapi.NewSQLiteEnvironments(sqliteDataDir); err != nil {
+		log.Warn("SQLite dialect unavailable; a request for it will be refused with DIALECT_MISMATCH", "err", err)
+	} else {
+		defer func() {
+			if err := sqliteEnvs.Close(); err != nil {
+				log.Warn("closing the SQLite environment store failed", "err", err)
+			}
+		}()
+		api.UseSQLite(sqliteEnvs)
+		log.Info("SQLite dialect ready", "root", sqliteEnvs.Root())
+	}
+
+	// M4 (ADR 0005): the challenge lab is a capability, not an assumption. It is
+	// available only when a provider is named AND there is a database to verify
+	// a generated artifact against; /capabilities reports which of the two is
+	// missing instead of offering a lab that cannot work.
+	//
+	// The runner is assigned explicitly rather than handed over as a typed nil:
+	// a nil *envdb.Manager stored in an interface is not nil, and would make an
+	// unverifiable setup look available.
+	var runner ai.Runner
+	if envManager != nil {
+		runner = envManager
+	}
+	api.UseAI(ai.Config{
+		Provider:       aiProviderFromEnv(log),
+		Depot:          st,
+		Runner:         runner,
+		Logger:         log,
+		Limits:         aiLimitsFromEnv(),
+		DatasetVersion: dataset.DatasetVersion,
+	})
 
 	srv := &http.Server{
 		Addr:              addr,
 		Handler:           api.Handler(),
 		ReadHeaderTimeout: 5 * time.Second,
 		ReadTimeout:       30 * time.Second,
-		WriteTimeout:      30 * time.Second,
-		IdleTimeout:       90 * time.Second,
+		// A generation run is bounded by ai.Limits.Timeout, which is minutes,
+		// not by the server's write timeout: at 30 s the write timeout ended
+		// the connection before the pipeline could answer, so the learner saw
+		// a transport error instead of the honest stage-by-stage failure the
+		// pipeline had already produced. ReadHeaderTimeout and ReadTimeout are
+		// unchanged, so a slow client cannot hold a connection open with a
+		// body it never sends.
+		WriteTimeout: 5 * time.Minute,
+		IdleTimeout:  90 * time.Second,
 	}
 
 	go func() {
@@ -164,6 +279,37 @@ func main() {
 	if err := srv.Shutdown(shutdownCtx); err != nil {
 		log.Error("graceful shutdown failed", "err", err)
 	}
+	return 0
+}
+
+// defaultAddr is the listen address when QC_ADDR is unset. Loopback, not ":8080",
+// so the zero-setup flow (empty admin password) stays a local-only flow; a
+// network bind is an explicit opt-in that requires QC_ADMIN_PASSWORD.
+const defaultAddr = "127.0.0.1:8080"
+
+// isLoopbackAddr reports whether a QC_ADDR value binds only the loopback
+// interface. Anything that could accept a connection from another host — a
+// wildcard host like ":8080" or "0.0.0.0:8080", or a concrete non-loopback
+// address — is not loopback, and a blank-password administrator is refused
+// there. An unresolvable host is treated as non-loopback: failing closed is the
+// safe answer when the interface cannot be proven local.
+func isLoopbackAddr(addr string) bool {
+	host, _, err := net.SplitHostPort(addr)
+	if err != nil {
+		// A bare host with no port ("localhost") still names an interface.
+		host = addr
+	}
+	host = strings.TrimSpace(strings.Trim(host, "[]"))
+	if host == "" {
+		// No host part at all: the wildcard bind.
+		return false
+	}
+	if ip := net.ParseIP(host); ip != nil {
+		return ip.IsLoopback()
+	}
+	// A hostname: "localhost" and nothing else is loopback. Any other name may
+	// resolve to a routable address, so it is not treated as local.
+	return strings.EqualFold(host, "localhost")
 }
 
 func newExecutor(ctx context.Context, log *slog.Logger, dsn string) engine.Executor {

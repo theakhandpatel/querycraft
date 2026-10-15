@@ -24,6 +24,7 @@ export const QueryResultSchema = Schema.Struct({
   error: Schema.NullOr(QueryErrorSchema),
   request_id: Schema.optional(Schema.NullOr(Schema.String)),
   engine: Schema.optional(Schema.NullOr(Schema.String)),
+  dialect: Schema.Literals(['postgresql', 'sqlite']),
 });
 
 export const CheckResultSchema = Schema.Struct({

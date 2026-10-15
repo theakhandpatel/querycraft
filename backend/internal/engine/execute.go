@@ -23,7 +23,12 @@ func Execute(ctx context.Context, ex Executor, sql string, limits Limits) QueryR
 	limits = limits.Merge(DefaultLimits())
 	requestID := RequestIDFromContext(ctx)
 	if isBlankSQL(sql) {
-		return Failing(CodeEmptyQuery, "Blank SQL. Write a statement, then Run.", "", requestID)
+		res := Failing(CodeEmptyQuery, "Blank SQL. Write a statement, then Run.", "", requestID)
+		/* The dialect is a property of the engine that would have run the
+		   statement, so even a refusal names it: the UI must never show a
+		   PostgreSQL result on a SQLite chapter. */
+		res.Dialect = DialectOf(ex)
+		return res
 	}
 
 	start := time.Now()
@@ -34,13 +39,14 @@ func Execute(ctx context.Context, ex Executor, sql string, limits Limits) QueryR
 		Status:    "succeeded",
 		Columns:   []Column{},
 		Rows:      [][]any{},
-		Engine:    EngineName,
+		Engine:    EngineLabelOf(ex),
 		RequestID: requestID,
+		Dialect:   DialectOf(ex),
 	}
 
 	rows, err := ex.Query(qctx, sql)
 	if err != nil {
-		return res.failed(classify(qctx, err), start)
+		return res.failed(classifyFor(qctx, ex, err), start)
 	}
 	if rows == nil {
 		res.DurationMS = RoundMS(time.Since(start))
@@ -62,7 +68,7 @@ func Execute(ctx context.Context, ex Executor, sql string, limits Limits) QueryR
 		}
 		vals, verr := rows.Values()
 		if verr != nil {
-			return res.failed(classify(qctx, verr), start)
+			return res.failed(classifyFor(qctx, ex, verr), start)
 		}
 		if vals == nil {
 			vals = []any{}
@@ -84,7 +90,7 @@ func Execute(ctx context.Context, ex Executor, sql string, limits Limits) QueryR
 	}
 	if !rowCapped && !byteCapped {
 		if rerr := rows.Err(); rerr != nil {
-			return res.failed(classify(qctx, rerr), start)
+			return res.failed(classifyFor(qctx, ex, rerr), start)
 		}
 	} else {
 		// A cap was hit, so the rest of the result is unwanted. Cancelling the
@@ -189,32 +195,84 @@ func classify(ctx context.Context, err error) *QueryError {
 	if errors.Is(err, ErrEnvironmentUnavailable) {
 		return NewError(CodeEnvironmentUnavailable, "The execution environment is unavailable.", err.Error())
 	}
+	if code, ok := pgCodeFor(err); ok {
+		return engineWordsFor(code, err)
+	}
+	return engineWordsFor(CodeRuntime, err)
+}
+
+// classifyFor asks the executor to classify its own engine's error before the
+// shared table does, so a dialect with its own vocabulary (SQLite's message
+// rules) is not described in PostgreSQL's terms. The host's own facts are
+// decided first and are not the executor's to rename: a deadline, a busy
+// gateway and an unreachable environment mean the same thing in every dialect,
+// and SQLite's profile would otherwise be asked to recognise this process's
+// sentinels.
+func classifyFor(ctx context.Context, ex Executor, err error) *QueryError {
+	if err == nil {
+		return nil
+	}
+	if errors.Is(err, ErrPoolTimeout) || errors.Is(err, context.DeadlineExceeded) ||
+		errors.Is(err, context.Canceled) || errors.Is(err, ErrEnvironmentUnavailable) {
+		return classify(ctx, err)
+	}
+	if classifier, ok := ex.(ErrorClassifier); ok {
+		if code, ok := classifier.ClassifyError(err); ok && strings.TrimSpace(code) != "" {
+			return engineWordsFor(code, err)
+		}
+	}
+	return classify(ctx, err)
+}
+
+// pgCodeFor maps a PostgreSQL error onto the contract's closed code set. It is
+// separate from classify because PgxExecutor answers ErrorClassifier with it:
+// the same rules must serve both the executor's own hook and the fallback, or a
+// result could be classified one way in one path and another way in the other.
+func pgCodeFor(err error) (string, bool) {
+	var pgErr *pgconn.PgError
+	if errors.As(err, &pgErr) {
+		switch pgErr.Code {
+		case "42601", "42603", "42604":
+			// The parser rejected the statement and reported where.
+			return CodeSyntax, true
+		case "57014", "55P03":
+			return CodeTimeout, true
+		case "54000", "53100", "53400":
+			// The server stopped itself before producing a result: out of
+			// memory, disk or configured limits. The contract calls this
+			// RESULT_LIMIT_EXCEEDED, and the server's own words are the detail.
+			return CodeResultLimit, true
+		case "53300", "3D000", "08006", "08003":
+			return CodeEnvironmentUnavailable, true
+		default:
+			return CodeRuntime, true
+		}
+	}
+	return "", false
+}
+
+// engineWordsFor builds the QueryError for an already-decided code, taking the
+// engine's own words from the error so the learner reads the engine's message
+// and not a paraphrase. A PostgreSQL error also carries a detail/hint field
+// that a driver message does not, which is why the two shapes differ.
+func engineWordsFor(code string, err error) *QueryError {
 	var pgErr *pgconn.PgError
 	if errors.As(err, &pgErr) {
 		detail := pgErr.Detail
 		if strings.TrimSpace(detail) == "" {
 			detail = pgErr.Hint
 		}
-		switch pgErr.Code {
-		case "42601", "42603", "42604":
-			// The parser rejected the statement and reported where.
-			return NewError(CodeSyntax, pgErr.Message, detail)
-		case "57014", "55P03":
-			return NewError(CodeTimeout, "Query was canceled, likely because it exceeded the time limit.", detail)
-		case "54000", "53100", "53400":
-			// The server stopped itself before producing a result: out of
-			// memory, disk or configured limits. The contract calls this
-			// RESULT_LIMIT_EXCEEDED, and the server's own words are the detail.
-			return NewError(CodeResultLimit, pgErr.Message, detail)
-		case "53300", "3D000", "08006", "08003":
-			return NewError(CodeEnvironmentUnavailable, pgErr.Message, detail)
-		default:
-			return NewError(CodeRuntime, pgErr.Message, detail)
+		// The server's "canceling statement due to statement timeout" and this
+		// sentence say the same thing; the sentence is the one the lesson copy
+		// was written against, so a canceled statement keeps it.
+		if code == CodeTimeout {
+			return NewError(code, "Query was canceled, likely because it exceeded the time limit.", detail)
 		}
+		return NewError(code, pgErr.Message, detail)
 	}
 	msg := err.Error()
 	if strings.TrimSpace(msg) == "" {
 		msg = "query failed"
 	}
-	return NewError(CodeRuntime, msg, "")
+	return NewError(code, msg, "")
 }

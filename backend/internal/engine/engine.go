@@ -16,6 +16,17 @@ import (
 // EngineName is reported in every QueryResult as the execution engine.
 const EngineName = "postgresql"
 
+// Dialect names, shared with contracts/query-result.schema.json.
+//
+// `Engine` is the human string a learner reads ("PostgreSQL 18.3", "SQLite
+// 3.45"); `Dialect` is the machine value a chapter is compared against, so the
+// UI can refuse to grade a SQLite chapter on PostgreSQL instead of silently
+// marking engine-specific values wrong.
+const (
+	DialectPostgres = "postgresql"
+	DialectSQLite   = "sqlite"
+)
+
 // Stable error codes shared with contracts/query-result.schema.json.
 const (
 	CodeEmptyQuery             = "EMPTY_QUERY"
@@ -24,8 +35,13 @@ const (
 	CodeTimeout                = "QUERY_TIMEOUT"
 	CodeResultLimit            = "RESULT_LIMIT_EXCEEDED"
 	CodeEnvironmentUnavailable = "ENVIRONMENT_UNAVAILABLE"
-	CodePersistenceFailed      = "PERSISTENCE_FAILED"
-	CodeEvaluationError        = "EVALUATION_ERROR"
+	// CodeDialectMismatch is a product refusal, not an engine failure: the
+	// statement is fine and the engine is fine, but the chapter was written for
+	// a different dialect. Reusing ENVIRONMENT_UNAVAILABLE would hide a mistake
+	// the learner can fix in one action behind a fault they cannot.
+	CodeDialectMismatch   = "DIALECT_MISMATCH"
+	CodePersistenceFailed = "PERSISTENCE_FAILED"
+	CodeEvaluationError   = "EVALUATION_ERROR"
 )
 
 // ErrEnvironmentUnavailable marks failures that mean the engine itself could
@@ -66,6 +82,60 @@ type QueryResult struct {
 	Error      *QueryError `json:"error"`
 	RequestID  *string     `json:"request_id"`
 	Engine     string      `json:"engine"`
+	Dialect    string      `json:"dialect"`
+}
+
+// Dialecter is implemented by an executor that runs a dialect other than the
+// default. It is a separate interface rather than a method on Executor so every
+// existing fake keeps compiling and keeps meaning PostgreSQL, which is what it
+// actually runs.
+type Dialecter interface {
+	Dialect() string
+}
+
+// DialectOf reports the dialect an executor runs. An executor that does not
+// answer is PostgreSQL, the default dialect (ADR 0004).
+func DialectOf(ex Executor) string {
+	if d, ok := ex.(Dialecter); ok {
+		if name := strings.TrimSpace(d.Dialect()); name != "" {
+			return name
+		}
+	}
+	return DialectPostgres
+}
+
+// LabeledExecutor is an executor that can name the engine it runs in the words
+// a learner reads, rather than making the caller guess. PostgreSQL's adapter
+// leaves it unimplemented and keeps EngineName; the SQLite adapter answers with
+// its own version string so a result row never says "postgresql" on a page that
+// ran SQLite.
+type LabeledExecutor interface {
+	EngineLabel() string
+}
+
+// EngineLabelOf reports the human engine string for an executor.
+func EngineLabelOf(ex Executor) string {
+	if l, ok := ex.(LabeledExecutor); ok {
+		if name := strings.TrimSpace(l.EngineLabel()); name != "" {
+			return name
+		}
+	}
+	return EngineName
+}
+
+// ErrorClassifier is implemented by an executor that can name its own engine's
+// errors. It is optional, and it is asked before the shared table: SQLite has
+// no SQLSTATE, so the PostgreSQL table would report a SQLite syntax error as a
+// runtime error — the wrong advice for the learner — while the dialect profile
+// already knows the same message is QUERY_SYNTAX_ERROR.
+//
+// The second return is why the contract is (code, ok) rather than a bare
+// string: "this executor has no opinion" is a real answer, and it must not be
+// confused with a classification that happens to be empty. An executor that
+// declines (or does not implement this at all) falls back to the PostgreSQL
+// table, which is what the default dialect's errors get.
+type ErrorClassifier interface {
+	ClassifyError(err error) (code string, ok bool)
 }
 
 // Limits are the per-request caps. Zero values fall back to defaults.
@@ -212,5 +282,19 @@ func Failing(code, message, detail string, requestID *string) QueryResult {
 		Error:     NewError(code, message, detail),
 		RequestID: requestID,
 		Engine:    EngineName,
+		Dialect:   DialectPostgres,
 	}
+}
+
+// RefusingDialect builds the failed result for a request the running engine
+// will not serve. The result reports the dialect that answered (the one that
+// ran nothing and refused), while the message names both — the chapter's
+// dialect and the engine's — because that pair is the whole fix: switch the
+// engine, or pick a chapter written for this one.
+func RefusingDialect(running, message string, requestID *string) QueryResult {
+	res := Failing(CodeDialectMismatch, message, "", requestID)
+	if d := strings.TrimSpace(running); d != "" {
+		res.Dialect = d
+	}
+	return res
 }

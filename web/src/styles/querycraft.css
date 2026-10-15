@@ -1,3 +1,4 @@
+@import "./fonts.css";
 /* OD-LAYOUT-PRIMITIVES v1 — structure only. Product CSS outside the layer wins. */
 @layer od-layout {
   :where(.od-stack,.od-row,.od-row-top,.od-cluster,.od-grid) > :where(*) { min-width: 0; }
@@ -15,12 +16,21 @@
   color-scheme:light;
   --bg:#f4f5f7; --surface:#ffffff; --surface-2:#f7f8fa; --surface-3:#eef0f3;
   --line:#e3e6eb; --line-strong:#cbd1da;
-  --text:#14161a; --text-2:#494f5a; --text-3:#6b7280;
-  --accent:#0d7d68; --accent-solid:#0b6b59; --accent-hover:#0a5c4d;
-  --accent-soft:rgba(13,125,104,.09); --accent-line:rgba(13,125,104,.26);
-  --green:#1a7f4f; --green-soft:rgba(26,127,79,.11);
-  --amber:#8a5a10; --amber-soft:rgba(138,90,16,.12);
-  --red:#b3352f; --red-soft:rgba(179,53,47,.10);
+  /* --text-3 carries more small text than any other token (row counts,
+     durations, ids, section kickers, empty states), and it lands on the page
+     canvas, the fill surface AND the accent wash. #6b7280 measured 3.94:1 on
+     that wash and 4.23:1 on the fill surface. This step clears 4.5:1 on all of
+     them, including the wash, so metadata is readable wherever it appears. */
+  --text:#14161a; --text-2:#494f5a; --text-3:#626873;
+  /* --accent is the accent as a FILL or a ring; --accent-ink is the accent as
+     TEXT or a glyph. They are the same hue but not the same job: a fill only
+     has to carry white text, while the ink has to clear 4.5:1 on every surface
+     it can sit on, including --accent-soft. #0d7d68 measured 4.13:1 there. */
+  --accent:#0c6f5c; --accent-ink:#0c6f5c; --accent-solid:#0b6b59; --accent-hover:#0a5c4d;
+  --accent-soft:rgba(12,111,92,.09); --accent-line:rgba(12,111,92,.26);
+  --green:#1a7f4f; --green-soft:rgba(26,127,79,.11); --green-ink:#15663f;
+  --amber:#8a5a10; --amber-soft:rgba(138,90,16,.12); --amber-ink:#6f4909;
+  --red:#b3352f; --red-soft:rgba(179,53,47,.10); --red-ink:#8f2a25;
   --code-bg:#fbfcfd; --code-text:#20303f; --code-line:#e6e9ee;
   --shadow:0 1px 2px rgba(20,22,26,.05),0 10px 30px -18px rgba(20,22,26,.28);
   --shadow-lg:0 24px 60px -30px rgba(20,22,26,.42);
@@ -29,12 +39,12 @@
   color-scheme:dark;
   --bg:#121316; --surface:#181a1f; --surface-2:#1d2025; --surface-3:#242830;
   --line:#2a2e36; --line-strong:#3a404a;
-  --text:#eef0f2; --text-2:#a7aeb8; --text-3:#868d97;
-  --accent:#34d3a6; --accent-solid:#2fbb92; --accent-hover:#46e0b4;
+  --text:#eef0f2; --text-2:#a7aeb8; --text-3:#99a1ab;
+  --accent:#34d3a6; --accent-ink:#34d3a6; --accent-solid:#2fbb92; --accent-hover:#46e0b4;
   --accent-soft:rgba(52,211,166,.12); --accent-line:rgba(52,211,166,.30);
-  --green:#4bd39a; --green-soft:rgba(75,211,154,.13);
-  --amber:#e0b35c; --amber-soft:rgba(224,179,92,.14);
-  --red:#f08a8a; --red-soft:rgba(240,138,138,.13);
+  --green:#4bd39a; --green-soft:rgba(75,211,154,.13); --green-ink:#7ce3b0;
+  --amber:#e0b35c; --amber-soft:rgba(224,179,92,.14); --amber-ink:#f0c877;
+  --red:#f08a8a; --red-soft:rgba(240,138,138,.13); --red-ink:#f7a3a3;
   --code-bg:#0e1013; --code-text:#d6dde6; --code-line:#252a31;
   --shadow:0 1px 2px rgba(0,0,0,.3),0 12px 34px -20px rgba(0,0,0,.7);
   --shadow-lg:0 30px 70px -34px rgba(0,0,0,.85);
@@ -47,6 +57,10 @@
   --mono:"Geist Mono",ui-monospace,SFMono-Regular,Menlo,"Cascadia Code",monospace;
   --r-xs:6px; --r-sm:8px; --r-md:10px; --r-lg:12px; --r-xl:14px; --pill:999px;
   --ease:cubic-bezier(.2,.7,.3,1); --dur:180ms;
+  /* The ring is drawn on every focusable control. It stays at the small
+     radius: a pill or a card keeps its own radius because its own rule is
+     later in the sheet, and `inherit` here would hand an inline link whatever
+     radius its container happens to have. */
   --ring:0 0 0 2px var(--bg),0 0 0 4px var(--accent);
 }
 *{box-sizing:border-box}
@@ -59,7 +73,12 @@ h2{font-size:17px}
 h3{font-size:14px;font-family:var(--sans);font-weight:600;letter-spacing:0}
 p{margin:0}
 ul,ol{margin:0}
-::selection{background:var(--accent-soft)}
+/* Browser surfaces belong to the palette too. The accent selection uses --text
+   so it stays legible on either theme (the accent itself is only 9% opaque). */
+::selection{background:var(--accent-soft);color:var(--text)}
+/* The caret is the learner's cursor inside the one control they cannot avoid
+   using, so it carries the accent rather than falling back to the OS blue. */
+.editor,.goalbox textarea,input,textarea{caret-color:var(--accent)}
 :focus-visible{outline:none;box-shadow:var(--ring);border-radius:var(--r-sm)}
 @media(prefers-reduced-motion:reduce){*,*::before,*::after{animation-duration:.001ms!important;animation-iteration-count:1!important;transition-duration:.001ms!important;scroll-behavior:auto!important}}
 html[data-motion="reduced"] *,html[data-motion="reduced"] *::before,html[data-motion="reduced"] *::after{animation-duration:.001ms!important;transition-duration:.001ms!important}
@@ -76,6 +95,11 @@ button.primary:hover{background:var(--accent-hover)}
 button.ghost{background:transparent;color:var(--text-2)}
 button.ghost:hover{background:var(--surface-3);color:var(--text)}
 button.small{font-size:12px;padding:6px 11px;gap:6px}
+/* The header and the drawer head each hold one icon-only button, and both were
+   36x26 — under the 28px minimum a pointer target wants. They stay the same
+   visual weight; only the box grows to meet it. */
+.headright button, .drawerhead button.small.ghost, .searchresults button{min-height:28px}
+.headright button{min-width:28px}
 button:disabled{opacity:.4;cursor:not-allowed}
 a{color:var(--accent);text-decoration:none}
 a:hover{text-decoration:underline}
@@ -84,8 +108,8 @@ button.small .ico{width:14px;height:14px}
 .actions{display:flex;align-items:center;gap:8px;flex-wrap:wrap}
 .muted{color:var(--text-3)}
 .mt-8{margin-top:8px}.mt-12{margin-top:12px}.mt-14{margin-top:14px}.mt-16{margin-top:16px}.mt-18{margin-top:18px}.mt-22{margin-top:22px}
-.eyebrow{font-family:var(--mono);font-size:11px;letter-spacing:.1em;text-transform:uppercase;color:var(--accent);font-weight:500}
-.pass{color:var(--green)}.warn{color:var(--amber)}.fail{color:var(--red)}
+.eyebrow{font-family:var(--mono);font-size:11px;letter-spacing:.1em;text-transform:uppercase;color:var(--accent-ink);font-weight:500}
+.pass{color:var(--green-ink)}.warn{color:var(--amber-ink)}.fail{color:var(--red-ink)}
 .mono{font-family:var(--mono)}
 .pill{display:inline-flex;align-items:center;gap:7px;padding:4px 10px;border:0;border-radius:var(--pill);background:var(--surface-3);font-size:12px;color:var(--text-2);font-weight:500;white-space:nowrap}
 .pill .dot{width:6px;height:6px;border-radius:50%;background:var(--green)}
@@ -93,11 +117,19 @@ button.small .ico{width:14px;height:14px}
 .divider{height:1px;background:var(--line);border:0;margin:0}
 
 /* ============ Shell ============ */
-.app{display:grid;grid-template-columns:244px minmax(0,1fr);height:100vh;overflow:hidden}
+/* `position:relative` is load-bearing, not decoration. The screens are full of
+   `.visually-hidden` nodes, which are `position:absolute`: with no positioned
+   ancestor their containing block was the initial one, so they escaped this
+   element's `overflow:hidden`, sat at their static position thousands of pixels
+   down the lesson, and made the *document* scroll to ~5000px. That let the whole
+   shell — sidebar and header included — scroll out from under the learner
+   whenever the browser revealed a focused control. Containing them here keeps
+   the document exactly one viewport tall. */
+.app{display:grid;grid-template-columns:244px minmax(0,1fr);height:100vh;overflow:hidden;position:relative}
 aside{background:var(--surface);border-right:1px solid var(--line);display:flex;flex-direction:column;gap:16px;padding:16px 12px;overflow:hidden}
 .navscroll{flex:1;min-height:0;overflow-y:auto;display:flex;flex-direction:column;gap:16px}
 .brand{display:flex;align-items:center;gap:9px;padding:4px 8px;font-size:15px;font-weight:600;letter-spacing:-.02em}
-.brandmark{width:28px;height:28px;flex:none;display:grid;place-items:center;border-radius:var(--r-sm);background:var(--accent-soft);border:0;color:var(--accent)}
+.brandmark{width:28px;height:28px;flex:none;display:grid;place-items:center;border-radius:var(--r-sm);background:var(--accent-soft);border:0;color:var(--accent-ink)}
 .brandmark .ico{width:16px;height:16px;stroke-width:1.8}
 .brandname{font-family:var(--display)}
 .brandtag{font-family:var(--mono);font-size:10px;color:var(--text-3);letter-spacing:.06em}
@@ -107,7 +139,7 @@ aside{background:var(--surface);border-right:1px solid var(--line);display:flex;
 .nav:hover{background:var(--surface-2);color:var(--text)}
 .nav.active{background:var(--surface-3);color:var(--text)}
 .nav .ico{color:var(--text-3)}
-.nav.active .ico{color:var(--accent)}
+.nav.active .ico{color:var(--accent-ink)}
 .navtext{overflow:hidden;text-overflow:ellipsis;white-space:nowrap;min-width:0}
 .navbadge{margin-left:auto;font-family:var(--mono);font-size:10px;color:var(--text-3);background:var(--surface-3);border-radius:var(--pill);padding:1px 6px}
 .recdot{width:6px;height:6px;border-radius:50%;flex:none;background:currentColor;opacity:.85}
@@ -119,7 +151,7 @@ aside{background:var(--surface);border-right:1px solid var(--line);display:flex;
 
 .shell{display:flex;flex-direction:column;min-width:0;height:100vh}
 .shell>header{display:flex;align-items:center;justify-content:space-between;gap:12px;height:52px;flex:none;padding:0 20px;border-bottom:1px solid var(--line);background:var(--surface);z-index:20}
-#crumb{font-size:13px;font-weight:500;color:var(--text-2);font-family:var(--display);letter-spacing:-.01em}
+#crumb{font-size:13px;font-weight:500;color:var(--text-2);font-family:var(--display);letter-spacing:-.01em;min-width:0;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
 .headright{display:flex;align-items:center;gap:8px}
 .enginestate{display:inline-flex;align-items:center;gap:7px;font-family:var(--mono);font-size:11px;color:var(--text-3)}
 .enginestate .dot{width:6px;height:6px;border-radius:50%;background:var(--green);box-shadow:0 0 0 3px var(--green-soft)}
@@ -131,12 +163,12 @@ aside{background:var(--surface);border-right:1px solid var(--line);display:flex;
 .content{padding:28px 32px 72px;max-width:1180px;margin:0 auto;width:100%}
 .pagehead{display:flex;align-items:flex-start;justify-content:space-between;gap:20px;margin-bottom:22px}
 .pagehead p{color:var(--text-2);font-size:13px;margin-top:8px;max-width:64ch}
-.grid2{display:grid;grid-template-columns:1fr 1fr;gap:16px}
-.grid3{display:grid;grid-template-columns:repeat(3,1fr);gap:16px}
+.grid2{display:grid;grid-template-columns:minmax(0,1fr) minmax(0,1fr);gap:16px}
+.grid3{display:grid;grid-template-columns:repeat(3,minmax(0,1fr));gap:16px}
 .card{background:var(--surface);border:0;border-radius:var(--r-lg);padding:20px 22px}
 .card>h2{margin-bottom:8px}
 .card p{color:var(--text-2);font-size:13px;line-height:1.6}
-.sectiontitle{display:flex;align-items:center;justify-content:space-between;gap:12px}
+.sectiontitle{display:flex;align-items:center;justify-content:space-between;gap:12px;flex-wrap:wrap}
 .sectiontitle h2{margin:0}
 
 /* Dashboard / continue */
@@ -146,8 +178,8 @@ aside{background:var(--surface);border-right:1px solid var(--line);display:flex;
 .continue .meta{display:flex;gap:8px;flex-wrap:wrap;margin-top:12px}
 .cring{width:84px;height:84px;position:relative;flex:none;display:grid;place-items:center}
 .cring svg{position:absolute;inset:0;transform:rotate(-90deg)}
-.cring .v{font-family:var(--display);font-size:19px;font-weight:600;letter-spacing:-.03em}
-.cring .l{font-size:9px;letter-spacing:.08em;text-transform:uppercase;color:var(--text-3);font-family:var(--mono)}
+.cring .v{font-family:var(--display);font-size:20px;font-weight:600;letter-spacing:-.03em}
+.cring .l{font-size:10px;letter-spacing:.08em;text-transform:uppercase;color:var(--text-3);font-family:var(--mono)}
 .progress-mini{height:6px;background:var(--surface-3);border-radius:var(--pill);overflow:hidden;margin-top:14px;max-width:420px}
 .progress-mini>span{display:block;height:100%;background:var(--accent);border-radius:var(--pill)}
 
@@ -155,19 +187,19 @@ aside{background:var(--surface);border-right:1px solid var(--line);display:flex;
 .filterbar{display:flex;gap:8px;flex-wrap:wrap;margin:4px 0 18px}
 .filt{background:var(--surface-3);border:0;border-radius:var(--pill);padding:6px 13px;font-size:12.5px;color:var(--text-2);font-weight:500}
 .filt:hover{color:var(--text)}
-.filt.active{background:var(--accent-soft);color:var(--accent)}
+.filt.active{background:var(--accent-soft);color:var(--accent-ink)}
 
 /* Library cards */
 .coursecard{background:var(--surface);border:0;border-radius:var(--r-lg);padding:18px 20px;display:flex;flex-direction:column;gap:6px}
 .coursecard h2{font-size:16px;margin-top:4px}
 .coursecard p{color:var(--text-2);font-size:12.5px;line-height:1.55;flex:1}
 .coursemeta{display:flex;gap:8px;flex-wrap:wrap;align-items:center}
-.enrolltag{font-family:var(--mono);font-size:10px;letter-spacing:.05em;text-transform:uppercase;color:var(--accent);background:var(--accent-soft);border-radius:var(--pill);padding:2px 8px}
-.enrolltag.mine{color:var(--green);background:var(--green-soft)}
+.enrolltag{font-family:var(--mono);font-size:10px;letter-spacing:.05em;text-transform:uppercase;color:var(--accent-ink);background:var(--accent-soft);border-radius:var(--pill);padding:2px 8px}
+.enrolltag.mine{color:var(--green-ink);background:var(--green-soft)}
 
 /* Course switcher */
 .switcher{display:flex;gap:8px;flex-wrap:wrap;margin-top:14px}
-.cswitch{background:var(--surface-2);border:1px solid transparent;border-radius:var(--r-md);padding:10px 12px;text-align:left;display:flex;flex-direction:column;gap:2px;min-width:150px;align-items:flex-start}
+.cswitch{background:var(--surface-2);border:1px solid transparent;border-radius:var(--r-md);padding:10px 12px;text-align:left;display:flex;flex-direction:column;gap:2px;min-width:min(150px,100%);align-items:flex-start}
 .cswitch:hover{background:var(--surface-3)}
 .cswitch.active{border-color:var(--accent);background:var(--accent-soft)}
 .cswitch strong{font-size:12.5px}
@@ -198,7 +230,7 @@ aside{background:var(--surface);border-right:1px solid var(--line);display:flex;
 /* Rows */
 .reportrow{display:flex;align-items:center;justify-content:space-between;gap:16px;padding:9px 0;border-bottom:1px solid var(--line);font-size:13px}
 .reportrow:last-of-type{border-bottom:0}
-.reportrow>span:first-child{color:var(--text-2)}
+.reportrow>span:first-child{color:var(--text-2);min-width:0}
 .reportrow>span:last-child{color:var(--text);font-weight:500;text-align:right}
 .reportrow>span.muted{color:var(--text-3);font-weight:400}
 .callout{background:var(--surface-2);border:0;border-radius:var(--r-md);padding:14px 16px;font-size:13px;color:var(--text-2);line-height:1.65}
@@ -208,7 +240,14 @@ aside{background:var(--surface);border-right:1px solid var(--line);display:flex;
 .coursehero{display:flex;gap:14px;align-items:center;background:var(--surface-2);border:0;border-radius:var(--r-md);padding:18px 20px;margin-bottom:18px}
 .coursehero h2{font-size:15px}
 .coursehero p{color:var(--text-2);margin-top:4px;font-size:13px}
-.courseicon{width:38px;height:38px;flex:none;border-radius:var(--r-sm);display:grid;place-items:center;background:var(--accent-soft);border:0;color:var(--accent)}
+/* The hero's own min-content is 370px because of the ring and the icon; on a
+   phone that is wider than the viewport, so the ring drops below the text
+   rather than forcing a horizontal scrollbar. */
+@media(max-width:600px){
+  .coursehero{flex-wrap:wrap}
+  .coursehero .cring{margin-left:auto}
+}
+.courseicon{width:38px;height:38px;flex:none;border-radius:var(--r-sm);display:grid;place-items:center;background:var(--accent-soft);border:0;color:var(--accent-ink)}
 
 /* Tabs */
 .tabs{display:flex;gap:2px;border-bottom:1px solid var(--line);margin-top:20px;overflow-x:auto;scrollbar-width:none}
@@ -226,9 +265,15 @@ aside{background:var(--surface);border-right:1px solid var(--line);display:flex;
 .lessonrow.done{background:transparent}
 .lessonnum{width:24px;height:24px;flex:none;display:grid;place-items:center;border-radius:var(--r-xs);background:var(--surface-3);color:var(--text-3);font-size:12px;font-family:var(--mono)}
 .lessonrow.done .lessonnum{background:var(--green);color:var(--surface);border-radius:var(--pill)}
+.lessontitle .ico{width:14px;height:14px;flex:none}
+/* `min-width:0` is load-bearing: it lets the nowrap summary shrink inside the
+   card instead of forcing the row — and with it the whole grid column — to the
+   widest chapter's min-content. With the grid column as a bare `1fr` that was
+   what gave the course screen a horizontal scrollbar at every viewport. */
 .lessontext{flex:1;min-width:0;display:flex;flex-direction:column;gap:2px}
 .lessontext strong{font-size:13px;font-weight:500;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
 .lessontext small{color:var(--text-3);font-size:12px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+.lessontitle{min-width:0}
 .lessonrow .actions{gap:4px}
 
 /* Pipeline */
@@ -240,18 +285,20 @@ aside{background:var(--surface);border-right:1px solid var(--line);display:flex;
 .pipe small{display:block;color:var(--text-3);font-size:12px;margin-top:2px}
 .check{width:26px;height:26px;flex:none;border-radius:50%;display:grid;place-items:center;border:1px solid var(--line);color:var(--text-3);font-family:var(--mono);font-size:12px;background:var(--surface-2);transition:all var(--dur) var(--ease)}
 .state{color:var(--text-3);font-family:var(--mono);font-size:11px;text-transform:uppercase;letter-spacing:.06em;padding-top:6px}
-.pipe.running .check{border-color:var(--accent);color:var(--accent);box-shadow:0 0 0 4px var(--accent-soft)}
-.pipe.running .state{color:var(--accent)}
+.pipe.running .check{border-color:var(--accent);color:var(--accent-ink);box-shadow:0 0 0 4px var(--accent-soft)}
+.pipe.running .state{color:var(--accent-ink)}
 .pipe.done .check{background:var(--green);border-color:var(--green);color:var(--surface)}
-.pipe.done .state{color:var(--green)}
+.pipe.done .state{color:var(--green-ink)}
+.pipe.failed .check{border-color:var(--red);color:var(--red-ink)}
+.pipe.failed .state{color:var(--red-ink)}
 
 .stream{display:none;margin-top:12px;background:var(--code-bg);border:1px solid var(--code-line);border-radius:var(--r-md);padding:12px 14px;font-family:var(--mono);font-size:12px;line-height:1.9;color:var(--text-2);max-height:280px;overflow:auto}
 .stream.open{display:block}
 .stream .ln{display:flex;gap:8px;white-space:pre-wrap;word-break:break-word}
 .stream .t{color:var(--text-3);flex:none}
-.stream .ok{color:var(--green)}
-.stream .hi{color:var(--accent)}
-.stream .fail{color:var(--red)}
+.stream .ok{color:var(--green-ink)}
+.stream .hi{color:var(--accent-ink)}
+.stream .fail{color:var(--red-ink)}
 .caret{display:inline-block;width:7px;height:14px;background:var(--accent);vertical-align:-2px;animation:blink 1s steps(1) infinite}
 @keyframes blink{50%{opacity:0}}
 
@@ -260,7 +307,7 @@ aside{background:var(--surface);border-right:1px solid var(--line);display:flex;
 .cell.exercise{border-color:var(--accent-line)}
 .celltop{display:flex;align-items:center;justify-content:space-between;gap:10px;padding:9px 14px;border-bottom:1px solid var(--line);background:transparent;font-family:var(--mono);font-size:11px;color:var(--text-3)}
 .celltop .kindtag{display:inline-flex;align-items:center;gap:6px;color:var(--text-2)}
-.celltop .kindtag .ico{width:13px;height:13px;color:var(--accent)}
+.celltop .kindtag .ico{width:13px;height:13px;color:var(--accent-ink)}
 .cellbody{padding:0}
 .editorwrap{position:relative;background:var(--code-bg)}
 /* The editor suppresses its own outline (it is a borderless code surface), so
@@ -268,8 +315,13 @@ aside{background:var(--surface);border-right:1px solid var(--line);display:flex;
    because `.cell` clips with `overflow: hidden`. Without this the one control a
    learner cannot avoid using is the one control with no visible focus. */
 .editorwrap:focus-within{box-shadow:inset 0 0 0 2px var(--accent)}
-.editorwrap .gutter{position:absolute;left:0;top:0;bottom:0;width:38px;border-right:1px solid var(--code-line);background:var(--surface-2);font-family:var(--mono);font-size:12px;line-height:1.75;color:var(--text-3);padding:14px 8px 14px 0;text-align:right;user-select:none;overflow:hidden}
-.editor{width:100%;min-height:120px;border:0;border-radius:0;outline:none;resize:vertical;box-shadow:none;background:transparent;color:var(--code-text);font-family:var(--mono);font-size:13px;line-height:1.75;padding:14px 14px 14px 52px;tab-size:4}
+/* The gutter is a line-number column, so its line box must be the editor's
+   line box exactly. The editor's computed `line-height` is `22.75px` (13px ×
+   1.75), which cannot be written as a unitless ratio for a 12px gutter: 1.75
+   gives 21px and the numbers drift ~1.75px per line, so by line 8 they are
+   pointing at the wrong statement. A hard 22.75px keeps them locked together. */
+.editorwrap .gutter{position:absolute;left:0;top:0;bottom:0;width:38px;border-right:1px solid var(--code-line);background:var(--surface-2);font-family:var(--mono);font-size:12px;line-height:22.75px;color:var(--text-3);padding:14px 8px 14px 0;text-align:right;user-select:none;overflow:hidden}
+.editor{width:100%;min-height:120px;border:0;border-radius:0;outline:none;resize:vertical;box-shadow:none;background:transparent;color:var(--code-text);font-family:var(--mono);font-size:13px;line-height:1.75;padding:14px 14px 14px 52px;tab-size:4;display:block}
 .editor:focus{box-shadow:none}
 .runrow{display:flex;align-items:center;gap:8px;flex-wrap:wrap;padding:10px 14px;border-top:1px solid var(--line);background:transparent}
 .runrow .kb{margin-left:auto;font-family:var(--mono);font-size:11px;color:var(--text-3)}
@@ -281,16 +333,24 @@ aside{background:var(--surface);border-right:1px solid var(--line);display:flex;
 .cellnote{padding:12px 14px 14px;color:var(--text-2);font-size:13px;line-height:1.6}
 
 /* Feedback */
-.fb{border:0;border-radius:var(--r-md);padding:12px 14px;font-size:13px;line-height:1.6;margin-top:12px;background:var(--surface-2)}
+/* `min-width:0` matters here: a long machine code (COLUMN_MISMATCH, …) is one
+   unbreakable word, and the panel is a grid/flex child that would otherwise
+   refuse to shrink below its own longest token. */
+.fb{border:0;border-radius:var(--r-md);padding:12px 14px;font-size:13px;line-height:1.6;margin-top:12px;background:var(--surface-2);min-width:0}
 .fb.passed{background:var(--green-soft)}
 .fb.failed{background:var(--amber-soft)}
 .fb.error{background:var(--red-soft)}
 .fbhead{display:flex;align-items:center;gap:8px;font-weight:600;margin-bottom:6px}
 .fbhead .ico{width:15px;height:15px}
-.fb.passed .fbhead{color:var(--green)}
-.fb.failed .fbhead{color:var(--amber)}
-.fb.error .fbhead{color:var(--red)}
-.fbcode{font-family:var(--mono);font-size:11px;color:var(--text-3);background:var(--surface-3);border:0;border-radius:4px;padding:1px 6px}
+/* The verdict ink is a step darker than the wash's hue at full strength so the
+   heading clears 4.5:1 on the tinted panel, not just on white. */
+.fb.passed .fbhead{color:var(--green-ink)}
+.fb.failed .fbhead{color:var(--amber-ink)}
+.fb.error .fbhead{color:var(--red-ink)}
+[data-theme="dark"] .fb.passed .fbhead{color:#7ce3b0}
+[data-theme="dark"] .fb.failed .fbhead{color:#f0c877}
+[data-theme="dark"] .fb.error .fbhead{color:#f7a3a3}
+.fbcode{font-family:var(--mono);font-size:11px;color:var(--text-3);background:var(--surface-3);border:0;border-radius:4px;padding:1px 6px;overflow-wrap:anywhere}
 .checklist{display:flex;flex-direction:column;gap:5px;margin-top:8px;list-style:none;padding:0}
 .checklist li{display:flex;align-items:flex-start;gap:8px;font-size:12.5px;color:var(--text-2)}
 .checklist li .mk{width:16px;height:16px;flex:none;display:grid;place-items:center;border-radius:50%;font-size:10px;margin-top:1px}
@@ -309,8 +369,13 @@ tbody tr:hover td{background:var(--surface-2);color:var(--text)}
 .resultshead{display:flex;align-items:center;justify-content:space-between;gap:12px;margin-top:14px}
 .resultshead strong{font-size:14px;font-family:var(--display)}
 .resultmeta{font-family:var(--mono);font-size:11px;color:var(--text-3)}
+/* The footer under every result grid. It was rendered by ResultGrid and never
+   defined here, so both spans fell back to 14px block layout and the row count
+   and the engine/duration sat on two unaligned lines. */
+.resultfoot{display:flex;flex-wrap:wrap;align-items:baseline;justify-content:space-between;gap:4px 12px;margin-top:8px;font-family:var(--mono);font-size:11px;color:var(--text-3)}
+.resultfoot .muted{font-size:inherit;font-variant-numeric:tabular-nums}
 .qerr{border:0;background:var(--red-soft);border-radius:var(--r-md);padding:11px 13px;margin-top:12px;font-size:13px}
-.qerr .code{font-family:var(--mono);font-size:11px;color:var(--red);font-weight:600}
+.qerr .code{font-family:var(--mono);font-size:11px;color:var(--red-ink);font-weight:600}
 .qerr pre{margin:8px 0 0;font-family:var(--mono);font-size:12px;color:var(--text-2);white-space:pre-wrap}
 
 /* Schema / tables */
@@ -320,7 +385,7 @@ tbody tr:hover td{background:var(--surface-2);color:var(--text)}
 .tabledef>div{display:flex;justify-content:space-between;gap:10px;padding:7px 12px;border-bottom:1px solid var(--line);font-family:var(--mono);font-size:12px;color:var(--text-2)}
 .tabledef>div:last-child{border-bottom:0}
 .type{color:var(--text-3)}
-.tag{font-family:var(--mono);font-size:10px;padding:1px 5px;border-radius:4px;background:var(--accent-soft);color:var(--accent);border:0}
+.tag{font-family:var(--mono);font-size:10px;padding:1px 5px;border-radius:4px;background:var(--accent-soft);color:var(--accent-ink);border:0}
 .tabledef table{font-size:12px}
 .tabledef td,.tabledef th{padding:6px 10px}
 
@@ -345,7 +410,7 @@ tbody tr:hover td{background:var(--surface-2);color:var(--text)}
 .lessonnav:hover{background:var(--surface-2);color:var(--text)}
 .bullet{width:20px;height:20px;flex:none;display:grid;place-items:center;border-radius:var(--r-xs);background:var(--surface-3);border:0;font-family:var(--mono);font-size:11px;color:var(--text-3)}
 .lessonnav.active{background:var(--surface-3);color:var(--text)}
-.lessonnav.active .bullet{background:var(--accent-soft);border-color:var(--accent-line);color:var(--accent)}
+.lessonnav.active .bullet{background:var(--accent-soft);border-color:var(--accent-line);color:var(--accent-ink)}
 .lessonnav.done .bullet{background:var(--green);border-color:var(--green);color:var(--surface)}
 .lessonnavtext{overflow:hidden;text-overflow:ellipsis;white-space:nowrap;min-width:0}
 
@@ -365,17 +430,17 @@ tbody tr:hover td{background:var(--surface-2);color:var(--text)}
 .blocknote{color:var(--text-2);font-size:12.5px;margin-top:-4px;margin-bottom:6px}
 .objectives{list-style:none;padding:0;margin:16px 0;display:flex;flex-direction:column;gap:6px}
 .objectives li{display:flex;gap:9px;align-items:flex-start;font-size:13px;color:var(--text-2)}
-.objectives li .ico{width:15px;height:15px;color:var(--accent);margin-top:2px}
+.objectives li .ico{width:15px;height:15px;color:var(--accent-ink);margin-top:2px}
 .readingonlynote{display:flex;gap:9px;align-items:flex-start;font-size:13px;color:var(--text-2);margin:10px 0 0}
-.readingonlynote .ico{width:15px;height:15px;color:var(--accent);margin-top:2px;flex:0 0 auto}
+.readingonlynote .ico{width:15px;height:15px;color:var(--accent-ink);margin-top:2px;flex:0 0 auto}
 .secbookmark{flex:0 0 auto}
-.secbookmark.on{color:var(--accent);border-color:var(--accent)}
-.secbookmark.on .ico{color:var(--accent)}
+.secbookmark.on{color:var(--accent-ink);border-color:var(--accent)}
+.secbookmark.on .ico{color:var(--accent-ink)}
 /* Workbook views (M2 step 6): a row of pick-one chips, and a selected state
    for the ghost buttons used as chips. */
 .chiprow{display:flex;flex-wrap:wrap;gap:6px;align-items:center}
-button.small.ghost.on{background:var(--accent-soft);color:var(--accent);box-shadow:inset 0 0 0 1px var(--accent-line)}
-button.small.ghost.on:hover{background:var(--accent-soft);color:var(--accent)}
+button.small.ghost.on{background:var(--accent-soft);color:var(--accent-ink);box-shadow:inset 0 0 0 1px var(--accent-line)}
+button.small.ghost.on:hover{background:var(--accent-soft);color:var(--accent-ink)}
 /* The result grid is scrollable, so it is focusable; when it is focused the
    outline must land on the box, not be swallowed by the table. */
 .tablewrap:focus-visible{box-shadow:var(--ring);border-radius:var(--r-md)}
@@ -399,7 +464,7 @@ button.small.ghost.on:hover{background:var(--accent-soft);color:var(--accent)}
 .searchhit:hover,.searchhit:focus-visible{background:var(--surface-2);outline:none}
 .searchhit-title{font-size:13px;font-weight:600}
 .searchhit-meta{font-size:11.5px;color:var(--text-3)}
-.bottomlesson{display:flex;align-items:center;justify-content:space-between;gap:12px;margin-top:26px;padding-top:18px;border-top:1px solid var(--line);max-width:720px}
+.bottomlesson{display:flex;align-items:center;justify-content:space-between;gap:12px;flex-wrap:wrap;margin-top:26px;padding-top:18px;border-top:1px solid var(--line);max-width:720px}
 
 /* Chapter index + sections */
 .chapterindex{border:0;background:var(--surface);border-radius:var(--r-md);padding:16px 18px 10px;margin:20px 0 4px;max-width:720px}
@@ -415,6 +480,17 @@ button.small.ghost.on:hover{background:var(--accent-soft);color:var(--accent)}
 .sec-kicker{font-family:var(--mono);font-size:10px;letter-spacing:.1em;color:var(--text-3);flex:none}
 .sec-head h2{font-size:18px;margin:0;flex:1;min-width:0}
 .sec-meta{flex:none;font-family:var(--mono);font-size:10.5px;color:var(--text-3)}
+/* On a phone the kicker + heading + meta + bookmark control cannot share one
+   nowrap line: the heading was being squeezed to 61px and clipped ("How the
+   tables connect"). Let the heading take a line of its own, with the kicker
+   and meta as a small row above it. */
+@media(max-width:760px){
+  .sec-head{flex-wrap:wrap;margin-top:26px;padding-top:16px}
+  .sec-head h2{flex:1 1 100%;order:2}
+  .sec-kicker{order:1}
+  .sec-meta{order:3}
+  .sec-head .secbookmark{order:4;margin-left:auto}
+}
 
 /* Tables drawer */
 .drawer-back{position:fixed;inset:0;z-index:45;background:rgba(20,22,26,.42);opacity:0;pointer-events:none;transition:opacity var(--dur) var(--ease)}
@@ -467,7 +543,7 @@ select{-webkit-appearance:none;appearance:none;padding-right:32px;background-ima
 .choice.selected{border-color:var(--accent);background:var(--accent-soft);box-shadow:none}
 .choice.selected span{color:var(--text-2)}
 .themerow{display:flex;gap:10px;margin-top:8px;flex-wrap:wrap}
-.themecard{flex:1;min-width:140px;border:1px solid transparent;border-radius:var(--r-md);padding:12px;background:var(--surface-2);text-align:left;flex-direction:column;align-items:stretch;gap:8px}
+.themecard{flex:1;min-width:min(140px,100%);border:1px solid transparent;border-radius:var(--r-md);padding:12px;background:var(--surface-2);text-align:left;flex-direction:column;align-items:stretch;gap:8px}
 .themecard .swatch{height:44px;border-radius:var(--r-sm);border:1px solid var(--line);overflow:hidden;display:flex}
 .themecard .swatch i{flex:1}
 .themecard.selected{border-color:var(--accent)}
@@ -477,6 +553,10 @@ select{-webkit-appearance:none;appearance:none;padding-right:32px;background-ima
 .toggle .tl{font-size:13px;font-weight:500}
 .toggle .ts{font-size:12px;color:var(--text-3);margin-top:2px}
 .switch{position:relative;width:40px;height:22px;border-radius:var(--pill);background:var(--surface-3);border:1px solid var(--line-strong);flex:none;cursor:pointer;transition:background var(--dur) var(--ease)}
+/* The track keeps its 22px shape, but the pointer target is grown to ~32px
+   tall with a transparent pseudo-element: on a touch screen the drawn switch
+   was the smallest thing on the Appearance screen to hit. */
+.switch::before{content:"";position:absolute;inset:-6px -2px;border-radius:var(--pill)}
 .switch::after{content:"";position:absolute;top:2px;left:2px;width:16px;height:16px;border-radius:50%;background:var(--surface);border:1px solid var(--line-strong);transition:transform var(--dur) var(--ease)}
 .switch[aria-checked="true"]{background:var(--accent-solid);border-color:var(--accent-solid)}
 .switch[aria-checked="true"]::after{transform:translateX(18px);background:#fff}
@@ -494,24 +574,24 @@ select{-webkit-appearance:none;appearance:none;padding-right:32px;background-ima
 .authtab.active{background:var(--surface);color:var(--text);box-shadow:var(--shadow)}
 .authtitle{font-size:22px;margin-top:2px}
 .authtagline{font-size:12.5px;line-height:1.6;margin-top:-6px}
-.authinfo{display:flex;align-items:center;gap:8px;background:var(--accent-soft);color:var(--accent);border-radius:var(--r-sm);padding:9px 11px;font-size:12.5px}
-.autherr{display:flex;align-items:flex-start;gap:8px;background:var(--red-soft);color:var(--red);border-radius:var(--r-sm);padding:10px 12px;font-size:12.5px;line-height:1.5}
+.authinfo{display:flex;align-items:center;gap:8px;background:var(--accent-soft);color:var(--accent-ink);border-radius:var(--r-sm);padding:9px 11px;font-size:12.5px}
+.autherr{display:flex;align-items:flex-start;gap:8px;background:var(--red-soft);color:var(--red-ink);border-radius:var(--r-sm);padding:10px 12px;font-size:12.5px;line-height:1.5}
 .autherr .ico{width:15px;height:15px;flex:none;margin-top:1px}
-.authfielderr{color:var(--red);font-size:11.5px}
+.authfielderr{color:var(--red-ink);font-size:11.5px}
 .authcard form{display:flex;flex-direction:column}
 .authcard .field:first-child{margin-top:2px}
 .authtsubmit{width:100%;margin-top:18px;padding:10px 13px}
 .authhint{display:flex;align-items:flex-start;gap:8px;font-size:12px;color:var(--text-3);line-height:1.55;border-top:1px solid var(--line);padding-top:14px}
-.authhint .ico{width:15px;height:15px;flex:none;color:var(--accent);margin-top:1px}
+.authhint .ico{width:15px;height:15px;flex:none;color:var(--accent-ink);margin-top:1px}
 .authhint.subtle{border-top:0;padding-top:0}
 .authhint.subtle .ico{color:var(--text-3)}
 
 /* ============ Responsive ============ */
 @media(max-width:1080px){
-  .grid2,.lessonlayout{grid-template-columns:1fr}
+  .grid2,.lessonlayout{grid-template-columns:minmax(0,1fr)}
   .lessonside{display:none}
-  .grid3{grid-template-columns:1fr 1fr}
-  .stats{grid-template-columns:repeat(2,1fr)}
+  .grid3{grid-template-columns:repeat(2,minmax(0,1fr))}
+  .stats{grid-template-columns:repeat(2,minmax(0,1fr))}
 }
 @media(max-width:760px){
   .app{grid-template-columns:64px minmax(0,1fr)}
@@ -525,7 +605,7 @@ select{-webkit-appearance:none;appearance:none;padding-right:32px;background-ima
   .home h1{font-size:30px}
   .pagehead,.lessonheading{flex-direction:column}
   .lessonmain{padding:20px 16px 60px}
-  .grid3,.choicegrid,.stats{grid-template-columns:1fr}
+  .grid3,.choicegrid,.stats{grid-template-columns:minmax(0,1fr)}
   .hide-small{display:none}
 }
 
@@ -538,15 +618,16 @@ select{-webkit-appearance:none;appearance:none;padding-right:32px;background-ima
 .netpill{display:inline-flex;align-items:center;gap:6px;font-family:var(--mono);font-size:10.5px;color:var(--text-3);background:var(--surface-2);border-radius:999px;padding:3px 9px}
 .netpill .dot{width:6px;height:6px;border-radius:50%;background:var(--green);display:inline-block}
 .netpill.err .dot{background:var(--red)}
-.apiurl{font-family:var(--mono);font-size:12px;color:var(--text-2);background:var(--surface-2);border-radius:6px;padding:8px 10px;display:block;margin:8px 0 4px}
+.apiurl{font-family:var(--mono);font-size:12px;color:var(--text-2);background:var(--surface-2);border-radius:6px;padding:8px 10px;display:block;margin:8px 0 4px;overflow-wrap:anywhere}
 .apilog{margin-top:8px;border-top:1px solid var(--line)}
-.apireq{display:grid;grid-template-columns:auto 1fr auto auto;gap:10px;align-items:center;padding:8px 0;border-bottom:1px solid var(--line);font-family:var(--mono);font-size:11.5px}
+.apireq{display:grid;grid-template-columns:auto minmax(0,1fr) auto auto;gap:10px;align-items:center;padding:8px 0;border-bottom:1px solid var(--line);font-family:var(--mono);font-size:11.5px}
+.apireq>span{min-width:0;overflow-wrap:anywhere}
 .apireq:last-child{border-bottom:0}
-.apireq .verb{color:var(--accent);font-weight:600}
+.apireq .verb{color:var(--accent-ink);font-weight:600}
 .apireq .ms{color:var(--text-3)}
 .apireq .stat{font-weight:600}
-.apireq .stat.ok{color:var(--green)}
-.apireq .stat.err{color:var(--red)}
+.apireq .stat.ok{color:var(--green-ink)}
+.apireq .stat.err{color:var(--red-ink)}
 
 /* ---------- markdown + mermaid ---------- */
 .mdbody{color:var(--text);font-size:14.5px;line-height:1.75}
@@ -557,6 +638,19 @@ select{-webkit-appearance:none;appearance:none;padding-right:32px;background-ima
 .mdbody h2{font-size:17px}
 .mdbody h3{font-size:15px;letter-spacing:0}
 .mdbody strong{font-weight:600}
+/* `<details>` is authored into the chapter markdown ("Check yourself" answers)
+   and previously rendered as a raw browser disclosure: a 14.5px triangle row
+   with no pointer cue, no hover and nothing tying it to the panel language.
+   Give it the product's own affordance instead. */
+.mdbody details{margin:14px 0;border:0;border-radius:var(--r-md);background:var(--surface-2);padding:0 14px}
+.mdbody summary{display:flex;align-items:center;gap:9px;padding:11px 0;font-size:13px;font-weight:500;color:var(--text-2);cursor:pointer;list-style:none}
+.mdbody summary::-webkit-details-marker{display:none}
+.mdbody summary::before{content:"";width:0;height:0;border-left:5px solid currentColor;border-top:4px solid transparent;border-bottom:4px solid transparent;transition:transform .15s var(--ease)}
+.mdbody details[open]>summary::before{transform:rotate(90deg)}
+.mdbody summary:hover{color:var(--text)}
+.mdbody details[open]>summary{color:var(--text)}
+.mdbody details>*:not(summary){max-width:66ch}
+.mdbody details>p:last-child{padding-bottom:13px}
 .mdbody ul,.mdbody ol{margin:12px 0;padding-left:22px}
 .mdbody li{margin:3px 0}
 .mdbody li>ul,.mdbody li>ol{margin:3px 0}
@@ -575,3 +669,127 @@ select{-webkit-appearance:none;appearance:none;padding-right:32px;background-ima
 .qc-mermaid foreignObject>div,.qc-mermaid foreignObject>span,.qc-mermaid foreignObject p{overflow:visible!important;white-space:nowrap}
 .qc-mermaid foreignObject>div,.qc-mermaid foreignObject>span,.qc-mermaid foreignObject p,.qc-mermaid svg text{text-transform:none}
 .qc-mermaid pre{width:100%;margin:0;padding:0;background:transparent;border:0;text-align:left}
+
+/* ============ M5 plan viewer ============
+   Additive only: the panel reuses the existing tokens and the .fb / .checklist /
+   .qerr vocabulary so it reads as another part of the cell, not a new surface. */
+.planview{margin-top:12px;border:1px solid var(--line);border-radius:var(--r-md);background:var(--surface-2);padding:12px 14px}
+.planview .qerr{margin-top:0}
+.planhead{display:flex;align-items:flex-start;justify-content:space-between;gap:12px;flex-wrap:wrap}
+.planheadmain{display:flex;align-items:center;gap:10px;flex-wrap:wrap}
+.plantitle{display:inline-flex;align-items:center;gap:7px;font-weight:600;font-size:13px}
+.plantitle .ico{width:15px;height:15px;color:var(--accent-ink)}
+.planmeta{display:flex;align-items:center;gap:8px;flex-wrap:wrap;font-size:11px;color:var(--text-3)}
+.planmeta .mono{font-size:11px}
+.planprec{display:inline-flex;align-items:center;gap:7px;padding:3px 9px;border-radius:var(--pill);font-family:var(--mono);font-size:10px;letter-spacing:.06em;background:var(--surface-3);color:var(--text-2);white-space:nowrap}
+.planprec.measured{background:var(--accent-soft);color:var(--accent-ink)}
+.planprec.estimate{background:var(--amber-soft);color:var(--amber-ink)}
+.planprec.none{background:var(--red-soft);color:var(--red-ink)}
+.planpreclabel{font-family:var(--mono);font-size:10px;color:var(--text-3);font-weight:400;letter-spacing:0}
+.planprec.measured .planpreclabel{color:var(--accent-ink)}
+.planprec.estimate .planpreclabel{color:var(--amber-ink)}
+.plancounts{display:flex;flex-wrap:wrap;gap:6px;margin-top:10px}
+.planstat{font-size:11px;color:var(--text-2);background:var(--surface);border:1px solid var(--line);border-radius:var(--pill);padding:3px 10px}
+.planstat b{font-family:var(--mono);font-weight:600;color:var(--text)}
+.planwarn{display:flex;align-items:flex-start;gap:9px;margin-top:10px;padding:9px 11px;border-radius:var(--r-sm);background:var(--amber-soft);color:var(--text);font-size:12.5px;line-height:1.55}
+.planwarn.subtle{background:var(--surface-3)}
+.planwarn .ico{width:15px;height:15px;flex:none;color:var(--amber-ink);margin-top:1px}
+.planwarn.subtle .ico{color:var(--text-3)}
+.plantree{display:flex;flex-direction:column;gap:6px;margin-top:12px}
+.plannode{border-left:2px solid var(--line);padding:6px 0 6px 10px}
+.plannode.depth-1{border-left-color:var(--line-strong)}
+.plannode.depth-2{border-left-color:var(--accent-line)}
+.plannoderow{display:flex;align-items:center;gap:8px;flex-wrap:wrap}
+.plantype{font-family:var(--mono);font-size:11px;font-weight:600;color:var(--text);background:var(--surface);border:1px solid var(--line);border-radius:4px;padding:1px 7px;white-space:nowrap}
+.planrel{font-size:11.5px;color:var(--text-2)}
+.planindex{font-size:11px;color:var(--accent-ink);background:var(--accent-soft);border-radius:4px;padding:1px 6px}
+.planjoin{font-size:10.5px;font-family:var(--mono);color:var(--text-3);text-transform:uppercase;letter-spacing:.04em}
+.planflag{font-size:10.5px;font-family:var(--mono);color:var(--amber-ink);background:var(--amber-soft);border-radius:999px;padding:2px 8px;white-space:nowrap}
+.planbars{display:flex;align-items:center;gap:8px;margin-top:5px;max-width:340px}
+.planbar{flex:1;height:5px;border-radius:999px;background:var(--surface-3);overflow:hidden}
+.planbarfill{display:block;height:100%;background:var(--accent);border-radius:999px}
+.planshare{font-size:10.5px;color:var(--text-3);white-space:nowrap}
+.plannums{display:flex;flex-wrap:wrap;gap:6px 14px;margin-top:6px;font-size:11.5px;color:var(--text-2)}
+.plannum{display:inline-flex;align-items:center;gap:5px;white-space:nowrap}
+.plannumk{font-family:var(--mono);font-size:10px;color:var(--text-3);text-transform:uppercase;letter-spacing:.04em}
+.plannum b{font-family:var(--mono);font-weight:600;color:var(--text)}
+.plantime{align-items:baseline}
+.planexpr{margin-top:4px;font-size:11px;color:var(--code-text);background:var(--code-bg);border:1px solid var(--code-line);border-radius:var(--r-xs);padding:4px 8px;overflow-x:auto;white-space:pre-wrap}
+.planexprk{font-size:9.5px;color:var(--text-3);text-transform:uppercase;letter-spacing:.05em;margin-right:6px}
+.planchecks{margin-top:12px}
+.planchecks h3,.plancontract h3{font-size:12px;text-transform:uppercase;letter-spacing:.05em;color:var(--text-3);font-family:var(--mono);font-weight:500;margin-bottom:2px}
+.plancontract{margin-top:12px}
+.plancontractlist{list-style:none;padding:0;margin:4px 0 0;display:flex;flex-direction:column;gap:3px;font-size:12.5px;color:var(--text-2)}
+.plancontractlist li{display:flex;gap:6px;align-items:baseline}
+.plancontractlist li::before{content:'·';color:var(--text-3)}
+.planmark{margin-top:6px;font-size:11.5px}
+.planhint{display:flex;align-items:flex-start;gap:8px;margin-top:8px;font-size:12px;color:var(--text-3);line-height:1.55}
+.planhint .ico{width:15px;height:15px;flex:none;color:var(--text-3);margin-top:1px}
+.planenv{margin-top:12px;border-top:1px solid var(--line);padding-top:10px}
+.planenv>summary{display:flex;align-items:center;gap:7px;cursor:pointer;font-size:12px;font-weight:600;color:var(--text-2)}
+.planenv>summary .ico{width:14px;height:14px;color:var(--accent-ink)}
+.planenvbody{margin-top:8px}
+.planenvbody h4{font-family:var(--mono);font-size:10px;text-transform:uppercase;letter-spacing:.06em;color:var(--text-3);font-weight:500;margin:10px 0 4px}
+.planenvbody h4 .muted{text-transform:none;letter-spacing:0}
+.planenvgrid{display:flex;flex-wrap:wrap;gap:6px 18px;font-size:12px}
+.planenvgrid>div{display:flex;flex-direction:column;gap:1px}
+.planenvk{font-family:var(--mono);font-size:10px;text-transform:uppercase;letter-spacing:.05em;color:var(--text-3)}
+.plankv{display:grid;grid-template-columns:auto 1fr;gap:2px 14px;margin:0;font-size:11.5px}
+.plankv dt{font-family:var(--mono);color:var(--text-3)}
+.plankv dd{margin:0;font-family:var(--mono);color:var(--text-2)}
+.planidx{list-style:none;padding:0;margin:0;display:flex;flex-direction:column;gap:3px;font-size:11.5px;color:var(--text-2)}
+.planidx li{display:flex;align-items:center;gap:8px;flex-wrap:wrap}
+.planused{font-family:var(--mono);font-size:9.5px;text-transform:uppercase;letter-spacing:.05em;color:var(--accent-ink);background:var(--accent-soft);border-radius:999px;padding:1px 7px}
+.planraw{margin-top:12px;border-top:1px solid var(--line);padding-top:10px}
+.planraw .muted{font-size:11px;margin-left:8px}
+.planrawjson{margin:10px 0 0;max-height:320px;overflow:auto;background:var(--code-bg);border:1px solid var(--code-line);border-radius:var(--r-sm);padding:11px 13px;font-family:var(--mono);font-size:11.5px;line-height:1.6;color:var(--code-text);white-space:pre}
+/* The plan action row in a cell: the same shape as .runrow so it sits inline. */
+.planactions{display:flex;align-items:center;gap:8px;flex-wrap:wrap;margin-top:10px}
+.planactions .muted{font-size:11.5px}
+.planunsupported{display:flex;align-items:center;gap:8px;font-size:11.5px;color:var(--text-3);background:var(--surface-2);border-radius:var(--r-sm);padding:7px 10px}
+.planunsupported .ico{width:14px;height:14px;flex:none}
+.plancaptured{display:inline-flex;align-items:baseline;gap:6px}
+
+/* ============ Dialect badge (M6 step 7) ============ */
+/* One word for the engine a chapter runs on, beside a chapter title and on a
+   course card. It borrows the pill's shape and the mono metadata scale, and
+   adds only the three states the badge has to be honest about: served,
+   refused, and "the engine has not answered yet". */
+.dialbadge{display:inline-flex;align-items:center;gap:6px;padding:3px 9px;border:1px solid var(--line);border-radius:var(--pill);background:var(--surface-2);font-family:var(--mono);font-size:10.5px;letter-spacing:.04em;color:var(--text-3);font-weight:500;white-space:nowrap;vertical-align:middle}
+.dialbadge .ico{width:12px;height:12px;flex:none;color:var(--text-3)}
+.dialbadge.served{background:var(--accent-soft);border-color:var(--accent-line);color:var(--accent-ink)}
+.dialbadge.served .ico{color:var(--accent-ink)}
+.dialbadge.mismatch{background:var(--amber-soft);border-color:transparent;color:var(--amber-ink)}
+.dialbadge.mismatch .ico{color:var(--amber-ink)}
+/* Beside the chapter title: same title scale, with the badge as a sibling. */
+.chaptertitle{display:flex;align-items:center;gap:10px;flex-wrap:wrap;margin-top:10px}
+.lessonheading .chaptertitle h1{margin-top:0}
+.lessontitle{display:flex;align-items:center;gap:8px;min-width:0}
+@media(max-width:600px){.lessontitle{flex-wrap:wrap}}
+.lessontitle strong{flex:0 1 auto;min-width:0}
+/* The refusal lives with the Run control it explains, inside the cell. */
+.dialrefusal{display:flex;align-items:center;gap:10px;flex-wrap:wrap;margin:10px 14px 0;padding:9px 12px;border-radius:var(--r-md);background:var(--amber-soft);font-size:12.5px;color:var(--text-2)}
+.dialrefusal .ico{width:15px;height:15px;flex:none;color:var(--amber-ink)}
+.dialrefusal .muted{font-size:11.5px}
+
+/* Narrow viewports: a label+switch row needs to give the control room rather
+   than squeezing the label, and a row of three chapter buttons must be allowed
+   to wrap (their min-content alone is ~450px). */
+@media(max-width:760px){
+  .toggle{flex-wrap:wrap}
+  .toggle .switch{margin-left:auto}
+  .bottomlesson{justify-content:flex-start}
+  .bottomlesson button{flex:1 1 auto;justify-content:center}
+}
+
+/* ≤600px: the shell header and the dense metadata rows run out of room before
+   the layout breakpoints fire. The keyboard hints are meaningless without a
+   physical keyboard, and a report row may stack instead of clipping. */
+@media(max-width:600px){
+  .searchbox{margin:0 8px}
+  .searchbox .kbd{display:none}
+  .shell>header{padding:0 12px;gap:8px}
+  #crumb{flex:0 1 auto;max-width:45%}
+  .reportrow{flex-wrap:wrap;gap:2px 12px}
+  .toggle{gap:8px}
+}

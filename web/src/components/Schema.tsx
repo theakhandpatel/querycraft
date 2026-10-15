@@ -1,19 +1,44 @@
 import React, { useEffect, useState } from 'react';
-import type { ExecutionApi, TableDef } from '../types';
+import { DEFAULT_DATASET, DEFAULT_DIALECT } from '../types';
+import type { DatasetId, Dialect, ExecutionApi, TableDef } from '../types';
 
-export default function Schema({ api, tables: tablesProp }: { api: ExecutionApi; tables?: TableDef[] }) {
+export default function Schema({
+  api,
+  tables: tablesProp,
+  dataset = DEFAULT_DATASET,
+  dialect = DEFAULT_DIALECT,
+}: {
+  api: ExecutionApi;
+  tables?: TableDef[];
+  /** M5. Which fixture to describe. The two datasets are the same schema at two
+      scales, so the wrong one is not an obvious error in the drawer — it is a
+      column list that happens to be right next to numbers that are not. The
+      drawer passes the dataset its course runs on. */
+  dataset?: DatasetId;
+  /** M6. Which engine's schema to describe. The SQLite fixture is a mirror of
+      commerce but its declared types are different claims
+      (`INTEGER`/`TEXT`/`NUMERIC`/`DATE`/`TIMESTAMP`/`BOOLEAN`), so describing
+      the PostgreSQL relations to a SQLite chapter would name a schema the
+      chapter's engine does not have. The drawer passes the dialect the open
+      chapter resolves to. */
+  dialect?: Dialect;
+}) {
   const [tables, setTables] = useState<TableDef[] | null>(tablesProp || null);
   useEffect(() => {
     if (tablesProp) return;
     let alive = true;
-    api.getTables().then((res) => {
+    /* Cleared first: when the dataset changes, the previous fixture's tables are
+       not a preview of this one, and leaving them up would label perf columns
+       with commerce row counts. */
+    setTables(null);
+    api.getTables(dataset, dialect).then((res) => {
       if (alive) setTables(res.tables);
     });
     return () => {
       alive = false;
     };
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, []);
+  }, [dataset, dialect]);
   if (!tables) return <div className="empty">Loading schema…</div>;
   return (
     <div className="schema">

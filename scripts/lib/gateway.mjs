@@ -23,6 +23,79 @@ export function backendDir() {
   return process.env.QC_BACKEND ? path.resolve(process.env.QC_BACKEND) : path.join(repoRoot, 'backend');
 }
 
+/*
+ * One per-run scratch root.
+ *
+ * Every artifact this harness makes -- the compiled gateway binary, an isolated
+ * PostgreSQL cluster, the embedded server's own postgres log -- lives under a
+ * single directory that is removed when the run ends, however it ends. These
+ * used to be separate `qc-<tag>-<pid>` paths under os.tmpdir() that nothing
+ * owned, so each audit (and each `make test`) left 50-150 MB behind forever; a
+ * machine that had run the suite a few hundred times held ~52 GiB of them.
+ *
+ * The removal is registered on `process.on('exit')`, which also runs for a
+ * failed run and for an explicit `process.exit(1)`, plus the fatal signals a
+ * harness run actually sees. A SIGKILL cannot be caught -- that run leaks,
+ * which is the documented, accepted limit.
+ */
+const runRoots = new Set();
+let runRootDir = null;
+let runCleanupInstalled = false;
+
+function removeRunRoots() {
+  for (const dir of runRoots) {
+    try {
+      fs.rmSync(dir, { recursive: true, force: true });
+    } catch { /* best effort: the run is ending either way */ }
+  }
+  runRoots.clear();
+}
+
+function installRunCleanup() {
+  if (runCleanupInstalled) return;
+  runCleanupInstalled = true;
+  process.on('exit', removeRunRoots);
+  for (const [signal, code] of [['SIGINT', 130], ['SIGTERM', 143], ['SIGHUP', 129]]) {
+    process.on(signal, () => {
+      removeRunRoots();
+      process.exit(code);
+    });
+  }
+}
+
+/**
+ * runRoot returns this process's scratch directory, creating it on first use.
+ * The name keeps the `qc-` prefix so `make disk` finds the harness footprint
+ * with one glob.
+ */
+export function runRoot(tag = 'run') {
+  installRunCleanup();
+  if (runRootDir === null) {
+    runRootDir = fs.mkdtempSync(path.join(os.tmpdir(), `qc-${tag}-`));
+    runRoots.add(runRootDir);
+  }
+  return runRootDir;
+}
+
+/** scratchDir returns (and creates) a named directory inside the run root. */
+export function scratchDir(name) {
+  const dir = path.join(runRoot(), name);
+  fs.mkdirSync(dir, { recursive: true });
+  return dir;
+}
+
+/**
+ * scratchTmp returns the directory handed to a spawned gateway as $TMPDIR.
+ *
+ * The embedded-postgres library writes its postgres log with
+ * `os.CreateTemp("", "embedded_postgres_log")` and never removes it, so owning
+ * the directory os.TempDir() resolves to is the only way to own that file.
+ */
+export function scratchTmp() {
+  return scratchDir('tmp');
+}
+
+/** freePort asks the OS for an unused TCP port. */
 /** freePort asks the OS for an unused TCP port. */
 export function freePort() {
   return new Promise((resolve, reject) => {
@@ -83,15 +156,20 @@ export async function postJSON(url, payload, timeoutMs = 30_000, headers = {}) {
  * not leave a gateway behind.
  */
 export function buildGateway(tag = 'audit') {
-  const bin = path.join(os.tmpdir(), `qc-${tag}-${process.pid}`, 'querycraft');
-  fs.mkdirSync(path.dirname(bin), { recursive: true });
+  const bin = path.join(scratchDir('bin'), `querycraft-${tag}`);
   const out = spawnSync(process.env.QC_GO || 'go', ['build', '-o', bin, './cmd/api'], {
     cwd: backendDir(),
     env: { ...process.env, GOTOOLCHAIN: 'local' },
     encoding: 'utf8',
   });
   if (out.status !== 0) {
-    throw new Error(`could not build the gateway:\n${out.stderr || out.stdout}`);
+    /* A spawn that never started reports status null with no stderr — the
+       message used to read "could not build the gateway:\nnull", which says
+       nothing about the actual cause (usually `go` not on PATH). */
+    const why = out.error ? String(out.error.message || out.error) : out.stderr || out.stdout || `exit ${out.status}`;
+    throw new Error(
+      `could not build the gateway (${process.env.QC_GO || 'go'} build ./cmd/api in ${backendDir()}): ${why}`,
+    );
   }
   return bin;
 }
@@ -106,7 +184,7 @@ export function buildGateway(tag = 'audit') {
 export async function startGateway(bin, extraEnv = {}, readyTimeoutMs = 120_000) {
   const port = await freePort();
   const child = spawn(bin, [], {
-    env: { ...process.env, QC_ADDR: `:${port}`, ...extraEnv },
+    env: { ...process.env, QC_ADDR: `127.0.0.1:${port}`, TMPDIR: scratchTmp(), ...extraEnv },
     stdio: ['ignore', 'pipe', 'pipe'],
     detached: true,
   });
@@ -144,7 +222,7 @@ export function stopGateway(child) {
 
 /** liveEnv returns an environment for a gateway with its own embedded PostgreSQL. */
 export async function liveEnv(tag = 'audit') {
-  const dir = path.join(os.tmpdir(), `qc-${tag}-pg-${process.pid}`);
+  const dir = scratchDir(`pg-${tag}`);
   return {
     QC_PG_PORT: String(await freePort()),
     QC_PG_DATA: path.join(dir, 'data'),

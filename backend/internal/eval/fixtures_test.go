@@ -88,6 +88,13 @@ func TestContractFixtureSuite(t *testing.T) {
 		if entry.IsDir() || !strings.HasSuffix(entry.Name(), ".json") {
 			continue
 		}
+		// perf-*.json is a different contract family: a PerfContract graded
+		// against a PlanBundle, read by backend/internal/perf and by
+		// web/scripts/plan-conformance-audit.mjs. It has no columns/rows to
+		// compare, so it is not a case for this comparator.
+		if strings.HasPrefix(entry.Name(), "perf-") {
+			continue
+		}
 		total++
 		name := entry.Name()
 		t.Run(name, func(t *testing.T) {

@@ -127,7 +127,7 @@ function buildGateway(dir) {
 async function startGateway(bin, extraEnv) {
   const port = await freePort();
   const child = spawn(bin, [], {
-    env: { ...process.env, QC_ADDR: `:${port}`, ...extraEnv },
+    env: { ...process.env, QC_ADDR: `127.0.0.1:${port}`, TMPDIR: tmpRoot, ...extraEnv },
     stdio: ['ignore', 'pipe', 'pipe'],
   });
   let log = '';
@@ -389,7 +389,9 @@ let child = null;
 let base = process.env.QC_GATEWAY;
 let pgPort = null;
 let booted = false;
-const tmpRoot = path.join(os.tmpdir(), `qc-load-test-${process.pid}`);
+/* One per-run scratch root for the binary, the cluster and the embedded
+   server's postgres log, removed in the finally below however the run ends. */
+const tmpRoot = fs.mkdtempSync(path.join(os.tmpdir(), 'qc-load-test-'));
 
 try {
   if (base) {
@@ -596,6 +598,14 @@ try {
     }
   } else {
     console.log('\nshutdown: nothing to stop (QC_GATEWAY)');
+  }
+  /* Runs on the failure path too: the binary, the cluster and the postgres log
+     all live under tmpRoot, so removing it removes all three. */
+  try {
+    fs.rmSync(tmpRoot, { recursive: true, force: true });
+    console.log('shutdown: removed the harness scratch root');
+  } catch (err) {
+    console.log(`  WARN   could not remove ${tmpRoot}: ${err.message}`);
   }
 }
 

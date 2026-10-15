@@ -10,6 +10,9 @@ gateway (`backend/`). Both sides validate against these schemas in tests.
 | `exercise.schema.json` | An exercise bundle and its result contract (the `exercise` object of an `/answers/evaluate` request) |
 | `export.schema.json` | The client-side workbook export document (design §8.3), which is also the input the import validates before merging it |
 | `ai.schema.json` | The M4 AI generation surface (design §11): the generation request and its `outcome`, the activated `challengeArtifact` and its `provenance`, the stage evidence, and the tutoring, critique and defect surfaces. Its error enum is an AI envelope, separate from the closed QueryResult enum |
+| `plan.schema.json` | The M5 performance lab: `POST /explain` output (design §14 M5). `summary` and `environment` carry the deterministic, gradeable facts; `plan` is the engine's own JSON, reported verbatim; `timing_precision` names what the numbers are worth |
+| `perf-contract.schema.json` | The M5 plan-based result contract attached to a performance exercise. Structural assertions only — no timing field exists, by design |
+| `run.schema.json` | The agent-run audit trail: one generation run's whole transcript (`runTranscript`), the list shape (`runSummary`), and one ordered fact (`entry`). Read over `GET /runs` and `GET /runs/{id}` |
 
 `export.schema.json` is the odd one out: it describes no endpoint. It is the
 contract between the export and the import on the client, and it lives here so
@@ -41,6 +44,9 @@ against its schema. The full map:
 | `POST /challenges/{id}/critique` | `ai.schema.json` → `critiqueResponse` |
 | `POST /challenges/{id}/report` | `ai.schema.json` → `defectVerdict` |
 | `POST /challenges/{id}/patches/{patchID}` | `ai.schema.json` → `patchDecision` → `patchResult` |
+| `GET /runs` | `run.schema.json` → `runSummary[]` |
+| `GET /runs/{id}` | `run.schema.json` → `runTranscript` |
+| `POST /explain` | `plan.schema.json` (request `exercise.perf`: `perf-contract.schema.json`) |
 | `GET /openapi.json` | The OpenAPI document itself |
 | `GET /docs` | Swagger UI (HTML) |
 

@@ -1,4 +1,4 @@
-import { useEffect, useRef } from 'react';
+import { useEffect, useRef, useState } from 'react';
 import { renderMarkdown } from '../../lib/markdown';
 
 const RENDERED_ATTR = 'data-rendered';
@@ -18,15 +18,37 @@ function showMermaidSource(host: HTMLElement, source: string): void {
 
 export default function Markdown({ source, className }: { source: string; className?: string }) {
   const ref = useRef<HTMLDivElement>(null);
+  /* Mermaid paints its diagram into inline SVG attributes at render time, so a
+     diagram rendered for one palette keeps that palette's label fills when the
+     learner switches theme: the dark theme's label plates against the light
+     theme's text measured 2.55:1, and the reverse 1.09:1 — a diagram whose
+     labels cannot be read at all. Track the theme and re-render on change. */
+  const [theme, setTheme] = useState<'light' | 'dark'>(() => (isDark() ? 'dark' : 'light'));
+
+  useEffect(() => {
+    const el = document.documentElement;
+    const sync = () => setTheme(isDark() ? 'dark' : 'light');
+    sync();
+    const obs = new MutationObserver(sync);
+    obs.observe(el, { attributes: true, attributeFilter: ['data-theme'] });
+    return () => obs.disconnect();
+  }, []);
 
   useEffect(() => {
     let alive = true;
     const host = ref.current;
     if (!host) return;
 
-    const nodes = Array.from(
-      host.querySelectorAll<HTMLDivElement>(`div.qc-mermaid:not([${RENDERED_ATTR}])`),
-    );
+    /* Any node rendered under a previous theme is put back to its source-only
+       state first: its `data-mermaid` attribute still carries the definition,
+       so clearing the children is enough to render it again. */
+    const nodes = Array.from(host.querySelectorAll<HTMLDivElement>('div.qc-mermaid'));
+    for (const node of nodes) {
+      if (node.hasAttribute(RENDERED_ATTR)) {
+        node.removeAttribute(RENDERED_ATTR);
+        node.replaceChildren();
+      }
+    }
     if (nodes.length === 0) return;
 
     const run = async (): Promise<void> => {
@@ -59,7 +81,7 @@ export default function Markdown({ source, className }: { source: string; classN
       mermaid.initialize({
         startOnLoad: false,
         securityLevel: 'strict',
-        theme: isDark() ? 'dark' : 'default',
+        theme: theme === 'dark' ? 'dark' : 'default',
         fontFamily: pageFont,
         themeVariables: { fontFamily: pageFont, fontSize: '14px' },
       });
@@ -87,7 +109,7 @@ export default function Markdown({ source, className }: { source: string; classN
     return () => {
       alive = false;
     };
-  }, [source]);
+  }, [source, theme]);
 
   return (
     <div

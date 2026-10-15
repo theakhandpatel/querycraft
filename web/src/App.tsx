@@ -18,7 +18,7 @@ import ChallengeLabScreen from './components/screens/ChallengeLabScreen';
 import AppearanceScreen from './components/screens/AppearanceScreen';
 import AuthScreen from './components/screens/AuthScreen';
 import { useStore } from './state/store';
-import type { Screen } from './types';
+import { AUTHORING_SCREENS } from './lib/route';
 
 const SCREENS = {
   home: HomeScreen,
@@ -37,9 +37,9 @@ const SCREENS = {
 export default function App() {
   const s = useStore();
   /* Authoring lives behind the admin role; a learner landing on one of those
-     routes (stale nav, deep link) is sent back to Home rather than shown it. */
-  const AUTHORING: Screen[] = ['create', 'building', 'review'];
-  const Active = s.role !== 'admin' && AUTHORING.includes(s.screen) ? HomeScreen : SCREENS[s.screen] || HomeScreen;
+     routes (stale nav, deep link) is sent back to Home rather than shown it.
+     The router applies the same list to the fragment. */
+  const Active = s.role !== 'admin' && AUTHORING_SCREENS.includes(s.screen) ? HomeScreen : SCREENS[s.screen] || HomeScreen;
 
   useEffect(() => {
     function onKey(e: KeyboardEvent) {
@@ -52,13 +52,17 @@ export default function App() {
     return () => document.removeEventListener('keydown', onKey);
   }, [s]);
 
-  /* Hold the first paint until we know who is signed in, so a restored session
-     never flashes the sign-in screen on reload. */
-  if (!s.authReady) {
+  /* Hold the first paint until we know who is signed in — and, when the link
+     named a course the catalog does not have, until that course has been
+     fetched from the gateway. Painting before either would show the wrong
+     screen and then correct itself. */
+  if (!s.authReady || s.courseResolving) {
     return (
       <>
         <IconSprite />
-        <div className="authwrap"><span className="spin" role="status" aria-label="Restoring session" /></div>
+        <div className="authwrap">
+          <span className="spin" role="status" aria-label={s.authReady ? 'Opening your course' : 'Restoring session'} />
+        </div>
       </>
     );
   }

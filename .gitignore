@@ -16,3 +16,14 @@ backend/bin/
 # The embedded SPA is a build artifact; keep only the placeholder.
 backend/internal/webui/dist/*
 !backend/internal/webui/dist/.gitkeep
+
+# agent scratch (not part of the product)
+.tmp/
+
+# vendor/agent tooling directories — agent-side state, never product code
+.agents/
+.codex/
+.gemini/
+.opencode/
+.impeccable/
+.tmp-perf-probe.mjs

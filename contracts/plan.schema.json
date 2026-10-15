@@ -1,0 +1,192 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://querycraft.app/contracts/plan.schema.json",
+  "title": "PlanBundle",
+  "description": "The M5 performance-lab result (docs/m5-implementation-plan.md). `summary` and `environment` are the deterministic, gradeable facts; `plan` is the engine's own JSON plan, reported verbatim and never graded. `timing_precision` says what the numbers next to it are worth.",
+  "type": "object",
+  "required": [
+    "status",
+    "analyze",
+    "timing_precision",
+    "engine",
+    "plan",
+    "summary",
+    "environment",
+    "warnings",
+    "duration_ms",
+    "error"
+  ],
+  "additionalProperties": false,
+  "properties": {
+    "status": { "enum": ["succeeded", "failed"] },
+    "analyze": {
+      "type": "boolean",
+      "description": "True when the statement was executed (EXPLAIN ANALYZE), false when it was only planned."
+    },
+    "timing_precision": {
+      "enum": ["analyze", "estimate", "none"],
+      "description": "analyze: executed, per-node timings reported. estimate: planner cost only, no timings. none: no plan available (the request failed). No graded assertion may read a timing field."
+    },
+    "engine": { "type": "string" },
+    "plan": {
+      "description": "The root plan node exactly as the engine emitted it (PostgreSQL's FORMAT JSON). Null when the request failed.",
+      "type": ["object", "null"]
+    },
+    "summary": {
+      "type": "object",
+      "required": [
+        "node_count",
+        "node_types",
+        "relations",
+        "indexes_used",
+        "seq_scans",
+        "index_scans",
+        "max_estimated_rows",
+        "plan_rows",
+        "total_cost",
+        "nodes"
+      ],
+      "additionalProperties": false,
+      "properties": {
+        "node_count": { "type": "integer", "minimum": 0 },
+        "node_types": { "type": "array", "items": { "type": "string" } },
+        "relations": { "type": "array", "items": { "type": "string" } },
+        "indexes_used": { "type": "array", "items": { "type": "string" } },
+        "seq_scans": {
+          "type": "array",
+          "description": "Relations read by a sequential scan, with the planner's row estimate, so a caller can judge whether the scan was a choice or a mistake.",
+          "items": {
+            "type": "object",
+            "required": ["relation", "plan_rows"],
+            "properties": {
+              "relation": { "type": "string" },
+              "plan_rows": { "type": "number" }
+            }
+          }
+        },
+        "index_scans": {
+          "type": "array",
+          "items": {
+            "type": "object",
+            "required": ["relation", "index", "node_type"],
+            "properties": {
+              "relation": { "type": "string" },
+              "index": { "type": "string" },
+              "node_type": { "type": "string" }
+            }
+          }
+        },
+        "max_estimated_rows": { "type": "number" },
+        "plan_rows": { "type": "number" },
+        "total_cost": { "type": "number" },
+        "nodes": {
+          "type": "array",
+          "description": "A flat, depth-first walk of the plan, which is what a viewer renders. `actual_*` are null unless timing_precision is `analyze`.",
+          "items": {
+            "type": "object",
+            "required": ["depth", "node_type"],
+            "properties": {
+              "depth": { "type": "integer", "minimum": 0 },
+              "node_type": { "type": "string" },
+              "relation": { "type": ["string", "null"] },
+              "alias": { "type": ["string", "null"] },
+              "index": { "type": ["string", "null"] },
+              "join_type": { "type": ["string", "null"] },
+              "parent_relationship": { "type": ["string", "null"] },
+              "estimated_rows": { "type": ["number", "null"] },
+              "estimated_cost": { "type": ["number", "null"] },
+              "actual_rows": { "type": ["number", "null"] },
+              "actual_time_ms": { "type": ["number", "null"] },
+              "loops": { "type": ["number", "null"] },
+              "buffers_read": { "type": ["number", "null"] },
+              "filter": { "type": ["string", "null"] },
+              "index_condition": { "type": ["string", "null"] },
+              "sort_key": { "type": ["array", "null"], "items": { "type": "string" } },
+              "warnings": { "type": "array", "items": { "type": "string" } }
+            }
+          }
+        }
+      }
+    },
+    "environment": {
+      "description": "What the plan was produced against, so a number is never reported without the scale and settings that produced it (M5 exit gate).",
+      "type": "object",
+      "required": ["engine", "engine_version", "scale_factor", "row_counts", "indexes", "settings"],
+      "additionalProperties": false,
+      "properties": {
+        "engine": { "type": "string" },
+        "engine_version": { "type": "string" },
+        "scale_factor": { "type": "integer", "minimum": 0 },
+        "dataset": { "type": ["string", "null"] },
+        "row_counts": { "type": "object", "additionalProperties": { "type": "number" } },
+        "indexes": {
+          "type": "array",
+          "items": {
+            "type": "object",
+            "required": ["relation", "name"],
+            "properties": {
+              "relation": { "type": "string" },
+              "name": { "type": "string" },
+              "definition": { "type": ["string", "null"] }
+            }
+          }
+        },
+        "settings": {
+          "description": "Planner inputs that change the chosen plan. Reported read-only; M5 never rewrites them to make an exercise pass.",
+          "type": "object",
+          "additionalProperties": { "type": "string" }
+        }
+      }
+    },
+    "warnings": {
+      "type": "array",
+      "items": {
+        "type": "object",
+        "required": ["code", "message"],
+        "properties": {
+          "code": {
+            "enum": [
+              "PLAN_SEQ_SCAN_LARGE_TABLE",
+              "PLAN_ESTIMATE_OFF_BY_ORDERS_OF_MAGNITUDE",
+              "PLAN_NODE_CAP_REACHED",
+              "PLAN_ROW_CAP_REACHED",
+              "PLAN_SETTINGS_NON_DEFAULT",
+              "PLAN_ANALYZE_SKIPPED_NO_ENVIRONMENT"
+            ]
+          },
+          "message": { "type": "string" },
+          "relation": { "type": ["string", "null"] },
+          "node_type": { "type": ["string", "null"] }
+        }
+      }
+    },
+    "duration_ms": { "type": "number", "minimum": 0 },
+    "statement": { "type": ["string", "null"] },
+    "request_id": { "type": ["string", "null"] },
+    "error": {
+      "oneOf": [
+        { "type": "null" },
+        {
+          "type": "object",
+          "required": ["code", "message"],
+          "properties": {
+            "code": {
+              "enum": [
+                "EMPTY_QUERY",
+                "QUERY_SYNTAX_ERROR",
+                "QUERY_RUNTIME_ERROR",
+                "QUERY_TIMEOUT",
+                "RESULT_LIMIT_EXCEEDED",
+                "ENVIRONMENT_UNAVAILABLE",
+                "PERSISTENCE_FAILED",
+                "EVALUATION_ERROR"
+              ]
+            },
+            "message": { "type": "string" },
+            "detail": { "type": ["string", "null"] }
+          }
+        }
+      ]
+    }
+  }
+}

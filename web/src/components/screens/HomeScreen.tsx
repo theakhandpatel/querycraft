@@ -1,8 +1,10 @@
 import React from 'react';
 import Icon from '../ui/Icon';
 import Ring from '../ui/Ring';
+import DialectBadge from '../ui/DialectBadge';
 import { useStore } from '../../state/store';
 import { COURSES } from '../../data/curriculum';
+import { effectiveDialect } from '../../lib/dialect';
 import { coursePassed, courseDoneCount, courseExerciseTotal, lessonPercent, nextChapterIndex, courseShort, activeModules } from '../../lib/model';
 import { currentStreak } from '../../lib/progress';
 import type { Course } from '../../types';
@@ -39,7 +41,7 @@ export default function HomeScreen() {
       </div>
 
       <div className="continue">
-        <div style={{ flex: 1, minWidth: 280 }}>
+        <div style={{ flex: 1, minWidth: 'min(280px, 100%)' }}>
           <div className="eyebrow">Continue learning · {course.domain}</div>
           <h2>{course.title}</h2>
           {nextM ? (
@@ -124,7 +126,11 @@ export default function HomeScreen() {
           ) : (
             more.map((c) => (
               <div className="coursecard" key={c.id}>
-                <div className="coursemeta"><span className="pill subtle">{c.level}</span></div>
+                <div className="coursemeta">
+                  <span className="pill subtle">{c.level}</span>
+                  {/* The course card says which engine its chapters run on. */}
+                  <DialectBadge dialect={effectiveDialect(undefined, c)} />
+                </div>
                 <h2>{c.title}</h2>
                 <p>{c.blurb}</p>
                 <div className="actions mt-8">

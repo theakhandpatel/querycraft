@@ -1,7 +1,11 @@
 import React, { useEffect, useRef, useState } from 'react';
 import Icon from './ui/Icon';
 import Schema from './Schema';
+import { useChapterDialect } from './ui/DialectBadge';
 import { useStore } from '../state/store';
+import { datasetFor } from '../lib/dataset';
+import { dialectLabel } from '../lib/dialect';
+import { DEFAULT_DATASET } from '../types';
 import type { EnvironmentInfo } from '../types';
 
 /** Everything the drawer can put a focus ring on. */
@@ -35,6 +39,17 @@ function focusable(el: HTMLElement): boolean {
  */
 export default function TablesDrawer() {
   const s = useStore();
+  /* M5. The drawer describes — and resets — the workspace of the course the
+     learner is in, not a hard-coded one. `plans` runs on the larger fixture, so
+     a drawer that listed commerce here would show the schema next to row counts
+     the course's exercises are not graded against. */
+  const dataset = datasetFor({ course: s.course });
+  /* M6 steps 6/7: the drawer describes the workspace of the chapter the learner
+     has open, so it resolves the dialect through the same call the badge and the
+     adapter use. Without this a SQLite chapter's drawer would list the
+     PostgreSQL relations and "restore my data" would reset the other engine. */
+  const activeModule = s.modules ? s.modules[s.activeLesson] ?? null : null;
+  const dialect = useChapterDialect(activeModule, s.course);
   const asideRef = useRef<HTMLElement | null>(null);
   const restoreRef = useRef<HTMLElement | null>(null);
 
@@ -106,7 +121,12 @@ export default function TablesDrawer() {
     setResetError(null);
     setResetNote(null);
     try {
-      const out = await s.api.resetEnvironment();
+      /* A stored course's environment is the sealed dataset plus that course's
+         own setup, so the reset names it and the adapter rebuilds both. A
+         built-in course has no such record, so it names none and the request is
+         the one it always was. */
+      const course = s.course.gateway === true ? s.course : null;
+      const out = await s.api.resetEnvironment(dataset, dialect, course);
       setResetNote(`Workspace restored in ${Math.round(out.duration_ms)} ms.`);
       setSchemaNonce((n) => n + 1);
       s.toast('Workspace restored to the original dataset.');
@@ -182,13 +202,17 @@ export default function TablesDrawer() {
         <div className="drawerhead">
           <div>
             <div className="eyebrow">Course dataset</div>
-            <h2>commerce · dataset_version 1</h2>
-            <p className="muted" style={{ fontSize: 12, marginTop: 4 }}>Generated with this course · 4 tables · ~290 rows</p>
+            <h2>{dataset} · {dialectLabel(dialect)} · dataset_version 1</h2>
+            <p className="muted" style={{ fontSize: 12, marginTop: 4 }}>
+              {dataset === DEFAULT_DATASET
+                ? 'Generated with this course · 4 tables · ~290 rows'
+                : "The plan lab's larger fixture · 4 tables · row counts below"}
+            </p>
           </div>
           <button className="small ghost" aria-label="Close" onClick={() => s.setTablesOpen(false)}><Icon name="x" /></button>
         </div>
         <div className="drawerbody">
-          {s.tablesOpen ? <Schema key={schemaNonce} api={s.api} /> : null}
+          {s.tablesOpen ? <Schema key={schemaNonce} api={s.api} dataset={dataset} dialect={dialect} /> : null}
         </div>
         <footer className="drawerfoot">
           <div className="eyebrow">Your workspace</div>

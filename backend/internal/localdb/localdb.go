@@ -17,6 +17,7 @@ import (
 	"net/url"
 	"os"
 	"path/filepath"
+	"sync"
 	"time"
 
 	embeddedpostgres "github.com/fergusstrange/embedded-postgres"
@@ -30,6 +31,7 @@ type Config struct {
 	DataPath     string // cluster data directory, e.g. .data/pg/data
 	RuntimePath  string // where extracted binaries live, e.g. .data/pg/runtime
 	BinariesPath string // download cache for the PostgreSQL binaries
+	TempDir      string // where the embedded server writes its postgres log; empty = os.TempDir(), which the library never cleans up. See startWithTempDir.
 	Port         uint32
 	User         string
 	Password     string
@@ -92,7 +94,12 @@ func Start(ctx context.Context, log *slog.Logger, cfg Config) (*Server, error) {
 	)
 
 	log.Info("starting embedded PostgreSQL", "port", cfg.Port, "data", cfg.DataPath)
-	if err := ep.Start(); err != nil {
+	if cfg.TempDir != "" {
+		if err := os.MkdirAll(cfg.TempDir, 0o700); err != nil {
+			return nil, fmt.Errorf("create the directory for the postgres log: %w", err)
+		}
+	}
+	if err := startWithTempDir(cfg.TempDir, ep.Start); err != nil {
 		return nil, fmt.Errorf("start embedded postgres: %w", err)
 	}
 
@@ -108,6 +115,46 @@ func Start(ctx context.Context, log *slog.Logger, cfg Config) (*Server, error) {
 	}
 	log.Info("embedded PostgreSQL ready", "port", cfg.Port)
 	return srv, nil
+}
+
+// tempDirMu serializes the process-wide $TMPDIR swap in startWithTempDir.
+//
+// The embedded-postgres library creates its postgres log with
+// os.CreateTemp("", "embedded_postgres_log") — which resolves os.TempDir(),
+// i.e. $TMPDIR at the moment of the call — and never removes the file. Every
+// boot that lets it use the OS temp directory therefore leaves a log behind:
+// one `go test ./...` of this repository accumulates one per cluster, and a
+// few hundred runs leave thousands of them in /tmp. Pointing $TMPDIR at a
+// directory the caller owns makes the log per-run and removes it with that
+// directory.
+var tempDirMu sync.Mutex
+
+// startWithTempDir runs start with $TMPDIR pointed at dir, restoring the
+// previous value afterwards. dir is left to the caller to create and to remove.
+//
+// The library's log file is already open and addressed by its absolute name by
+// the time start returns, so restoring $TMPDIR does not disturb the flush that
+// Stop performs.
+func startWithTempDir(dir string, start func() error) error {
+	if dir == "" {
+		return start()
+	}
+	tempDirMu.Lock()
+	defer tempDirMu.Unlock()
+
+	previous, had := os.LookupEnv("TMPDIR")
+	if err := os.Setenv("TMPDIR", dir); err != nil {
+		return fmt.Errorf("point TMPDIR at the postgres log directory: %w", err)
+	}
+	defer func() {
+		if had {
+			_ = os.Setenv("TMPDIR", previous)
+			return
+		}
+		_ = os.Unsetenv("TMPDIR")
+	}()
+
+	return start()
 }
 
 // adopt attaches to a postmaster already serving cfg's data directory.

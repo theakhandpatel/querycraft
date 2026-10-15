@@ -166,12 +166,19 @@ export default function AuthScreen() {
           </button>
         </form>
 
-        <div className="authhint">
-          <Icon name="shield" />
-          <span>
-            Local admin: <span className="mono">admin@querycraft.local</span> with an empty password.
-          </span>
-        </div>
+        {/* The seeded local administrator is a local-development convenience,
+            so the hint is shown only when the gateway itself reports that the
+            account really has an empty password (a loopback-only install). A
+            release that set QC_ADMIN_PASSWORD, or a gateway reached over the
+            network, reports false and no hint is shown. */}
+        {s.adminPasswordEmpty && (
+          <div className="authhint">
+            <Icon name="shield" />
+            <span>
+              Local admin: <span className="mono">admin@querycraft.local</span> with an empty password.
+            </span>
+          </div>
+        )}
 
         {api.mode === 'mock' && (
           <div className="authhint subtle">

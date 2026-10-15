@@ -1,13 +1,22 @@
 import React, { useEffect, useRef, useState } from 'react';
 import Icon from './ui/Icon';
 import ResultGrid from './ResultGrid';
+import PlanView from './PlanView';
+import { DialectRefusal, useChapterDialect, useDialectSupport } from './ui/DialectBadge';
 import { useStore } from '../state/store';
+import { gradePlan, type PlanBundle, type PlanCheck } from '../api/planContract';
+import { datasetFor } from '../lib/dataset';
+import { dialectLabel } from '../lib/dialect';
+import { servedDialects } from '../lib/dialectChoice';
 import type { Block, CheckResult, Course, CourseModule, EventKind, QueryResult } from '../types';
 
 type Feedback =
   | { kind: 'pending' }
   | { kind: 'error'; code: string }
   | { kind: 'hint'; hints: string[] }
+  | { kind: 'tutor'; message: string; hintLevel: number; revealsSolution: boolean }
+  | { kind: 'tutorPending' }
+  | { kind: 'tutorUnavailable'; reason: string }
   | { kind: 'solution' }
   | { kind: 'accepted' }
   | { kind: 'passed'; checks: CheckResult[] }
@@ -31,16 +40,70 @@ export default function SqlCell({ block, module: mod, course }: { block: Block; 
   const s = useStore();
   const isExercise = block.type === 'exercise';
   const id = block.id as string;
+  /* M5: which fixture this cell runs against. A perf exercise and a `plans`
+     chapter both resolve to the larger dataset; every other cell is the
+     commerce one, exactly as before. Resolved once here so Run, Check and the
+     plan capture cannot disagree about the database. */
+  const dataset = datasetFor({ course, block });
+  /* M6 step 7: the dialect this chapter runs on, and whether the engine behind
+     the seam can serve it. `supported` is `null` until the engine answers, so
+     Run is never disabled on a guess — only on the engine's own refusal. */
+  const dialect = useChapterDialect(mod, course);
+  const dialectSupport = useDialectSupport(dialect);
+  const dialectRefused = dialectSupport.supported === false;
+  /* Keyed by the cell, not the chapter: a chapter can hold several cells and
+     each one points its own Run control at its own refusal row, so the id has
+     to be unique in the document. */
+  const refusalId = `dialrefusal-${id}`;
+  /* M5: a perf exercise opts into the plan viewer. Plan support comes from the
+     capability block; an adapter that reports none, or one that is known not to
+     run an engine at all (the mock), disables the action with the reason shown —
+     the same honest pattern the AI lab uses when AI is off. Until capabilities
+     have been reported we do not *assume* support, but we do not refuse either:
+     the call itself answers truthfully if the engine cannot plan. */
+  const perf = isExercise ? block.perf : undefined;
+  const capsKnown = s.engineCaps !== null;
+  /* M6 step 6: the answer is per dialect, not per adapter — the browser adapter
+     hosts two engines and only one of them plans. An adapter that reports no
+     `explainDialects` means its `explain` answers for every dialect it serves. */
+  const explainDialects = s.engineCaps
+    ? s.engineCaps.explainDialects ?? (s.engineCaps.explain ? servedDialects(s.engineCaps) ?? [] : [])
+    : null;
+  const planBlockedReason =
+    s.api.mode === 'mock'
+      ? 'Plans need a real PostgreSQL engine. This adapter returns canned results and never runs SQL.'
+      : explainDialects !== null && !explainDialects.includes(dialect)
+        ? dialect === 'sqlite'
+          ? 'SQLite has no EXPLAIN (ANALYZE), so a plan cannot be captured for this dialect.'
+          : 'This environment reports that it cannot produce a plan for this dialect.'
+        : null;
+  const planWritable = capsKnown ? s.engineCaps!.writable : false;
   const starter = isExercise ? block.starter || 'SELECT ...' : (block.sql as string);
 
   const [code, setCode] = useState(starter);
   const [running, setRunning] = useState(false);
   const [qr, setQr] = useState<QueryResult | null>(null);
   const [fb, setFb] = useState<Feedback | null>(null);
+  /* M5: a performance exercise's captured plan and its structural verdict. */
+  const [plan, setPlan] = useState<PlanBundle | null>(null);
+  const [planChecks, setPlanChecks] = useState<PlanCheck[] | null>(null);
+  const [planBusy, setPlanBusy] = useState(false);
+  const [tutorBusy, setTutorBusy] = useState(false);
   const taRef = useRef<HTMLTextAreaElement>(null);
 
   useEffect(() => {
     let alive = true;
+    /* Start from this block's own starter, then let a saved draft win. Without
+       the reset, a cell that React reuses across a chapter change kept the
+       previous chapter's SQL in the editor — and the previous chapter's result
+       and plan in the panels below it. The draft is keyed by the exercise id,
+       so "no draft" means "never touched this exercise", not "keep whatever was
+       on screen". */
+    setCode(starter);
+    setQr(null);
+    setFb(null);
+    setPlan(null);
+    setPlanChecks(null);
     s.api.getDraft(id).then((draft) => {
       if (alive && draft != null) setCode(draft);
     });
@@ -48,7 +111,7 @@ export default function SqlCell({ block, module: mod, course }: { block: Block; 
       alive = false;
     };
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [id]);
+  }, [id, starter]);
 
   function autogrow() {
     const ta = taRef.current;
@@ -64,9 +127,15 @@ export default function SqlCell({ block, module: mod, course }: { block: Block; 
   }
 
   async function run() {
+    /* Refused by dialect: the button is disabled too, but the keyboard shortcut
+       reaches this function directly, so the guard lives here as well. */
+    if (dialectRefused) return;
     setRunning(true);
     setFb(null);
-    const out = await s.api.runQuery(code, block);
+    /* The resolved dialect goes to the seam explicitly: with two engines in one
+       adapter, a screen that left it out would run the chapter's *authored*
+       dialect and the result would not be what the badge above it promised. */
+    const out = await s.api.runQuery(code, { block, module: mod, course, dialect });
     setQr(out);
     setRunning(false);
   }
@@ -77,8 +146,9 @@ export default function SqlCell({ block, module: mod, course }: { block: Block; 
   }
 
   async function check() {
+    if (dialectRefused) return;
     setFb({ kind: 'pending' });
-    const out = await s.api.checkAnswer(code, { item: block, module: mod, course });
+    const out = await s.api.checkAnswer(code, { item: block, module: mod, course, dialect });
     setQr(out.qr);
     if (out.qr.status !== 'succeeded') {
       s.recordEvent(id, 'error', undefined);
@@ -93,6 +163,43 @@ export default function SqlCell({ block, module: mod, course }: { block: Block; 
       const cause = out.checks.find((r) => !r.ok) || { label: 'the result contract' };
       s.recordEvent(id, 'failed', undefined);
       setFb({ kind: 'failed', checks: out.checks, cause });
+    }
+  }
+
+  /* M5: capture the plan through the seam and grade it against the perf
+     contract. The same bookkeeping a normal exercise uses — a recorded event
+     and the rebuilt progress — so a perf exercise is passed, retaken and
+     progressed exactly like any other; only the oracle is structural. */
+  async function capturePlan(analyze: boolean) {
+    if (!perf) return;
+    setPlanBusy(true);
+    setFb(null);
+    try {
+      const bundle = await s.api.explain({
+        sql: code,
+        analyze,
+        dataset,
+        exercise: { id, version: block.version ?? 1, lesson_id: mod.id, perf },
+      });
+      setPlan(bundle);
+      if (bundle.status !== 'succeeded') {
+        setPlanChecks(null);
+        s.recordEvent(id, 'error', undefined);
+        setFb({ kind: 'error', code: bundle.error?.code ?? 'ENVIRONMENT_UNAVAILABLE' });
+        return;
+      }
+      const verdict = gradePlan(bundle, perf);
+      setPlanChecks(verdict.checks);
+      if (verdict.passed) {
+        s.recordEvent(id, 'passed', undefined);
+        s.toast('Plan passed. Nice.');
+      } else {
+        const cause = verdict.checks.find((r) => !r.ok) || { label: 'the perf contract' };
+        s.recordEvent(id, 'failed', undefined);
+        s.toast(`Plan not yet — ${String(cause.label).toLowerCase()}`);
+      }
+    } finally {
+      setPlanBusy(false);
     }
   }
 
@@ -115,8 +222,41 @@ export default function SqlCell({ block, module: mod, course }: { block: Block; 
   function keep(sql: string) {
     s.saveQuery(sql, block);
   }
-  function explain() {
-    s.toast('In a live app, a tutor call would use your query, the error and the objective.');
+  /* "Explain my mistake" is a real tutor call, not a stub. The gateway serves
+     POST /tutor (M4); the button used to toast "in a live app…" which is the
+     classic "it's a mock" tell. The endpoint is dialect-neutral — it takes the
+     learner's SQL, the objective and the engine's own error — so this is the
+     same call on both dialects. AI off (or the offline/mock adapter, where
+     there is no tutor) reports honestly instead of inventing an answer.
+
+     The level escalates on each ask. Without it, "ask for a firmer hint" sent
+     the same request and the model returned the same hint — the level is the
+     whole difference between a nudge and a worked approach, so the previous
+     hint's level is the floor for the next ask. */
+  async function explain() {
+    if (tutorBusy) return;
+    const nextLevel = fb && fb.kind === 'tutor' ? fb.hintLevel + 1 : undefined;
+    setTutorBusy(true);
+    setFb({ kind: 'tutorPending' });
+    try {
+      const objective = String(block.prompt || block.sql || 'Write a correct query for this exercise.');
+      const res = await s.api.tutor({
+        sql: code,
+        objective,
+        error_code: qr?.error?.code,
+        error_message: qr?.error?.message,
+        hint_level: nextLevel,
+        result_summary: qr?.status === 'succeeded'
+          ? `${qr.row_count} row${qr.row_count === 1 ? '' : 's'} returned`
+          : undefined,
+      });
+      setFb({ kind: 'tutor', message: res.message, hintLevel: res.hint_level, revealsSolution: res.reveals_solution });
+    } catch (e) {
+      const reason = e instanceof Error && e.message ? e.message : 'The tutor is unavailable right now.';
+      setFb({ kind: 'tutorUnavailable', reason });
+    } finally {
+      setTutorBusy(false);
+    }
   }
   function reportProblem() {
     s.toast('This would open the on-demand critique flow: critic → verifier → fixer, with your approval before anything applies.');
@@ -126,6 +266,8 @@ export default function SqlCell({ block, module: mod, course }: { block: Block; 
     s.api.saveDraft(id, starter);
     setQr(null);
     setFb(null);
+    setPlan(null);
+    setPlanChecks(null);
     s.toast('Cell reset.');
   }
 
@@ -137,6 +279,7 @@ export default function SqlCell({ block, module: mod, course }: { block: Block; 
      racing the result grid and the feedback panel to be read. The words are the
      same words the screen shows. */
   function liveStatus(): string {
+    if (planBusy) return 'Capturing the query plan.';
     if (running) return 'Running your query.';
     if (fb) {
       if (fb.kind === 'pending') return 'Checking your answer against the contract.';
@@ -144,6 +287,9 @@ export default function SqlCell({ block, module: mod, course }: { block: Block; 
       if (fb.kind === 'failed') return `Not yet — ${String(fb.cause.label).toLowerCase()}.`;
       if (fb.kind === 'error') return `Execution error ${fb.code}. This is not a wrong answer; fix the statement and run again.`;
       if (fb.kind === 'hint') return `${fb.hints.length} hint${fb.hints.length === 1 ? '' : 's'} shown.`;
+      if (fb.kind === 'tutorPending') return 'Asking the tutor for a hint.';
+      if (fb.kind === 'tutor') return 'Tutor hint shown.';
+      if (fb.kind === 'tutorUnavailable') return 'The tutor is unavailable.';
       if (fb.kind === 'solution') return 'Reference solution shown.';
       if (fb.kind === 'accepted') return 'Recorded as accepted by you, not as a pass.';
     }
@@ -186,8 +332,20 @@ export default function SqlCell({ block, module: mod, course }: { block: Block; 
         <div className="runrow">
           {isExercise ? (
             <>
-              <button className="primary small" onClick={run}><Icon name="play" />Run</button>
-              <button className="small" onClick={check}><Icon name="check" />Check answer</button>
+              <button
+                className="primary small"
+                onClick={run}
+                disabled={dialectRefused}
+                title={dialectRefused ? dialectSupport.refusal ?? undefined : undefined}
+                aria-describedby={dialectRefused ? refusalId : undefined}
+              ><Icon name="play" />Run</button>
+              <button
+                className="small"
+                onClick={check}
+                disabled={dialectRefused}
+                title={dialectRefused ? dialectSupport.refusal ?? undefined : undefined}
+                aria-describedby={dialectRefused ? refusalId : undefined}
+              ><Icon name="check" />Check answer</button>
               <button className="small ghost" onClick={hint}>Hint</button>
               <button className="small ghost" onClick={solution}>Show solution</button>
               <button className="small ghost" onClick={() => keep(code)}>Keep query</button>
@@ -195,13 +353,71 @@ export default function SqlCell({ block, module: mod, course }: { block: Block; 
             </>
           ) : (
             <>
-              <button className="small" onClick={run}><Icon name="play" />Run</button>
+              <button
+                className="small"
+                onClick={run}
+                disabled={dialectRefused}
+                title={dialectRefused ? dialectSupport.refusal ?? undefined : undefined}
+                aria-describedby={dialectRefused ? refusalId : undefined}
+              ><Icon name="play" />Run</button>
               <button className="small ghost" onClick={() => keep(code)}>Keep query</button>
               <button className="small ghost" onClick={reset}><Icon name="refresh" />Reset</button>
             </>
           )}
           <span className="kb"><span className="kbd">Ctrl</span>+<span className="kbd">Enter</span></span>
         </div>
+        {/* The reason Run is off, and the one control that fixes it. Rendered
+            only when the engine itself said it cannot serve this chapter. */}
+        <DialectRefusal
+          id={refusalId}
+          moduleId={mod.id}
+          dialect={dialect}
+          support={dialectSupport}
+          onSwitched={(to) => s.toast(`This chapter now runs on ${dialectLabel(to)}. Your SQL draft was kept.`)}
+        />
+        {perf ? (
+          <div className="planactions">
+            <button
+              className="small"
+              onClick={() => void capturePlan(false)}
+              disabled={planBusy || planBlockedReason !== null}
+              title={planBlockedReason ?? 'Ask the planner for a plan without running the statement.'}
+            >
+              <Icon name="flask" />{planBusy ? 'Capturing…' : 'Show the plan'}
+            </button>
+            <button
+              className="small ghost"
+              onClick={() => void capturePlan(true)}
+              disabled={planBusy || planBlockedReason !== null || !planWritable}
+              title={
+                planBlockedReason ??
+                (!planWritable
+                  ? 'Analyze executes the statement, which needs a writable environment (sign in on the gateway).'
+                  : 'Run EXPLAIN ANALYZE: the statement is executed so the plan reports measured times.')
+              }
+            >
+              <Icon name="play" />Analyze
+            </button>
+            {planBlockedReason ? (
+              <span className="planunsupported"><Icon name="info" />{planBlockedReason}</span>
+            ) : !planWritable ? (
+              <span className="muted">
+                Analyze runs the statement, so it needs a writable environment{capsKnown ? '.' : ' — checking the engine.'}
+              </span>
+            ) : (
+              <span className="muted">Analyze executes the statement to measure it; Show the plan estimates only.</span>
+            )}
+          </div>
+        ) : null}
+        {perf && (planBusy || plan) ? (
+          <div className="cellresult" aria-busy={planBusy}>
+            {planBusy ? (
+              <div className="qrun"><span className="spin"></span>POST /explain → {s.api.config.engine}</div>
+            ) : plan ? (
+              <PlanView bundle={plan} contract={perf} checks={planChecks ?? undefined} />
+            ) : null}
+          </div>
+        ) : null}
         <div className="cellresult" aria-busy={running}>
           {running ? (
             <div className="qrun"><span className="spin"></span>POST /query → {s.api.config.engine}</div>
@@ -261,6 +477,39 @@ function renderFeedback(fb: Feedback | null, ctx: FeedbackCtx) {
           </p>
         ))}
         <div className="fbactions actions">
+          <button className="small ghost" onClick={run}>Back to result</button>
+        </div>
+      </div>
+    );
+  }
+  if (fb.kind === 'tutorPending') {
+    return <div className="fb pending"><span className="spin"></span> &nbsp;POST /tutor — asking for a nudge…</div>;
+  }
+  if (fb.kind === 'tutorUnavailable') {
+    return (
+      <div className="fb">
+        <div className="fbhead"><Icon name="info" />Tutor unavailable</div>
+        {fb.reason} The exercise still grades normally — the tutor is a helper, not a gate.
+        <div className="fbactions actions">
+          <button className="small ghost" onClick={run}>Back to result</button>
+        </div>
+      </div>
+    );
+  }
+  if (fb.kind === 'tutor') {
+    return (
+      <div className="fb">
+        <div className="fbhead"><Icon name="sparkles" />Tutor</div>
+        <p style={{ margin: '4px 0', color: 'var(--text-1)', fontSize: 13.5, lineHeight: 1.65 }}>{fb.message}</p>
+        <p className="muted mt-8" style={{ fontSize: 12 }}>
+          {fb.revealsSolution
+            ? 'This hint names the approach. Your result is still what passes — any correct formulation counts.'
+            : `Guidance, not the answer — a ${fb.hintLevel === 1 ? 'gentle' : 'firmer'} nudge. Ask again for more.`}
+        </p>
+        <div className="fbactions actions">
+          <button className="small ghost" onClick={explain}>
+            <Icon name="sparkles" />Ask for a firmer hint
+          </button>
           <button className="small ghost" onClick={run}>Back to result</button>
         </div>
       </div>

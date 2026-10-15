@@ -19,26 +19,75 @@ func (s *Server) handleHealth(w http.ResponseWriter, r *http.Request) {
 	if v, err := s.exec.Version(r.Context()); err == nil && strings.TrimSpace(v) != "" {
 		version = v
 	}
+	// `engine` is the dialect of the executor that answers `/query` with no
+	// dialect field (the default), and `dialects` is every dialect this gateway
+	// can actually route to. Hard-coding "postgresql" would be a lie the moment
+	// a second dialect is attached, and the client uses this list to decide
+	// which chapters it may offer.
 	writeJSON(w, http.StatusOK, map[string]any{
-		"status":  "ok",
-		"engine":  "postgresql",
-		"version": version,
+		"status":   "ok",
+		"engine":   engine.DialectOf(s.exec),
+		"version":  version,
+		"dialects": s.Dialects(),
+		// True only when the seeded default administrator can be signed in with
+		// an empty password. A signed-in learner cannot read the gateway's
+		// config, so the client asks here rather than guessing; the sign-in
+		// screen shows the local-admin hint for this boolean and no other
+		// reason. Additive and non-secret: it is a boolean, never a password or
+		// a hash.
+		"admin_password_empty": s.adminPasswordEmpty,
 	})
 }
 
 func (s *Server) handleCapabilities(w http.ResponseWriter, r *http.Request) {
 	writeJSON(w, http.StatusOK, map[string]any{
 		"hard_timeout":   true,
-		"explain":        false,
+		"explain":        true,
 		"max_concurrent": s.cfg.MaxConcurrent,
 		"isolation":      "read_only_tx",
+		// The dialects this gateway can run, so a chapter written for another
+		// engine is refused by the UI before the learner types anything (M6
+		// step 1). PostgreSQL is always present and always the default.
+		"dialects": s.Dialects(),
+		// Whether a signed-in learner gets a writable workspace on this
+		// gateway. The client cannot know this on its own — a session is not a
+		// workspace — so the gateway answers the half of the question it owns
+		// and the client answers the other half (does it have a session).
+		// A writable workspace is either a PostgreSQL environment (ADR 0003) or
+		// the learner's own SQLite file, so either one makes this true.
+		"writable": s.envs != nil || s.sqlite != nil,
+		// The M5 plan lab (design 14): what a client needs to know before it
+		// offers an Explain button, and why it is off when it is off.
+		"plan": s.planCapability(),
+		// AI is a capability, not an assumption (technical design 11.2). A
+		// client hides the lab when `available` is false and shows `reason`
+		// instead, so "AI is off" is never mistaken for a broken feature.
+		"ai": s.aiAvailability(),
 	})
+}
+
+// statementRequest is the routing half the three statement routes share
+// (backend/internal/httpapi/dataset.go resolves it): the dialect to run in and
+// the dataset to run against. /explain declares the same two fields in its own
+// body and resolves them through the same helper, so the rules cannot drift.
+type statementRequest struct {
+	Dialect string `json:"dialect"`
+	Dataset string `json:"dataset"`
+}
+
+// perfMarker is the exercise's PerfContract, read only to route a plan lesson
+// to the perf dataset when the request names no dataset itself. It is the same
+// "exercise" object the evaluator reads; see evaluateRequest.UnmarshalJSON.
+type perfMarker struct {
+	Exercise *planExercise `json:"exercise"`
 }
 
 // queryRequest is the POST /query body.
 type queryRequest struct {
-	SQL    string        `json:"sql"`
-	Limits engine.Limits `json:"limits"`
+	statementRequest
+	SQL      string        `json:"sql"`
+	Limits   engine.Limits `json:"limits"`
+	Exercise *planExercise `json:"exercise"`
 }
 
 func (s *Server) handleQuery(w http.ResponseWriter, r *http.Request) {
@@ -64,14 +113,12 @@ func (s *Server) handleQuery(w http.ResponseWriter, r *http.Request) {
 
 	// ADR 0003: a signed-in learner's statement runs in their own writable
 	// environment; an anonymous caller stays on the shared, read-only dataset.
-	exec, err := s.statementExecutor(ctx, r)
-	if err != nil {
-		res := engine.Failing(engine.CodeEnvironmentUnavailable,
-			"The learner workspace is unavailable.", engine.RedactSecrets(err.Error()),
-			engine.RequestIDFromContext(ctx))
-		res.DurationMS = engine.RoundMS(time.Since(start))
-		s.recordStatement(res)
-		writeJSON(w, http.StatusBadRequest, res)
+	// The dialect routes to the executor that speaks it (M6 step 4).
+	exec, refusal := s.statementExecutorFor(ctx, r, requestedDialect(req.Dialect), resolveDataset(req.Dataset, req.Exercise))
+	if refusal != nil {
+		refusal.DurationMS = engine.RoundMS(time.Since(start))
+		s.recordStatement(*refusal)
+		writeJSON(w, http.StatusBadRequest, refusal)
 		return
 	}
 
@@ -85,7 +132,7 @@ func (s *Server) handleQuery(w http.ResponseWriter, r *http.Request) {
 }
 
 func (s *Server) handleEvaluate(w http.ResponseWriter, r *http.Request) {
-	var req eval.Request
+	var req evaluateRequest
 	if !readJSON(w, r, &req) {
 		return
 	}
@@ -111,17 +158,15 @@ func (s *Server) handleEvaluate(w http.ResponseWriter, r *http.Request) {
 	defer release()
 
 	// Grading runs the learner's SQL (and, for an exercise without an expected
-	// result, its reference query) on the same executor the identity routes to,
-	// so a signed-in learner is graded against their own workspace.
-	exec, err := s.statementExecutor(ctx, r)
-	if err != nil {
-		qr := engine.Failing(engine.CodeEnvironmentUnavailable,
-			"The learner workspace is unavailable.", engine.RedactSecrets(err.Error()),
-			engine.RequestIDFromContext(ctx))
-		qr.DurationMS = engine.RoundMS(time.Since(start))
-		s.recordStatement(qr)
+	// result, its reference query) on the same executor the identity and the
+	// dialect route to, so a signed-in learner is graded against their own
+	// workspace and a SQLite chapter is graded by SQLite.
+	exec, refusal := s.statementExecutorFor(ctx, r, requestedDialect(req.Dialect), resolveDataset(req.Dataset, req.Exercise))
+	if refusal != nil {
+		refusal.DurationMS = engine.RoundMS(time.Since(start))
+		s.recordStatement(*refusal)
 		writeJSON(w, http.StatusOK, eval.Response{
-			QR:         qr,
+			QR:         *refusal,
 			Checks:     []eval.CheckResult{},
 			Passed:     false,
 			DurationMS: fmt.Sprintf("%.1f", engine.RoundMS(time.Since(start))),
@@ -129,9 +174,45 @@ func (s *Server) handleEvaluate(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	resp := eval.Evaluate(ctx, exec, req)
+	resp := eval.Evaluate(ctx, exec, req.Request)
 	s.recordStatement(resp.QR)
 	writeJSON(w, http.StatusOK, resp)
+}
+
+// evaluateRequest is the POST /answers/evaluate body: the evaluator's own
+// request plus the routing half the three statement routes share. The embedding
+// inlines eval.Request's fields, so an existing client's body decodes unchanged
+// and a new one may add "dialect" and "dataset".
+//
+// The body's single "exercise" key carries two things at once — the evaluator's
+// exercise spec and the perf marker that routes the statement to the perf
+// dataset — so the request is decoded twice, each pass reading the shape it
+// knows. A single reflection-based decode cannot hold both, because the two
+// fields would share one JSON key.
+type evaluateRequest struct {
+	eval.Request
+	statementRequest
+	// Exercise is the perf marker, filled by UnmarshalJSON. It has no JSON key
+	// of its own precisely because that key is read into eval.Request.Exercise.
+	Exercise *planExercise `json:"-"`
+}
+
+// UnmarshalJSON fills the evaluator request and the routing half from the one
+// body, each from the shape it knows.
+func (req *evaluateRequest) UnmarshalJSON(data []byte) error {
+	if err := json.Unmarshal(data, &req.Request); err != nil {
+		return err
+	}
+	var routing struct {
+		statementRequest
+		perfMarker
+	}
+	if err := json.Unmarshal(data, &routing); err != nil {
+		return err
+	}
+	req.statementRequest = routing.statementRequest
+	req.Exercise = routing.perfMarker.Exercise
+	return nil
 }
 
 func (s *Server) handleTables(w http.ResponseWriter, r *http.Request) {
@@ -223,24 +304,4 @@ func (s *Server) handleEvent(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	writeJSON(w, http.StatusAccepted, map[string]any{"ok": true, "id": id})
-}
-
-func (s *Server) handleGenerateCourse(w http.ResponseWriter, r *http.Request) {
-	var req struct {
-		Title     string   `json:"title"`
-		Exercises int      `json:"exercises"`
-		Steps     []string `json:"steps"`
-	}
-	_ = json.NewDecoder(io.LimitReader(r.Body, maxBodyBytes)).Decode(&req)
-	writeJSON(w, http.StatusCreated, map[string]any{
-		"title":          req.Title,
-		"chapters":       len(req.Steps),
-		"exercises":      req.Exercises,
-		"datasetVersion": dataset.DatasetVersion,
-	})
-}
-
-func (s *Server) handleGenerateChallenge(w http.ResponseWriter, r *http.Request) {
-	_, _ = io.Copy(io.Discard, io.LimitReader(r.Body, maxBodyBytes))
-	writeJSON(w, http.StatusCreated, map[string]any{"ok": true})
 }

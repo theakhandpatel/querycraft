@@ -7,7 +7,11 @@ import type { FoundExercise } from '../lib/model';
 
 function NavButton({ icon, label, active, badge, onClick }: { icon: string; label: string; active: boolean; badge?: React.ReactNode; onClick: () => void }) {
   return (
-    <button className={`nav${active ? ' active' : ''}`} onClick={onClick}>
+    /* The label is hidden below 760px, where the rail collapses to 64px of
+       icons. `title` keeps the name reachable with a pointer and `aria-label`
+       keeps it reachable with a screen reader; without both, the narrow layout
+       is nine anonymous glyphs. */
+    <button className={`nav${active ? ' active' : ''}`} onClick={onClick} aria-label={label} title={label}>
       <Icon name={icon} />
       <span className="navtext">{label}</span>
       {badge != null && <span className="navbadge">{badge}</span>}
@@ -71,7 +75,13 @@ export function Sidebar() {
         <div className="navgroup">
           <div className="label">Recent</div>
           {recent.slice(0, 3).map((f) => (
-            <button key={f.course.id + f.index} className="nav" onClick={() => openLessonIn(f.course.id, f.index)}>
+            <button
+              key={f.course.id + f.index}
+              className="nav"
+              onClick={() => openLessonIn(f.course.id, f.index)}
+              aria-label={`Chapter ${f.module.n}: ${f.module.title}`}
+              title={`Chapter ${f.module.n}: ${f.module.title}`}
+            >
               <Icon name="clock" />
               <span className="navtext">{f.module.title}</span>
             </button>

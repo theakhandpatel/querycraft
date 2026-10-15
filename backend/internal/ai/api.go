@@ -47,19 +47,25 @@ const (
 // Stage names, in pipeline order. They are stable strings because the client
 // renders them and the tests assert on them.
 const (
-	StageValidateRequest = "validate_request"
-	StageRequestBundle   = "request_bundle"
-	StageValidateArtifact = "validate_artifact"
-	StageScratchEnvironment = "scratch_environment"
-	StageReferenceContract = "reference_contract"
-	StageCrossCheck      = "cross_check"
+	StageValidateRequest     = "validate_request"
+	StageRequestBundle       = "request_bundle"
+	StageValidateArtifact    = "validate_artifact"
+	StageScratchEnvironment  = "scratch_environment"
+	StageReferenceContract   = "reference_contract"
+	StageCrossCheck          = "cross_check"
 	StageAdversarialFixtures = "adversarial_fixtures"
-	StageRepair          = "repair"
-	StageActivate        = "activate"
+	StageRepair              = "repair"
+	StageActivate            = "activate"
 )
 
-// StageStates.
+// StageStates. Done, failed and skipped are final: they are what a finished run
+// reports, and the outcome envelope's schema allows nothing else. Queued and
+// running exist only in a live view of a run in flight (jobs.go), where "this
+// has not started" and "this is happening now" are the two facts a poller
+// needs and neither is a verdict about the stage.
 const (
+	StateQueued  = "queued"
+	StateRunning = "running"
 	StateDone    = "done"
 	StateFailed  = "failed"
 	StateSkipped = "skipped"
@@ -71,6 +77,27 @@ const (
 	StatusRejected    = "rejected"
 	StatusUnavailable = "unavailable"
 	StatusFailed      = "failed"
+	// StatusBuilding is the stored state of a course that is still being
+	// written, one chapter at a time. It is a status of a stored record, never
+	// of a generation outcome: a run that returns is active, rejected, failed
+	// or awaiting approval. It exists so GET /courses/{id} can answer with the
+	// chapters that have already verified while later ones are still being
+	// generated.
+	StatusBuilding = "building"
+	// StatusAwaitingApproval is the outcome of a run that was asked to pause
+	// after its outline (GenerationRequest.RequireApproval). It is a
+	// *non-terminal* stop: the run ends here, but the stored course it names is
+	// a live thing, and POST /courses/{id}/build continues it into the chapter
+	// phase. `active` stays the only status that puts a course in front of
+	// learners, so nothing appears in a learner's library as a result of this
+	// status alone — the building row the outline stored is all that exists.
+	StatusAwaitingApproval = "awaiting_approval"
+	// StatusDiscarded is a job-view status, not an outcome one. It says the
+	// course a paused run was waiting on was removed, so a poller is told why
+	// the run it was watching will never continue. The run's own transcript
+	// still records the status the run ended with — it really did stop at
+	// awaiting_approval; the discard happened afterwards, to the record.
+	StatusDiscarded = "discarded"
 )
 
 // Error is an AI-envelope failure. It never carries a learner's secret, and the
@@ -127,6 +154,13 @@ type GenerationRequest struct {
 	Constraints   []string   `json:"constraints,omitempty"`
 	ExerciseCount int        `json:"exercise_count,omitempty"`
 	Steps         []string   `json:"steps,omitempty"`
+	// RequireApproval asks a course run to stop after its outline is validated
+	// and stored, so the learner can approve the index before the expensive
+	// chapter phase runs. The run then ends StatusAwaitingApproval and the
+	// stored `building` course waits for POST /courses/{id}/build. It is
+	// deliberately off by default: a client that does not ask for the pause
+	// gets exactly the one-request, outline-into-chapters run it always did.
+	RequireApproval bool `json:"require_approval,omitempty"`
 }
 
 /* ---------- artifact ---------- */
@@ -210,12 +244,12 @@ type Attempt struct {
 // Evidence is measured fact from a run, never a claim. Zero means the check did
 // not run or found nothing.
 type Evidence struct {
-	ReferenceRows   int    `json:"reference_rows,omitempty"`
-	CrossCheckRows  int    `json:"cross_check_rows,omitempty"`
-	FixturesRejected int   `json:"fixtures_rejected,omitempty"`
-	FixturesTotal   int    `json:"fixtures_total,omitempty"`
-	Repairs         int    `json:"repairs,omitempty"`
-	ScratchDatabase string `json:"scratch_database,omitempty"`
+	ReferenceRows    int    `json:"reference_rows,omitempty"`
+	CrossCheckRows   int    `json:"cross_check_rows,omitempty"`
+	FixturesRejected int    `json:"fixtures_rejected,omitempty"`
+	FixturesTotal    int    `json:"fixtures_total,omitempty"`
+	Repairs          int    `json:"repairs,omitempty"`
+	ScratchDatabase  string `json:"scratch_database,omitempty"`
 }
 
 // Outcome is the generation response. StatusActive is the only status that
@@ -224,10 +258,22 @@ type Outcome struct {
 	Status   string    `json:"status"`
 	Kind     string    `json:"kind,omitempty"`
 	Artifact *Artifact `json:"artifact"`
-	Stages   []Stage   `json:"stages"`
-	Attempts []Attempt `json:"attempts"`
-	Evidence Evidence  `json:"evidence"`
-	Error    *Error    `json:"error"`
+	// Plan is set for a course that was activated, and for one that stopped at
+	// StatusAwaitingApproval. A rejected course returns no plan for the same
+	// reason a rejected challenge returns no artifact: nothing that did not
+	// verify may be presented as something a learner can start. An
+	// awaiting-approval plan is the *building* course's own skeleton — the
+	// outline the learner is being asked to approve — and it is never read as
+	// an activated course, because `status` says so.
+	Plan *CoursePlan `json:"plan,omitempty"`
+	// Chapters is what verification measured for each chapter's exercises. It
+	// is reported for a rejection as well as an activation, because "which
+	// exercise failed and why" is the useful part of a rejection.
+	Chapters []ChapterResult `json:"chapters,omitempty"`
+	Stages   []Stage         `json:"stages"`
+	Attempts []Attempt       `json:"attempts"`
+	Evidence Evidence        `json:"evidence"`
+	Error    *Error          `json:"error"`
 }
 
 // StageIndex returns the position of a stage in the reported slice, or -1.
@@ -256,10 +302,10 @@ type TutorRequest struct {
 
 // TutorResponse is a hint. RevealsSolution must be false.
 type TutorResponse struct {
-	Message          string     `json:"message"`
-	HintLevel        int        `json:"hint_level"`
-	RevealsSolution  bool       `json:"reveals_solution"`
-	Provenance       Provenance `json:"provenance"`
+	Message         string     `json:"message"`
+	HintLevel       int        `json:"hint_level"`
+	RevealsSolution bool       `json:"reveals_solution"`
+	Provenance      Provenance `json:"provenance"`
 }
 
 // CritiqueRequest asks for a review of the learner's own query.
@@ -321,9 +367,9 @@ type PatchDecision struct {
 
 // PatchResult reports what happened to the approval.
 type PatchResult struct {
-	Applied bool     `json:"applied"`
+	Applied bool           `json:"applied"`
 	Patch   *PatchProposal `json:"patch"`
-	Error   *Error   `json:"error"`
+	Error   *Error         `json:"error"`
 }
 
 /* ---------- availability ---------- */
@@ -337,6 +383,14 @@ type Availability struct {
 	Model         string `json:"model,omitempty"`
 	Deterministic bool   `json:"deterministic"`
 	Reason        string `json:"reason"`
+	// TimeoutMS is the run budget: the wall clock within which a generation
+	// always answers, whether it activated an artifact or refused one. The
+	// gateway hands the pipeline this budget plus headroom on the request
+	// context, so a client that waits at least this long always reads the
+	// pipeline's own honest failure instead of a transport error. A browser
+	// that picks a shorter deadline turns "still working" into "unreachable",
+	// which is how a real course generation was reported as a dead gateway.
+	TimeoutMS int64 `json:"timeout_ms,omitempty"`
 }
 
 /* ---------- persistence ---------- */
@@ -358,10 +412,25 @@ type Depot interface {
 	Challenge(ctx context.Context, id string) (Record, bool, error)
 	Challenges(ctx context.Context) ([]Record, error)
 	DeleteChallenge(ctx context.Context, id string) error
+	// Courses are the M7 counterpart of challenges: a generated course is
+	// stored whole, with the outcome that admitted it, for the same reason.
+	SaveCourse(ctx context.Context, rec CourseRecord) error
+	Course(ctx context.Context, id string) (CourseRecord, bool, error)
+	Courses(ctx context.Context) ([]CourseRecord, error)
+	DeleteCourse(ctx context.Context, id string) error
 	// SavePatch stores an unapplied proposal, so an approval can find it later.
 	SavePatch(ctx context.Context, p PatchProposal) error
 	Patch(ctx context.Context, id string) (PatchProposal, bool, error)
 	ApprovePatch(ctx context.Context, id, approvedBy string) error
+	// Runs are the audit trail: each generation's transcript, owner-scoped and
+	// bounded before it arrives here (see transcript.go). Run returns the whole
+	// record including its owner, so the caller decides who may read it; Runs
+	// returns summaries, newest first. SaveRun is an upsert, because one run
+	// may be stored more than once (a building course updates its record as it
+	// writes chapters).
+	SaveRun(ctx context.Context, rec RunTranscript) error
+	Run(ctx context.Context, id string) (RunTranscript, bool, error)
+	Runs(ctx context.Context) ([]RunSummary, error)
 }
 
 /* ---------- scratch environments ---------- */
@@ -395,25 +464,33 @@ func (p ProvidedRunner) Scratch(context.Context, string) (engine.Executor, func(
 // Limits bound the cost of a generation run. Every field has a default; a zero
 // value means "use the default", never "unlimited".
 type Limits struct {
-	MaxOutputBytes  int
+	MaxOutputBytes     int
 	MaxSetupStatements int
-	MaxRepairs      int
-	MaxHints        int
-	MaxConcurrent   int
-	Timeout         time.Duration
-	MaxPromptChars  int
+	MaxRepairs         int
+	MaxHints           int
+	MaxConcurrent      int
+	Timeout            time.Duration
+	MaxPromptChars     int
 }
 
 // DefaultLimits are the bounds unless config says otherwise.
 func DefaultLimits() Limits {
 	return Limits{
-		MaxOutputBytes:     64 * 1024,
+		// 256 KiB, not 64: a hosted reasoning model puts its reasoning in the
+		// reply body next to the answer, and this cap is measured on the whole
+		// body (see HTTPProvider.Complete). A 64 KiB cap rejected a perfectly
+		// good 5 KiB bundle because the reasoning around it was large.
+		MaxOutputBytes:     256 * 1024,
 		MaxSetupStatements: 8,
 		MaxRepairs:         2,
 		MaxHints:           3,
 		MaxConcurrent:      2,
-		Timeout:            20 * time.Second,
-		MaxPromptChars:     4000,
+		// A run makes several provider calls (bundle, cross-check, adversarial
+		// fixtures, then up to MaxRepairs more). A 20 s budget fit an offline
+		// fake and cut a real model off mid-run, which surfaced as a failed
+		// request rather than as a slow one.
+		Timeout:        120 * time.Second,
+		MaxPromptChars: 4000,
 	}
 }
 
@@ -483,6 +560,12 @@ func NewService(cfg Config) *Service {
 // Available reports whether generation can run right now, and why not.
 func (s *Service) Available() Availability {
 	av := Availability{Reason: "AI is off: no provider is configured."}
+	// The budget is advertised even when generation is off: it describes the
+	// pipeline, not whether a provider is attached, and a client that has read
+	// it once keeps it across a provider that is temporarily unavailable.
+	if s != nil {
+		av.TimeoutMS = s.cfg.Limits.Merge(DefaultLimits()).Timeout.Milliseconds()
+	}
 	if s == nil || s.cfg.Provider == nil {
 		return av
 	}
@@ -495,6 +578,14 @@ func (s *Service) Available() Availability {
 		return av
 	}
 	av.Configured = true
+	// A provider can be addressable and still unable to answer because it has
+	// no credential. The optional interface keeps that fact here rather than in
+	// the provider's Descriptor, so a local server that needs no key reports
+	// configured and available while a keyed API reports why it cannot run.
+	if mc, ok := s.cfg.Provider.(interface{ MissingCredential() bool }); ok && mc.MissingCredential() {
+		av.Reason = "AI is off: the " + d.Name + " provider has no API key."
+		return av
+	}
 	if s.cfg.Runner == nil {
 		av.Reason = "AI is configured but no database is available to verify against."
 		return av
@@ -506,6 +597,16 @@ func (s *Service) Available() Availability {
 	av.Available = true
 	av.Reason = ""
 	return av
+}
+
+// Limits returns the effective pipeline limits, with defaults applied. The
+// transport layer reads it to give the pipeline headroom inside its own
+// deadline instead of cutting it off mid-stage.
+func (s *Service) Limits() Limits {
+	if s == nil {
+		return DefaultLimits()
+	}
+	return s.cfg.Limits.Merge(DefaultLimits())
 }
 
 // GenerateChallenge runs the §11.1 pipeline for one challenge.

@@ -1,0 +1,158 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://querycraft.app/contracts/dialect.schema.json",
+  "title": "DialectProfile",
+  "description": "One dialect's execution facts as data: what the engine can and cannot do, how its own error messages become the closed QueryResult codes, how a stored value becomes a JSON cell, and which affinity a declared type selects. contracts/dialects/<dialect>.json is the profile both the Go gateway and the browser adapter read; this schema is the shape the audit (scripts/sqlite-error-codes.mjs) validates it against. `dialect` and `engine` are a closed set whose members are exactly the profiles present under contracts/dialects/.",
+  "type": "object",
+  "required": ["dialect", "engine", "engine_label", "capabilities", "capability_notes", "types", "value_encoding", "error_classification"],
+  "properties": {
+    "dialect": { "$ref": "#/$defs/dialectName" },
+    "engine": { "$ref": "#/$defs/dialectName" },
+    "engine_label": {
+      "type": "string",
+      "minLength": 1,
+      "description": "How the engine names itself to a learner, e.g. \"SQLite 3.x\". A label, never a version guarantee."
+    },
+    "capabilities": {
+      "type": "object",
+      "minProperties": 1,
+      "additionalProperties": { "type": "boolean" },
+      "description": "One boolean per dialect capability. Every key must have a non-empty note in capability_notes, and capability_notes may key nothing that is not here; the audit checks the two key sets match."
+    },
+    "capability_notes": {
+      "type": "object",
+      "minProperties": 1,
+      "additionalProperties": { "type": "string", "minLength": 1 },
+      "description": "The reason for each capability's value. A capability with no note is a claim without a source."
+    },
+    "types": { "$ref": "#/$defs/typeRules" },
+    "value_encoding": { "$ref": "#/$defs/valueEncoding" },
+    "error_classification": {
+      "type": "array",
+      "minItems": 1,
+      "description": "The ordered, first-match-wins message-to-code table. An empty `contains` pattern in the last rule is the catch-all; the audit fails if anything follows it.",
+      "items": { "$ref": "#/$defs/errorRule" }
+    },
+    "source": {
+      "type": "string",
+      "description": "The human-facing document this profile is the machine-readable half of."
+    }
+  },
+  "$defs": {
+    "dialectName": {
+      "enum": ["sqlite"],
+      "description": "The dialects with a profile under contracts/dialects/ — one member per file. The audit fails if this set and the files on disk disagree."
+    },
+    "queryResultErrorCode": {
+      "enum": ["EMPTY_QUERY", "QUERY_SYNTAX_ERROR", "QUERY_RUNTIME_ERROR", "QUERY_TIMEOUT", "RESULT_LIMIT_EXCEEDED", "ENVIRONMENT_UNAVAILABLE", "DIALECT_MISMATCH", "PERSISTENCE_FAILED", "EVALUATION_ERROR"],
+      "description": "The closed QueryResult error enum, copied in contract order from contracts/query-result.schema.json. The audit fails if the two enums ever differ, so a profile cannot name a code outside the contract."
+    },
+    "errorRule": {
+      "type": "object",
+      "required": ["match", "pattern", "code", "note"],
+      "additionalProperties": false,
+      "properties": {
+        "match": {
+          "enum": ["prefix", "contains", "equals"],
+          "description": "How `pattern` is tested against the engine's message."
+        },
+        "pattern": {
+          "type": "string",
+          "description": "The message test. An empty pattern under `contains` matches every message and is the catch-all."
+        },
+        "code": { "$ref": "#/$defs/queryResultErrorCode" },
+        "note": {
+          "type": "string",
+          "minLength": 1,
+          "description": "Which engine result code this is, and why the contract code is the correct one."
+        }
+      }
+    },
+    "affinityClass": {
+      "enum": ["INTEGER", "TEXT", "BLOB", "REAL", "NUMERIC"],
+      "description": "SQLite's five affinity classes, in the order the engine's algorithm lists them."
+    },
+    "affinityRule": {
+      "type": "object",
+      "required": ["affinity", "when", "note"],
+      "additionalProperties": false,
+      "properties": {
+        "affinity": { "$ref": "#/$defs/affinityClass" },
+        "when": {
+          "type": "string",
+          "minLength": 1,
+          "description": "The declared-type test that selects this affinity."
+        },
+        "note": { "type": "string", "minLength": 1 }
+      }
+    },
+    "typeRules": {
+      "type": "object",
+      "required": ["note", "affinity_rules", "declared"],
+      "additionalProperties": false,
+      "properties": {
+        "note": { "type": "string", "minLength": 1 },
+        "affinity_rules": {
+          "type": "array",
+          "minItems": 1,
+          "description": "The affinity algorithm in the order the engine applies it, first match wins.",
+          "items": { "$ref": "#/$defs/affinityRule" }
+        },
+        "declared": {
+          "type": "object",
+          "minProperties": 1,
+          "additionalProperties": { "$ref": "#/$defs/affinityClass" },
+          "description": "Each declared type this dataset uses, mapped to the one affinity class it selects."
+        }
+      }
+    },
+    "jsonKind": {
+      "enum": ["null", "boolean", "number", "string", "array", "object"],
+      "description": "A JSON value kind — the only things a QueryResult cell can be."
+    },
+    "classRule": {
+      "type": "object",
+      "required": ["json", "rule", "note"],
+      "properties": {
+        "json": { "$ref": "#/$defs/jsonKind" },
+        "rule": {
+          "type": "string",
+          "minLength": 1,
+          "description": "The encoding rule in one line."
+        },
+        "note": {
+          "type": "string",
+          "minLength": 1,
+          "description": "Why this rule is the honest one."
+        }
+      }
+    },
+    "valueEncoding": {
+      "type": "object",
+      "description": "One rule per SQLite storage class — NULL, INTEGER, REAL, TEXT, BLOB — plus the cases where a driver materialises a value the engine never stored a class for. The declared affinity of the column does not change any of them.",
+      "required": ["note", "integer", "real", "text", "blob", "null"],
+      "additionalProperties": false,
+      "properties": {
+        "note": { "type": "string", "minLength": 1 },
+        "integer": { "$ref": "#/$defs/classRule" },
+        "real": { "$ref": "#/$defs/classRule" },
+        "text": { "$ref": "#/$defs/classRule" },
+        "blob": { "$ref": "#/$defs/classRule" },
+        "null": { "$ref": "#/$defs/classRule" },
+        "boolean": { "$ref": "#/$defs/classRule" },
+        "date": { "$ref": "#/$defs/classRule" },
+        "time": { "$ref": "#/$defs/classRule" },
+        "column_type_label": {
+          "type": "object",
+          "required": ["rule", "note"],
+          "properties": {
+            "source": { "type": "string" },
+            "fallback": { "type": "string" },
+            "rule": { "type": "string", "minLength": 1 },
+            "note": { "type": "string", "minLength": 1 }
+          }
+        }
+      }
+    }
+  }
+}

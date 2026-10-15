@@ -3,7 +3,8 @@ import Icon from '../ui/Icon';
 import { useStore } from '../../state/store';
 import { COURSES } from '../../data/curriculum';
 import { courseShort } from '../../lib/model';
-import { executionEngineLabel, generationProvenance } from '../../lib/provenance';
+import { artifactProvenanceLabel, executionEngineLabel, generationProvenance } from '../../lib/provenance';
+import type { AiArtifact, AiOutcome } from '../../api/aiContract';
 import type { Block } from '../../types';
 
 const CL_STEPS = [
@@ -47,6 +48,29 @@ type Evidence = {
   version: number;
 };
 
+/** What "Try it" got back from the same grader the learner is graded by. */
+type TryOutcome = {
+  passed: boolean;
+  rows: number;
+  ms: number | string;
+  error?: string;
+};
+
+/* The form speaks in learner words; the contract speaks in levels. */
+const DIFFICULTY: Record<string, 'beginner' | 'intermediate' | 'advanced'> = {
+  'Warm-up': 'beginner',
+  Challenging: 'intermediate',
+  Brutal: 'advanced',
+};
+
+function commaList(value: string): string[] {
+  return value.split(',').map((v) => v.trim()).filter(Boolean);
+}
+
+function sentenceList(value: string): string[] {
+  return value.split(/[\n.;]+/).map((v) => v.trim()).filter(Boolean);
+}
+
 export default function ChallengeLabScreen() {
   const s = useStore();
   const [topics, setTopics] = useState('window functions, ranking within groups, tie handling');
@@ -59,6 +83,36 @@ export default function ChallengeLabScreen() {
   const [result, setResult] = useState<Evidence | null>(null);
   const abortRef = useRef<AbortController | null>(null);
   const running = useRef(false);
+  /* The real gateway generation, separate from the authored evidence run. Once
+     it has produced a response the pipeline card renders the service's own
+     stages instead of the local CL_STEPS list. */
+  const [aiOutcome, setAiOutcome] = useState<AiOutcome | null>(null);
+  const [generating, setGenerating] = useState(false);
+  const [trying, setTrying] = useState(false);
+  const [tried, setTried] = useState<TryOutcome | null>(null);
+
+  /* A fragment can name a registered challenge (`#/lab/<id>`). When it does,
+     the lab reads that challenge back through the API and shows it in the same
+     card a fresh generation uses, instead of opening on an empty request form.
+     An id the service does not know — or one this adapter cannot reach — changes
+     nothing: the lab keeps its own default state. */
+  const linkedChallenge = s.challengeId;
+  useEffect(() => {
+    if (!linkedChallenge) return;
+    let alive = true;
+    s.api
+      .getChallenge(linkedChallenge)
+      .then((record) => {
+        if (!alive || !record) return;
+        setAiOutcome(record.outcome.artifact ? record.outcome : { ...record.outcome, artifact: record.artifact });
+      })
+      .catch(() => {
+        /* an unreadable challenge must not break the lab */
+      });
+    return () => {
+      alive = false;
+    };
+  }, [linkedChallenge, s.api]);
 
   function stop(): void {
     abortRef.current?.abort();
@@ -72,6 +126,8 @@ export default function ChallengeLabScreen() {
     setLog([]);
     setLogOpen(true);
     setResult(null);
+    setAiOutcome(null);
+    setTried(null);
   }
 
   /* Leaving the lab mid-run used to leave the stream ticking and then flip the
@@ -89,6 +145,10 @@ export default function ChallengeLabScreen() {
     setStates(CL_STEPS.map(() => 'idle'));
     setLog([]);
     setLogOpen(true);
+    /* Back to the authored pipeline view: this run is the offline evidence
+       path, so the card must show its own stages, not a previous gateway run. */
+    setAiOutcome(null);
+    setTried(null);
 
     const t0 = performance.now();
     const stamp = (): string => `t+${((performance.now() - t0) / 1000).toFixed(1)}s`;
@@ -228,7 +288,75 @@ export default function ChallengeLabScreen() {
     })();
   }
 
+  /* The real generation. The gateway owns the pipeline, so this sends the
+     request and renders whatever came back — an active artifact, a rejection,
+     a failure or an unavailable lab — without adding a local stage. */
+  async function generateOnGateway(): Promise<void> {
+    const availability = s.aiAvailability;
+    if (!availability || !availability.available) return;
+    setGenerating(true);
+    setResult(null);
+    setTried(null);
+    try {
+      const outcome = await s.api.generateChallenge({
+        kind: 'challenge',
+        title: topics.trim() ? `Challenge — ${topics.split(',')[0].trim()}` : undefined,
+        topics: commaList(topics),
+        scenario: scenario.trim() || undefined,
+        constraints: sentenceList(constraints),
+        difficulty: DIFFICULTY[difficulty] ?? 'intermediate',
+      });
+      setAiOutcome(outcome);
+    } catch (e) {
+      /* generateChallenge resolves for every adapter; a rejection here means the
+         layer itself failed. Report that as a failed outcome, not an artifact. */
+      setAiOutcome({
+        status: 'failed',
+        kind: 'challenge',
+        artifact: null,
+        stages: [],
+        attempts: [],
+        error: {
+          code: 'ENVIRONMENT_UNAVAILABLE',
+          message: e instanceof Error ? e.message : 'The generation call could not be completed.',
+        },
+      });
+    } finally {
+      setGenerating(false);
+    }
+  }
+
+  /* Send the generated challenge's own reference through the grader the learner
+     uses, so "it is graded by the same evaluator" is something they can see. */
+  async function tryIt(artifact: AiArtifact): Promise<void> {
+    setTrying(true);
+    const block: Block = {
+      type: 'exercise',
+      id: artifact.id,
+      prompt: artifact.prompt,
+      solution: artifact.reference_solution,
+      contract: artifact.result_contract,
+      hints: artifact.hints,
+    };
+    try {
+      const verdict = await s.api.checkAnswer(artifact.reference_solution, { item: block });
+      setTried({ passed: verdict.passed, rows: verdict.qr.row_count, ms: verdict.duration_ms });
+    } catch (e) {
+      setTried({
+        passed: false,
+        rows: 0,
+        ms: '—',
+        error: e instanceof Error ? e.message : 'The grader could not be reached.',
+      });
+    } finally {
+      setTrying(false);
+    }
+  }
+
   const verified = result ? result.referencePassed && result.fixturesRejected === result.fixturesTotal : false;
+  const artifact = aiOutcome?.artifact ?? null;
+  const ai = s.aiAvailability;
+  const aiReady = ai !== null && ai.available;
 
   return (
     <div className="content">
@@ -257,21 +385,111 @@ export default function ChallengeLabScreen() {
           <div className="field"><label>Constraints</label><textarea rows={2} value={constraints} onChange={(e) => setConstraints(e.target.value)} /></div>
           <div className="actions mt-14">
             <button className="primary" onClick={run}><Icon name="sparkles" />Generate challenge</button>
+            <button onClick={() => void generateOnGateway()} disabled={!aiReady || generating}>
+              <Icon name="sparkles" />{generating ? 'Generating…' : 'Generate with AI'}
+            </button>
             <button onClick={reset}>Reset</button>
+          </div>
+          <div className="mt-8" style={{ fontSize: 12, color: 'var(--text-3)' }}>
+            {ai === null
+              ? 'Checking AI availability …'
+              : ai.available
+                ? `Gateway generation is available on ${ai.provider}${ai.model ? ` · ${ai.model}` : ''}.`
+                : ai.reason}
           </div>
         </div>
 
         <div className="card">
           <h2>Validation pipeline</h2>
           <div className="pipeline">
-            {CL_STEPS.map(([title, small], i) => (
-              <div className={`pipe ${states[i]}`} key={i}>
-                <div className="check">{states[i] === 'done' ? '✓' : i + 1}</div>
-                <div><strong>{title}</strong><small>{small}</small></div>
-                <span className="state">{states[i] === 'done' ? 'Done' : states[i] === 'running' ? 'Working' : 'Idle'}</span>
-              </div>
-            ))}
+            {aiOutcome
+              ? aiOutcome.stages.length > 0
+                ? aiOutcome.stages.map((stage, i) => (
+                    <div
+                      className={`pipe ${stage.state === 'done' ? 'done' : stage.state === 'failed' ? 'failed' : 'idle'}`}
+                      key={`${stage.name}-${i}`}
+                    >
+                      <div className="check">{stage.state === 'done' ? '✓' : stage.state === 'failed' ? '✕' : '–'}</div>
+                      <div><strong>{stage.name}</strong><small>{stage.detail ?? ''}</small></div>
+                      <span className="state">
+                        {stage.state}
+                        {typeof stage.ms === 'number' ? ` · ${stage.ms} ms` : ''}
+                      </span>
+                    </div>
+                  ))
+                : (
+                    <div className="pipe idle">
+                      <div className="check">–</div>
+                      <div>
+                        <strong>Nothing ran</strong>
+                        <small>{aiOutcome.error?.message ?? 'The service returned no pipeline stages.'}</small>
+                      </div>
+                      <span className="state">{aiOutcome.status}</span>
+                    </div>
+                  )
+              : CL_STEPS.map(([title, small], i) => (
+                  <div className={`pipe ${states[i]}`} key={i}>
+                    <div className="check">{states[i] === 'done' ? '✓' : i + 1}</div>
+                    <div><strong>{title}</strong><small>{small}</small></div>
+                    <span className="state">{states[i] === 'done' ? 'Done' : states[i] === 'running' ? 'Working' : 'Idle'}</span>
+                  </div>
+                ))}
           </div>
+          {aiOutcome && (
+            <div className="mt-12">
+              {aiOutcome.attempts.map((attempt) => (
+                <div className="reportrow" key={`${attempt.number}-${attempt.stage}`}>
+                  <span>Attempt {attempt.number} · {attempt.stage}</span>
+                  <span style={{ maxWidth: '62%' }}>{attempt.detail}</span>
+                </div>
+              ))}
+              {aiOutcome.evidence && (
+                <>
+                  {typeof aiOutcome.evidence.reference_rows === 'number' && (
+                    <div className="reportrow"><span>Reference rows</span><span>{aiOutcome.evidence.reference_rows}</span></div>
+                  )}
+                  {typeof aiOutcome.evidence.cross_check_rows === 'number' && (
+                    <div className="reportrow"><span>Cross-check rows</span><span>{aiOutcome.evidence.cross_check_rows}</span></div>
+                  )}
+                  {typeof aiOutcome.evidence.fixtures_total === 'number' && (
+                    <div className="reportrow">
+                      <span>Adversarial fixtures</span>
+                      <span>{aiOutcome.evidence.fixtures_rejected ?? 0}/{aiOutcome.evidence.fixtures_total} rejected</span>
+                    </div>
+                  )}
+                  {typeof aiOutcome.evidence.repairs === 'number' && (
+                    <div className="reportrow"><span>Repairs</span><span>{aiOutcome.evidence.repairs}</span></div>
+                  )}
+                  {aiOutcome.evidence.scratch_database && (
+                    <div className="reportrow">
+                      <span>Scratch database</span>
+                      <span className="mono" style={{ fontSize: 11 }}>{aiOutcome.evidence.scratch_database}</span>
+                    </div>
+                  )}
+                </>
+              )}
+              <div className="reportrow">
+                <span>Generation status</span>
+                <span className={aiOutcome.status === 'active' ? 'pass' : aiOutcome.status === 'unavailable' ? undefined : 'fail'}>
+                  {aiOutcome.status}
+                </span>
+              </div>
+              {aiOutcome.error && (
+                <div className="reportrow">
+                  <span>Service error</span>
+                  <span className="fail">
+                    {aiOutcome.error.code}{aiOutcome.error.stage ? ` · ${aiOutcome.error.stage}` : ''}
+                  </span>
+                </div>
+              )}
+            </div>
+          )}
+          {aiOutcome?.error && (
+            <div className="callout mt-12">
+              <strong>{aiOutcome.error.code}.</strong> {aiOutcome.error.message}
+              {aiOutcome.error.detail ? <span className="mono" style={{ fontSize: 11 }}> — {aiOutcome.error.detail}</span> : null}
+            </div>
+          )}
           <button className="small ghost mt-12" onClick={() => setLogOpen((v) => !v)}><Icon name="chevron-down" />Show stream</button>
           <div className={`stream${logOpen ? ' open' : ''}`}>
             {log.map((l, i) => (
@@ -280,6 +498,87 @@ export default function ChallengeLabScreen() {
           </div>
         </div>
       </div>
+
+      {artifact && (
+        <div className="mt-18">
+          <div className="card">
+            <div className="sectiontitle">
+              <h2>{artifact.title}</h2>
+              <span className="pill" style={{ background: 'var(--green-soft)', color: 'var(--green)' }}>
+                {artifact.difficulty} · v{artifact.version}
+              </span>
+            </div>
+            <div className="grid2 mt-12">
+              <div>
+                <h3>Prompt</h3>
+                <p className="mt-8" style={{ fontSize: 13.5 }}>{artifact.prompt}</p>
+                {artifact.objectives.length > 0 && (
+                  <>
+                    <h3 className="mt-12">Objectives</h3>
+                    <ul className="mt-8" style={{ fontSize: 13 }}>
+                      {artifact.objectives.map((objective) => <li key={objective}>{objective}</li>)}
+                    </ul>
+                  </>
+                )}
+                {artifact.hints.length > 0 && (
+                  <>
+                    <h3 className="mt-12">Hints</h3>
+                    <ul className="mt-8" style={{ fontSize: 13 }}>
+                      {artifact.hints.map((hint) => <li key={hint}>{hint}</li>)}
+                    </ul>
+                  </>
+                )}
+              </div>
+              <div>
+                <h3>Reference</h3>
+                <pre className="syntaxblock">{artifact.reference_solution}</pre>
+                <div className="reportrow">
+                  <span>Result contract</span>
+                  <span className="mono" style={{ fontSize: 11 }}>{artifact.result_contract.columns.join(', ') || '—'}</span>
+                </div>
+                <div className="reportrow">
+                  <span>Provider</span>
+                  <span className="mono" style={{ fontSize: 11 }}>{artifactProvenanceLabel(artifact)}</span>
+                </div>
+                <div className="reportrow">
+                  <span>Dataset version</span>
+                  <span className="mono" style={{ fontSize: 11 }}>{artifact.provenance.dataset_version}</span>
+                </div>
+                <div className="actions mt-14">
+                  <button className="primary" onClick={() => void tryIt(artifact)} disabled={trying}>
+                    <Icon name="play" />{trying ? 'Grading…' : 'Try it'}
+                  </button>
+                  <button onClick={() => s.toast('Saved to your challenge set.')}>Save challenge</button>
+                </div>
+                {tried && (
+                  <div className="mt-12">
+                    <div className="reportrow">
+                      <span>Reference vs contract</span>
+                      <span className={tried.error ? 'fail' : tried.passed ? 'pass' : 'fail'}>
+                        {tried.error ? 'could not grade' : tried.passed ? '✓ pass' : '✕ failed'}
+                      </span>
+                    </div>
+                    <div className="reportrow"><span>Rows</span><span>{tried.rows}</span></div>
+                    <div className="reportrow"><span>Engine time</span><span>{tried.ms} ms</span></div>
+                    <div className="reportrow">
+                      <span>Execution engine</span>
+                      <span className="mono" style={{ fontSize: 11 }}>{executionEngineLabel(s.api)}</span>
+                    </div>
+                    {tried.error && (
+                      <div className="callout mt-12"><strong>Not graded.</strong> {tried.error}</div>
+                    )}
+                  </div>
+                )}
+              </div>
+            </div>
+            <div className="callout mt-14">
+              <strong>How to read this.</strong> This artifact came from the gateway's generation pipeline; the stage list above is the
+              pipeline's own report. “Try it” sends the reference solution through the same grader you are, so a green result is that
+              evaluator's verdict, not a claim.
+            </div>
+          </div>
+        </div>
+      )}
 
       {result && (
         <div className="mt-18">

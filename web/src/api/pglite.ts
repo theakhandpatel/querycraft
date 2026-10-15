@@ -1,7 +1,15 @@
 import type { PGliteInterface } from '@electric-sql/pglite';
-import { schemaSql, seedSql } from './dataset';
+import { perfSql, schemaSql, seedSql } from './dataset';
 import { seedContentDocs } from './content';
-import type { ContentSection, EngineCapabilities, QueryErrorShape, RowValue } from '../types';
+import { DEFAULT_DATASET } from '../types';
+import type { ContentSection, DatasetId, Dialect, EngineCapabilities, QueryErrorShape, RowValue } from '../types';
+import {
+  buildPlanBundle,
+  emptyEnvironment,
+  failedPlanBundle,
+  type PlanBundle,
+  type PlanEnvironment,
+} from './planContract';
 
 /* The real engine: PostgreSQL compiled to WebAssembly, running in the page.
 
@@ -24,6 +32,10 @@ import type { ContentSection, EngineCapabilities, QueryErrorShape, RowValue } fr
 
 export const PGLITE_ENGINE = 'PostgreSQL 18 · PGlite (in-browser)';
 
+/** The dialect this engine runs (M6). Named beside the engine string so the
+    two can never drift apart. */
+export const PGLITE_DIALECT: Dialect = 'postgresql';
+
 /** Rows returned to the UI before the result is flagged truncated. */
 const MAX_ROWS = 200;
 
@@ -38,6 +50,18 @@ export interface EngineResult {
   row_count: number;
   truncated: boolean;
   error: QueryErrorShape | null;
+  /** The dialect this engine runs. It is named here, by the engine that
+      produced the rows, for the same reason the Go executor names its own
+      (`engine.DialectOf`): a caller that has to remember to attach it is a
+      caller that will forget, and a result that cannot say which engine
+      produced it cannot be graded. */
+  dialect: Dialect;
+  /** The engine's own label, when it is not the adapter's constant — the
+      SQLite sibling reports `SQLite 3.53.4` from `sqlite3_version` rather than
+      a version baked into the bundle, exactly as the gateway reports the
+      driver's `sqlite_version()`. Absent means "the caller's configured
+      engine", which is what the PGlite results have always meant. */
+  engine?: string;
 }
 
 export interface LiveTable {
@@ -160,48 +184,125 @@ function pad2Hex(b: number): string {
 }
 
 function emptyResult(): EngineResult {
-  return { status: 'succeeded', columns: [], rows: [], row_count: 0, truncated: false, error: null };
+  return { status: 'succeeded', columns: [], rows: [], row_count: 0, truncated: false, error: null, dialect: PGLITE_DIALECT };
 }
 
 function failed(code: string, message: string, detail?: string | null): EngineResult {
-  return { status: 'failed', columns: [], rows: [], row_count: 0, truncated: false, error: { code, message, detail: detail ?? null } };
+  return { status: 'failed', columns: [], rows: [], row_count: 0, truncated: false, error: { code, message, detail: detail ?? null }, dialect: PGLITE_DIALECT };
 }
 
 /* ---------- database lifecycle ---------- */
 
-let database: Promise<PGliteInterface> | null = null;
-/* The Worker behind `database`, kept so a runaway query can be terminated. */
-let liveWorker: Worker | null = null;
-/* Where the engine ended up. A Worker is a responsiveness tool: it is what
-   lets the host stop a runaway statement. If the page's security policy blocks
-   worker creation we fall back to the main thread and say so (design §5.2),
-   instead of claiming a deadline we cannot enforce. */
-let placement: 'worker' | 'main' | null = null;
+/* One engine per dataset (M5).
+ *
+ * Starting with M5 there are two workspaces and they are not interchangeable:
+ * the commerce fixture is small enough that the planner never has a choice, and
+ * the perf fixture is large enough that it does. So "which database" is a
+ * first-class part of a request rather than a module-level singleton, and the
+ * registry below is the only place that answer lives.
+ *
+ * `commerce` is booted eagerly — every lesson starts there. `perf` is created
+ * the first time a perf statement runs, so a learner who never opens the plans
+ * course never pays for its 10 000-row seed. */
+interface EngineSlot {
+  db: Promise<PGliteInterface> | null;
+  /* The Worker behind `db`, kept so a runaway query can be terminated. */
+  worker: Worker | null;
+  /* Where the engine ended up. A Worker is a responsiveness tool: it is what
+     lets the host stop a runaway statement. If the page's security policy
+     blocks worker creation we fall back to the main thread and say so (design
+     §5.2), instead of claiming a deadline we cannot enforce. */
+  placement: 'worker' | 'main' | null;
+}
+
+const slots: Record<DatasetId, EngineSlot> = {
+  commerce: { db: null, worker: null, placement: null },
+  perf: { db: null, worker: null, placement: null },
+};
+
+/* One tab-election per dataset.
+ *
+ * PGlite's worker elects a leader across every worker in the page (and every
+ * tab) that shares an id, and the id defaults to the worker's own URL — the
+ * same string for both datasets. Two datasets under one election is not a
+ * cosmetic problem:
+ *
+ *   - starting the second engine makes the first one's in-flight calls fail
+ *     with `LeaderChangedError`, because the newcomer announces itself on the
+ *     shared channel and every pending RPC is cancelled as indeterminate;
+ *   - worse, the *winner* is the one that runs the SQL. The loser's client
+ *     proxies to the leader, so a perf statement would be executed against
+ *     whichever database won the election — commerce. The two workspaces would
+ *     silently become one, which is exactly the defect this whole change is
+ *     about.
+ *
+ * Naming one id per dataset keeps the two engines in two elections, so "two
+ * databases" is true of the browser too.
+ *
+ * The suffix is per page load, so two *tabs* are two elections as well. Tabs
+ * used to share an id "by construction", and that is what made the app look
+ * like a mock: the tab that loses the election proxies every query to the
+ * leader, so when the leader tab is reloaded or closed the follower waits on a
+ * leader that will never answer. Measured in a follower tab: a single
+ * `fetchModuleContent('s3')` was still pending after 53 s, all 52 reading
+ * documents never arrived, and every lesson rendered the short curriculum prose
+ * in place of the authored chapter — with no error anywhere. Sharing one
+ * in-memory database between tabs buys nothing (there is no file behind it) and
+ * costs exactly that, so each tab takes its own. */
+const TAB_ID = Math.random().toString(36).slice(2, 10);
+const WORKER_ID: Record<DatasetId, string> = {
+  commerce: `querycraft-dataset-commerce:${TAB_ID}`,
+  perf: `querycraft-dataset-perf:${TAB_ID}`,
+};
 
 export type { EngineCapabilities };
 
 /** `null` until the engine has booted, so the UI can say "starting" rather
     than advertise a capability it has not established. */
 export function engineCapabilities(): EngineCapabilities | null {
+  /* Every slot reports the same answer: `placement` is a property of the *page*
+     (a blocked Worker blocks it for both datasets), and the hard deadline is
+     the same constant for both, so asking one slot is asking all of them. */
+  const placement = slots[DEFAULT_DATASET].placement;
   if (placement === null) return null;
-  return { placement, hardTimeout: placement === 'worker', timeoutMs: QUERY_TIMEOUT_MS, writable: true };
+  /* `writable` is what lets the UI offer EXPLAIN ANALYZE (ADR 0003); `explain`
+     is the plan capability itself. The page engine is a real PostgreSQL, so it
+     can do both — unlike the mock adapter, which can do neither. */
+  return {
+    placement,
+    hardTimeout: placement === 'worker',
+    timeoutMs: QUERY_TIMEOUT_MS,
+    writable: true,
+    explain: true,
+    dialect: PGLITE_DIALECT,
+  };
 }
 
 /* Open the engine off the main thread when the page allows it. */
-async function openWorkerEngine(): Promise<PGliteInterface> {
+async function openWorkerEngine(slot: EngineSlot, dataset: DatasetId): Promise<PGliteInterface> {
   const { PGliteWorker } = await import('@electric-sql/pglite/worker');
   const w = new Worker(new URL('./pglite.worker.ts', import.meta.url), { type: 'module' });
+  /* Recorded before the handshake, not after: a handshake that never answers has
+     to be terminable by the caller, and `PGliteWorker.create` resolving is
+     exactly what may never happen. */
+  slot.worker = w;
   try {
-    const db = await PGliteWorker.create(w);
-    liveWorker = w;
-    return db;
+    return await PGliteWorker.create(w, { id: WORKER_ID[dataset] });
   } catch (e) {
-    try {
-      w.terminate();
-    } catch {
-      /* never started */
-    }
+    await stopWorker(slot);
     throw e;
+  }
+}
+
+/** Terminate a worker the engine is no longer using. Safe to call twice. */
+async function stopWorker(slot: EngineSlot): Promise<void> {
+  const w = slot.worker;
+  slot.worker = null;
+  if (!w) return;
+  try {
+    w.terminate();
+  } catch {
+    /* never started */
   }
 }
 
@@ -212,25 +313,62 @@ async function openMainThreadEngine(): Promise<PGliteInterface> {
   return PGlite.create();
 }
 
-async function bootstrap(): Promise<PGliteInterface> {
+/* A boot either finishes or is treated as failed.
+ *
+ * `PGliteWorker.create` and the first seed have no timeout of their own, and a
+ * worker that never answers leaves every caller pending for the life of the tab
+ * with nothing raised: the lesson keeps its fallback prose, `Run` never returns,
+ * and no screen can tell that from "still loading". A boot that cannot answer in
+ * this long is given up on and the engine is built on the page instead. */
+const BOOT_TIMEOUT_MS = 20000;
+
+function withBootTimeout<T>(work: Promise<T>, what: string): Promise<T> {
+  return new Promise<T>((resolve, reject) => {
+    const timer = setTimeout(() => reject(new Error(`${what} did not answer within ${BOOT_TIMEOUT_MS} ms`)), BOOT_TIMEOUT_MS);
+    work.then(
+      (value) => {
+        clearTimeout(timer);
+        resolve(value);
+      },
+      (error) => {
+        clearTimeout(timer);
+        reject(error);
+      },
+    );
+  });
+}
+
+async function bootstrap(dataset: DatasetId): Promise<PGliteInterface> {
+  const slot = slots[dataset];
   /* Loaded on demand: the WASM build is large and only needed once a query runs. */
   let db: PGliteInterface;
   try {
-    db = await openWorkerEngine();
-    placement = 'worker';
+    db = await withBootTimeout(
+      (async () => {
+        const engine = await openWorkerEngine(slot, dataset);
+        await seedDatabase(engine, dataset);
+        return engine;
+      })(),
+      'the in-browser database worker',
+    );
+    slot.placement = 'worker';
   } catch (workerError) {
-    db = await openMainThreadEngine();
-    placement = 'main';
+    /* Either the page refuses Workers outright, or the worker never answered.
+       Both leave the same choice: run the engine on the page, where there is no
+       second party to wait for. */
+    await stopWorker(slot);
+    db = await withBootTimeout(openMainThreadEngine(), 'the in-page database');
+    slot.placement = 'main';
     console.warn(
-      '[querycraft] this page blocks Web Workers, so SQL runs on the main thread and a runaway query cannot be stopped by the host.',
+      '[querycraft] the database could not run in a Web Worker, so SQL runs on the main thread and a runaway query cannot be stopped by the host.',
       workerError,
     );
-  }
-  try {
-    await seedDatabase(db);
-  } catch (e) {
-    await disposeDatabase();
-    throw e;
+    try {
+      await seedDatabase(db, dataset);
+    } catch (e) {
+      await disposeDatabase(dataset);
+      throw e;
+    }
   }
   return db;
 }
@@ -243,12 +381,21 @@ async function bootstrap(): Promise<PGliteInterface> {
  * drift: a reset that forgot the content seed, or one that seeded a different
  * schema than boot did, would be a bug the reset test could not see.
  */
-async function seedDatabase(db: PGliteInterface): Promise<void> {
-  await db.exec(schemaSql);
-  await db.exec(seedSql);
-  await createContentSchema(db);
-  await seedContentDocs(db);
-  /* The commerce tables resolve unqualified (FROM orders) while `app` metadata
+async function seedDatabase(db: PGliteInterface, dataset: DatasetId): Promise<void> {
+  if (dataset === 'perf') {
+    /* The perf fixture brings its own schema, seed, indexes and statistics. It
+       deliberately does not carry the `app` content schema: chapter markdown is
+       app metadata, not part of a dataset, and it is read from the default
+       workspace (see fetchModuleContent), so seeding it here would be a second
+       copy of the same rows with no second reader. */
+    await db.exec(perfSql);
+  } else {
+    await db.exec(schemaSql);
+    await db.exec(seedSql);
+    await createContentSchema(db);
+    await seedContentDocs(db);
+  }
+  /* The dataset tables resolve unqualified (FROM orders) while `app` metadata
      stays off the path. Session-scoped, so it also holds for a statement that
      brings its own transaction. */
   await db.exec('SET search_path = dataset, public');
@@ -256,11 +403,12 @@ async function seedDatabase(db: PGliteInterface): Promise<void> {
 
 /* Tear the worker down and drop the handle. The next query rebuilds the database
    from the same schema and seed, so the dataset is restored by construction. */
-async function disposeDatabase(): Promise<void> {
-  const w = liveWorker;
-  liveWorker = null;
-  placement = null;
-  database = null;
+async function disposeDatabase(dataset: DatasetId): Promise<void> {
+  const slot = slots[dataset];
+  const w = slot.worker;
+  slot.worker = null;
+  slot.placement = null;
+  slot.db = null;
   try {
     w?.terminate();
   } catch {
@@ -294,19 +442,29 @@ async function createContentSchema(db: PGliteInterface): Promise<void> {
   `);
 }
 
-export function getDatabase(): Promise<PGliteInterface> {
-  if (database === null) {
-    database = bootstrap().catch((e: unknown) => {
-      database = null;
+export function getDatabase(dataset: DatasetId = DEFAULT_DATASET): Promise<PGliteInterface> {
+  const slot = slots[dataset];
+  if (slot.db === null) {
+    slot.db = bootstrap(dataset).catch((e: unknown) => {
+      slot.db = null;
       throw e;
     });
   }
-  return database;
+  return slot.db;
 }
 
-/** Kick off WASM download + initdb without blocking the caller. */
-export function warmUpDatabase(): void {
-  void getDatabase().catch(() => {
+/**
+ * Kick off WASM download + initdb for one workspace without blocking the caller.
+ *
+ * Booting is the one part of a query the learner has to wait for and never
+ * caused: the WASM build, `initdb`, the seed and `ANALYZE` all happen before the
+ * first statement runs. Starting it when the *screen* that will need it opens —
+ * rather than when the learner presses Run — moves that wait into the reading.
+ * A course that never uses the perf fixture therefore never pays for it, which
+ * is why this takes the dataset rather than warming both.
+ */
+export function warmUpDataset(dataset: DatasetId = DEFAULT_DATASET): void {
+  void getDatabase(dataset).catch(() => {
     /* surfaced on first real query */
   });
 }
@@ -323,19 +481,33 @@ export function warmUpDatabase(): void {
  *
  * The measurement is the engine's, not the UI's: the caller reports what this
  * returns, so a "0.4s" badge is what the engine actually spent.
+ *
+ * A stored course's `setup.statements` (M9) are applied after the template, in
+ * order, because the exercises were verified in a scratch environment that had
+ * them: without them the learner's database is not the verified one and an
+ * exercise that checked green dies with "relation does not exist". A statement
+ * that fails throws, so a reset that did not take is never reported as one.
  */
-export async function resetEnvironment(): Promise<{ ok: boolean; duration_ms: number }> {
+export async function resetEnvironment(
+  dataset: DatasetId = DEFAULT_DATASET,
+  setup: readonly string[] = [],
+): Promise<{ ok: boolean; duration_ms: number; setup_statements: number }> {
   const t0 = typeof performance !== 'undefined' && performance.now ? performance.now() : Date.now();
-  const db = await getDatabase();
+  const db = await getDatabase(dataset);
   /* A learner may have left a transaction open on purpose (`BEGIN;` with no
      `COMMIT;`). Reset is the documented way out, so close it first — otherwise
      the drop would run inside their transaction and the content seed, which
      opens its own, would fail. */
   await db.exec('ROLLBACK').catch(() => undefined);
   await db.exec('DROP SCHEMA IF EXISTS dataset CASCADE');
-  await seedDatabase(db);
+  await seedDatabase(db, dataset);
+  let applied = 0;
+  for (const statement of setup) {
+    await db.exec(statement);
+    applied += 1;
+  }
   const ms = (typeof performance !== 'undefined' && performance.now ? performance.now() : Date.now()) - t0;
-  return { ok: true, duration_ms: Number(ms.toFixed(1)) };
+  return { ok: true, duration_ms: Number(ms.toFixed(1)), setup_statements: applied };
 }
 
 /* ---------- execution ---------- */
@@ -469,14 +641,14 @@ function withHardTimeout<T>(run: Promise<T>, ms: number): Promise<T> {
  * submission never sticks. A submission that manages its own transaction is
  * handed to PostgreSQL unwrapped — that is what a transaction chapter needs.
  */
-export async function executeSql(sql: string): Promise<EngineResult> {
+export async function executeSql(sql: string, dataset: DatasetId = DEFAULT_DATASET): Promise<EngineResult> {
   const text = String(sql ?? '');
   const statement = stripComments(text);
   if (!statement) return failed('EMPTY_QUERY', 'Blank SQL. Write a statement, then Run.');
 
   let db: PGliteInterface;
   try {
-    db = await getDatabase();
+    db = await getDatabase(dataset);
   } catch (e) {
     return failed('ENVIRONMENT_UNAVAILABLE', 'The in-browser database could not start.', sqlStateOf(e).message);
   }
@@ -493,26 +665,26 @@ export async function executeSql(sql: string): Promise<EngineResult> {
        there is nothing to kill, so wrapping it in a timeout would just report a
        stop that never happens; `engineCapabilities()` already tells the UI that
        this engine has no hard deadline. */
-    results = liveWorker !== null ? await withHardTimeout(attempt, QUERY_TIMEOUT_MS) : await attempt;
+    results = slots[dataset].worker !== null ? await withHardTimeout(attempt, QUERY_TIMEOUT_MS) : await attempt;
     succeeded = true;
   } catch (e) {
     if (e instanceof QueryTimeout) {
       /* The worker is still spinning inside the WASM loop; terminating it is the
          only way to stop the statement. The next query re-seeds from scratch. */
-      await disposeDatabase();
+      await disposeDatabase(dataset);
       return failed(
         'QUERY_TIMEOUT',
         `The query was stopped after ${QUERY_TIMEOUT_MS / 1000}s.`,
         'A statement that never finishes cannot be interrupted inside the browser engine, so the database was rebuilt.',
       );
     }
-    return { status: 'failed', columns: [], rows: [], row_count: 0, truncated: false, error: mapError(e, text) };
+    return { status: 'failed', columns: [], rows: [], row_count: 0, truncated: false, error: mapError(e, text), dialect: PGLITE_DIALECT };
   } finally {
     /* A terminated worker has no transaction left to finish and its client is
        gone (`database` is null after disposeDatabase), so this runs only on a
        live connection — including the main-thread fallback, where skipping it
        would leave the transaction open and the write uncommitted. */
-    if (wrapped && database !== null) {
+    if (wrapped && slots[dataset].db !== null) {
       await db.exec(succeeded ? 'COMMIT' : 'ROLLBACK').catch(() => undefined);
     }
   }
@@ -527,7 +699,182 @@ export async function executeSql(sql: string): Promise<EngineResult> {
   const truncated = allRows.length > MAX_ROWS;
   const rows = truncated ? allRows.slice(0, MAX_ROWS) : allRows;
 
-  return { status: 'succeeded', columns, rows, row_count: rows.length, truncated, error: null };
+  return { status: 'succeeded', columns, rows, row_count: rows.length, truncated, error: null, dialect: PGLITE_DIALECT };
+}
+
+/* ---------- plans (M5) ---------- */
+
+/** Planner inputs that change the chosen plan. Reported read-only: M5 never
+    rewrites one of these to make an exercise pass. */
+const PLANNER_SETTINGS = [
+  'random_page_cost',
+  'effective_cache_size',
+  'work_mem',
+  'enable_seqscan',
+  'enable_indexscan',
+  'enable_bitmapscan',
+  'enable_hashjoin',
+  'enable_mergejoin',
+  'enable_nestloop',
+];
+
+function roundMs(ms: number): number {
+  return Number(ms.toFixed(1));
+}
+
+async function scalar(db: PGliteInterface, sql: string): Promise<string> {
+  const rows = await queryArrays<unknown>(db, sql);
+  return rows[0] === undefined ? '' : String(rows[0][0] ?? '');
+}
+
+/**
+ * The environment block a plan is reported against (M5 exit gate): the engine
+ * version, the scale it ran at, per-relation row counts, the index list and the
+ * planner settings. A number is never shown without the scale and settings that
+ * produced it, so this is captured beside every plan, not once at boot.
+ */
+async function readPlanEnvironment(db: PGliteInterface, dataset: DatasetId): Promise<PlanEnvironment> {
+  const version = await scalar(db, 'SHOW server_version');
+  const tableRows = await queryArrays<unknown>(db, `
+    SELECT table_name FROM information_schema.tables
+    WHERE table_schema = 'dataset' AND table_type = 'BASE TABLE'
+    ORDER BY table_name;
+  `);
+  const rowCounts: Record<string, number> = {};
+  for (const row of tableRows) {
+    const name = String(row[0]);
+    /* `dataset_meta` is bookkeeping, not learner data; it is not a relation a
+       plan can scan, so reporting its row count would be noise. */
+    if (name === 'dataset_meta') continue;
+    const count = await scalar(db, `SELECT count(*)::int FROM dataset."${name.replace(/"/g, '""')}"`);
+    rowCounts[name] = Number(count);
+  }
+  const indexRows = await queryArrays<unknown>(db, `
+    SELECT tablename, indexname, indexdef FROM pg_indexes
+    WHERE schemaname = 'dataset' ORDER BY tablename, indexname;
+  `);
+  const settingsList = PLANNER_SETTINGS.map((name) => `'${name}'`).join(', ');
+  const settingRows = await queryArrays<unknown>(db, `
+    SELECT name, setting FROM pg_settings WHERE name IN (${settingsList}) ORDER BY name;
+  `);
+  const settings: Record<string, string> = {};
+  for (const row of settingRows) settings[String(row[0])] = String(row[1]);
+
+  /* The fixture names itself, and its scale is the fact table's own row count —
+     the same two numbers the Go gateway reports (`dataset_meta` and
+     `dataset.FactRowCount`). Reading them from the database rather than from
+     the `dataset` argument is the difference between "the plan was chosen
+     against 10 000 orders" being a claim and being a measurement; a lesson that
+     teaches a 10 000-row access path and a plan captured against 80 must never
+     be confusable. */
+  const meta = await queryArrays<unknown>(db, 'SELECT "dataset" FROM "dataset"."dataset_meta" ORDER BY "dataset" LIMIT 1');
+  const datasetName = meta[0] === undefined ? dataset : String(meta[0][0] ?? dataset);
+  const scale = rowCounts.orders ?? 0;
+
+  return {
+    engine: 'postgresql',
+    engine_version: version,
+    scale_factor: scale,
+    dataset: datasetName,
+    row_counts: rowCounts,
+    indexes: indexRows.map((r) => ({ relation: String(r[0]), name: String(r[1]), definition: String(r[2]) })),
+    settings,
+  };
+}
+
+/** The `EXPLAIN (FORMAT JSON)` value, wherever PGlite put it in its results. */
+function planValueOf(results: Array<{ rows: unknown[]; fields: { name: string; dataTypeID: number }[]; command?: string }>): unknown {
+  for (const r of results) {
+    if (r && Array.isArray(r.rows) && r.rows.length > 0) {
+      const row = r.rows[0] as unknown[];
+      if (Array.isArray(row) && row.length > 0) return row[0];
+    }
+  }
+  return null;
+}
+
+/**
+ * Capture a plan for learner SQL, for real, in the browser engine.
+ *
+ * `analyze` runs `EXPLAIN (ANALYZE, BUFFERS, FORMAT JSON)`: the statement is
+ * executed, so the per-node numbers are measured. That execution happens inside
+ * a transaction that is always rolled back — a plan is a view of the statement,
+ * not a licence to keep its writes — and it is bounded by the same hard
+ * deadline and worker kill as a query. Without `analyze` only the planner's
+ * cost model runs, so the bundle says `timing_precision: 'estimate'` and no
+ * timing is reported at all.
+ *
+ * The bundle is assembled by `buildPlanBundle` (./planContract), the same walk
+ * the Go engine performs, so the two adapters cannot describe one plan two ways.
+ */
+export async function explainSql(
+  sql: string,
+  analyze: boolean,
+  requestId: string,
+  dataset: DatasetId = DEFAULT_DATASET,
+): Promise<PlanBundle> {
+  const text = String(sql ?? '');
+  const statement = stripComments(text);
+  const t0 = typeof performance !== 'undefined' && performance.now ? performance.now() : Date.now();
+  const elapsed = (): number => (typeof performance !== 'undefined' && performance.now ? performance.now() : Date.now()) - t0;
+
+  if (!statement) {
+    return failedPlanBundle('postgresql', 'EMPTY_QUERY', 'Blank SQL. Write a statement, then look at its plan.');
+  }
+
+  let db: PGliteInterface;
+  try {
+    db = await getDatabase(dataset);
+  } catch (e) {
+    return failedPlanBundle('postgresql', 'ENVIRONMENT_UNAVAILABLE', 'The in-browser database could not start.', sqlStateOf(e).message);
+  }
+
+  let environment: PlanEnvironment;
+  try {
+    environment = await readPlanEnvironment(db, dataset);
+  } catch {
+    /* The plan can still be captured; only the block that explains it is
+       missing, and saying so beats refusing the whole call. */
+    environment = emptyEnvironment('postgresql');
+  }
+
+  const planSql = `${analyze ? 'EXPLAIN (ANALYZE, BUFFERS, FORMAT JSON)' : 'EXPLAIN (FORMAT JSON)'} ${text}`;
+  let results: Array<{ rows: unknown[]; fields: { name: string; dataTypeID: number }[]; command?: string }>;
+  try {
+    const attempt = (async () => {
+      await db.exec('BEGIN');
+      try {
+        return await db.exec(planSql, { rowMode: 'array' });
+      } finally {
+        await db.exec('ROLLBACK').catch(() => undefined);
+      }
+    })();
+    results = slots[dataset].worker !== null ? await withHardTimeout(attempt, QUERY_TIMEOUT_MS) : await attempt;
+  } catch (e) {
+    if (e instanceof QueryTimeout) {
+      await disposeDatabase(dataset);
+      return failedPlanBundle(
+        'postgresql',
+        'QUERY_TIMEOUT',
+        `The statement was stopped after ${QUERY_TIMEOUT_MS / 1000}s before a plan could be captured.`,
+        'A statement that never finishes cannot be interrupted inside the browser engine, so the database was rebuilt.',
+        environment,
+      );
+    }
+    const err = mapError(e, text);
+    return failedPlanBundle('postgresql', err.code, err.message, err.detail ?? null, environment);
+  }
+
+  return buildPlanBundle({
+    plan: planValueOf(results),
+    analyze,
+    timing_precision: analyze ? 'analyze' : 'estimate',
+    engine: 'postgresql',
+    environment,
+    duration_ms: roundMs(elapsed()),
+    statement: text,
+    request_id: requestId,
+  });
 }
 
 /* ---------- introspection for the tables drawer ---------- */
@@ -549,8 +896,8 @@ async function queryArrays<T>(db: PGliteInterface, sql: string): Promise<T[][]> 
   return rows as T[][];
 }
 
-export async function fetchTables(): Promise<{ tables: LiveTable[]; rows: number }> {
-  const db = await getDatabase();
+export async function fetchTables(dataset: DatasetId = DEFAULT_DATASET): Promise<{ tables: LiveTable[]; rows: number }> {
+  const db = await getDatabase(dataset);
 
   const tableRows = await queryArrays<unknown>(db, `
     SELECT table_name FROM information_schema.tables
@@ -623,6 +970,10 @@ export { normalizeValue };
 
 /** Chapter reading content, read back from the database as markdown. */
 export async function fetchModuleContent(moduleId: string): Promise<ContentSection[]> {
+  /* Content is app metadata, not part of a dataset: it always reads from the
+     default workspace, whichever dataset the learner is currently running SQL
+     against. A `plans` chapter therefore reads its markdown from the same place
+     a commerce chapter does, and the perf workspace never needs a second copy. */
   const db = await getDatabase();
   const res = await db.query<{ section: string; markdown: string }>(
     'SELECT section, markdown FROM app.content_docs WHERE module_id = $1 ORDER BY ordinal',

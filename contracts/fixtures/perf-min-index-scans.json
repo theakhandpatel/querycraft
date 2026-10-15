@@ -1,0 +1,104 @@
+{
+  "note": "A rewritten query must reach the rows through at least two index scans; this plan reaches them through none: PERF_INDEX_NOT_USED.",
+  "contract": {
+    "engine": "postgresql",
+    "min_index_scans": 2
+  },
+  "bundle": {
+    "status": "succeeded",
+    "analyze": false,
+    "timing_precision": "estimate",
+    "engine": "postgresql",
+    "plan": {
+      "Node Type": "Seq Scan",
+      "Plan Rows": 10000,
+      "Total Cost": 305,
+      "Relation Name": "orders",
+      "Alias": "orders"
+    },
+    "summary": {
+      "node_count": 1,
+      "node_types": [
+        "Seq Scan"
+      ],
+      "relations": [
+        "orders"
+      ],
+      "indexes_used": [],
+      "seq_scans": [
+        {
+          "relation": "orders",
+          "plan_rows": 10000
+        }
+      ],
+      "index_scans": [],
+      "max_estimated_rows": 10000,
+      "plan_rows": 10000,
+      "total_cost": 305,
+      "nodes": [
+        {
+          "depth": 0,
+          "node_type": "Seq Scan",
+          "relation": "orders",
+          "alias": "orders",
+          "index": null,
+          "join_type": null,
+          "parent_relationship": null,
+          "estimated_rows": 10000,
+          "estimated_cost": 305,
+          "actual_rows": null,
+          "actual_time_ms": null,
+          "loops": null,
+          "buffers_read": null,
+          "filter": null,
+          "index_condition": null,
+          "sort_key": null,
+          "warnings": []
+        }
+      ]
+    },
+    "environment": {
+      "engine": "postgresql",
+      "engine_version": "18.3",
+      "scale_factor": 1,
+      "dataset": "perf",
+      "row_counts": {
+        "customers": 2000,
+        "products": 500,
+        "orders": 10000,
+        "order_items": 20000
+      },
+      "indexes": [
+        {
+          "relation": "orders",
+          "name": "orders_customer_id_idx",
+          "definition": "CREATE INDEX orders_customer_id_idx ON dataset.orders USING btree (customer_id)"
+        },
+        {
+          "relation": "orders",
+          "name": "orders_status_idx",
+          "definition": "CREATE INDEX orders_status_idx ON dataset.orders USING btree (status)"
+        }
+      ],
+      "settings": {
+        "random_page_cost": "4",
+        "seq_page_cost": "1",
+        "effective_cache_size": "4GB",
+        "work_mem": "16MB",
+        "enable_seqscan": "on",
+        "enable_indexscan": "on"
+      }
+    },
+    "warnings": [],
+    "duration_ms": 1.2,
+    "statement": null,
+    "request_id": null,
+    "error": null
+  },
+  "expected_outcome": {
+    "passed": false,
+    "failures": [
+      "PERF_INDEX_NOT_USED"
+    ]
+  }
+}

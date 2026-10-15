@@ -26,6 +26,40 @@ Module: `github.com/querycraft/sqlquery/backend`.
 | `POST` | `/events` | 🔒 Append an audit/attempt event; returns `202 Accepted`. |
 | `POST` | `/courses/generate` | Generate a course skeleton (title, chapters, exercises, dataset version). |
 | `POST` | `/challenges/generate` | Generate an AI challenge. |
+| `GET` | `/generation/{id}` | 🔒 Poll a generation submitted asynchronously: the pipeline's stages while it runs, the outcome and the stored record id when it finishes. |
+| `GET` | `/runs` | 🔒 List the caller's generation-run transcripts, newest first (bounded to 100). |
+| `GET` | `/runs/{id}` | 🔒 Read one run's whole transcript: every provider message, tool call and tool result, in order — owner-scoped (`404` for another account's run), redacted and bounded (`contracts/run.schema.json`). |
+
+Both generation routes answer **synchronously by default** — a script reads the
+whole outcome from one request. A run takes minutes, so a client that cannot
+hold a request open sends `Prefer: respond-async` (or `?async=1`) and gets
+`202 Accepted` with `{"ok":true,"job":{"id":…,"kind":…,"status":"running"}}`,
+then polls `GET /generation/{id}` until the status is no longer `running`. The
+run continues on its own context: a client that goes away does not cancel work
+the learner already paid for. Finished jobs are bounded per owner (the stored
+record is the durable thing), and a job is readable only by the account that
+submitted it — another learner gets `404`, the same rule the record routes
+follow.
+
+Every generation run also leaves an **audit trail**: its whole conversation —
+every provider message, tool call and tool result, in order — is persisted to
+`app.runs` and read back with `GET /runs` and `GET /runs/{id}`
+(`contracts/run.schema.json`). The record is captured at the provider seam
+(`internal/ai/transcript.go`), so the challenge pipeline and the M8 course agent
+are both covered; the course agent records its own conversation as it assembles
+it, because each tool result is the engine's own verdict. Three properties hold
+by construction:
+
+* **Owner-scoped** — the record is stamped with the session's account, the same
+  wrapper that stamps a stored challenge or course, and another account's run is
+  `404`, never `403`.
+* **Redacted** — DSN credentials, `Authorization` headers, named key/secret/token
+  fields, vendor key prefixes and the provider's own API key are removed before
+  the value is stored, and an entry that was scrubbed says so.
+* **Bounded** — at most `ai.MaxTranscriptEntries` (512) entries and
+  `ai.MaxTranscriptBytes` (256 KiB) per run, with one entry clipped at 8000
+  characters. A run that hits a bound stores a prefix of itself and reports
+  `truncated`; it can never grow the row without limit.
 
 Errors use stable codes, never free text alone: `EMPTY_QUERY`,
 `QUERY_SYNTAX_ERROR`, `QUERY_RUNTIME_ERROR`, `QUERY_TIMEOUT`,
@@ -49,8 +83,10 @@ are bcrypt (`golang.org/x/crypto/bcrypt`).
 
 A fresh install seeds one administrator (`QC_ADMIN_EMAIL`, default
 `admin@querycraft.local`) whose default password is **empty**, so a local install
-needs no setup. That account can sign in with a blank password; any non-empty
-password will not match it. Set `QC_ADMIN_PASSWORD` before exposing the port.
+needs no setup. That account can sign in with a blank password on a loopback
+bind only: the gateway refuses to start with an empty admin password when
+`QC_ADDR` is not loopback, so a network-exposed install must set
+`QC_ADMIN_PASSWORD`. Any non-empty password will not match an empty stored hash.
 Public signups always receive the `learner` role — admin is not self-service.
 Seeding is idempotent and never rewrites the password of an existing account.
 
@@ -67,11 +103,11 @@ echoed back. CORS is open (`Access-Control-Allow-Origin: *`), permits the
 
 | Variable | Default | Meaning |
 | --- | --- | --- |
-| `QC_ADDR` | `:8080` | Listen address for the HTTP server. |
+| `QC_ADDR` | `127.0.0.1:8080` | Listen address for the HTTP server. Loopback by default; a non-loopback bind requires `QC_ADMIN_PASSWORD`. |
 | `QC_DATABASE_URL` | _(unset → local server)_ | Learner execution DSN. When unset the gateway starts its own local PostgreSQL (see below). When set (or unreachable) it uses that server. Never an administrative connection. |
 | `QC_ADMIN_DATABASE_URL` | `$QC_DATABASE_URL` | Metadata DSN for accounts, sessions, progress snapshots and events. When unset the in-memory store is used (accounts then vanish on restart). |
 | `QC_ADMIN_EMAIL` | `admin@querycraft.local` | Address the seeded default administrator gets. |
-| `QC_ADMIN_PASSWORD` | _(empty)_ | Password for the seeded administrator. Empty means "sign in with a blank password"; set it before exposing the port. Existing accounts are never reset. |
+| `QC_ADMIN_PASSWORD` | _(empty)_ | Password for the seeded administrator. Empty means "sign in with a blank password", which is allowed only on a loopback bind; the gateway refuses to start with an empty password on a non-loopback `QC_ADDR`. Existing accounts are never reset. |
 | `QC_ADMIN_NAME` | `Administrator` | Display name for the seeded administrator. |
 | `QC_NO_LOCAL_DB` | `0` | `1` = never start the local server, even with no DSN. |
 | `QC_PG_PORT` | `54329` | Port for the local PostgreSQL server. |
@@ -129,7 +165,9 @@ The service is designed to run usefully with no database configured.
   `/challenges/generate`.
 - With no `QC_ADMIN_DATABASE_URL`, progress and events are kept in an
   in-memory store that is lost on restart. Set it (or `QC_DATABASE_URL`) to
-  persist them in PostgreSQL.
+  persist them in PostgreSQL. The agent-run transcripts live in the same store
+  (`app.runs`); with generation off, `GET /runs` answers `503` rather than
+  inventing a transcript.
 
 This means the React client always has something to talk to, whether or not a
 database is running.

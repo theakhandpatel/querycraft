@@ -548,6 +548,8 @@ Exit gate:
 
 ### M4: AI Challenge Lab
 
+Plan of record: [`docs/m4-implementation-plan.md`](m4-implementation-plan.md); live tracker: `progress.md`. The provider decision: ADR [`0005`](adr/0005-ai-provider-and-sdk.md).
+
 Scope: provider interface and fake provider, challenge request and artifact schemas, generation pipeline (11.1), server-side keys, tutoring, on-demand critique, verification and repair (6.5), challenge lifecycle states added as needed.
 
 Exit gate:
@@ -559,6 +561,8 @@ Exit gate:
 - Disabling AI leaves every other feature working.
 
 ### M5: SQL performance lab
+
+Plan of record: [`docs/m5-implementation-plan.md`](m5-implementation-plan.md).
 
 Scope: performance exercise type, `EXPLAIN` viewing, controlled `EXPLAIN ANALYZE`, larger controlled datasets, plan-based evaluation before timing, environment metadata in results.
 
@@ -611,11 +615,11 @@ Exit gate:
 | Writing exercises (INSERT, UPDATE, DDL) | Not in M1 to M2 | Before M3 limits are finalized |
 | Public demo | Not hosted. `docker compose up` plus a recorded demo. | Before any hosted deployment, with container isolation |
 | Challenge delete semantics | Delete challenge data after confirmation. Attempts exported first by default. | Before the delete UI |
-| AI provider and SDK | Undecided | M4 spike |
+| AI provider and SDK | Provider-neutral interface + OpenAI-compatible HTTP transport; deterministic fake provider default | M4 spike — settled by ADR `0005` |
 | Desktop packaging | Not planned | After real install friction evidence |
-| D12: SQLite engine in the browser | Undecided | M6 spike |
-| D13: SQLite engine on the gateway | `modernc.org/sqlite` (pure Go, no cgo) | M6 spike |
-| D14: How SQLite isolates a learner's writes | Per-learner database file, reset by copy | M6 spike |
+| D12: SQLite engine in the browser | `@sqlite.org/sqlite-wasm` 3.53.4 in a Worker, declared-type labels from `sqlite3_column_decltype`, deadline from `sqlite3_progress_handler` | Settled — ADR `docs/adr/0007-browser-sqlite-engine.md` (the only candidate that can label a column, so the only one the parity audit can compare) |
+| D13: SQLite engine on the gateway | `modernc.org/sqlite` (pure Go, no cgo) | Settled in M6 step 4 — `backend/internal/engine/sqlite.go`, proved cgo-free by `make check-cgo` |
+| D14: How SQLite isolates a learner's writes | Per-learner database file, reset by copy | Settled — ADR `docs/adr/0006-sqlite-learner-isolation.md` (measured: copy-create ≈2 ms, reset ≈2 ms) |
 | D15: One dialect per chapter, or dialect-neutral chapters with per-dialect solutions | One dialect per chapter | Before the first SQLite course |
 
 ## 16. First backlog

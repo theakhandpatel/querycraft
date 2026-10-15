@@ -1,0 +1,238 @@
+{
+  "note": "Captured with EXPLAIN (ANALYZE, BUFFERS, FORMAT JSON) against the perf dataset: 'refunded' is 0.5% of orders, so the planner reads the status index instead of the table. The bundle is a real capture, pasted verbatim.",
+  "contract": {
+    "engine": "postgresql",
+    "require_nodes": [
+      {
+        "node_type": "Index Only Scan",
+        "relation": "orders",
+        "index": "orders_status_idx",
+        "label": "an index scan on orders rather than a scan of all 10 000 rows"
+      }
+    ],
+    "forbid_nodes": [
+      {
+        "node_type": "Seq Scan",
+        "relation": "orders",
+        "above_plan_rows": 1000,
+        "label": "a 0.5% predicate is not a sequential scan on a 10 000-row relation"
+      }
+    ],
+    "require_indexes": [
+      "orders_status_idx"
+    ],
+    "min_index_scans": 1,
+    "max_plan_rows": 100
+  },
+  "bundle": {
+    "status": "succeeded",
+    "analyze": true,
+    "timing_precision": "analyze",
+    "engine": "postgresql",
+    "plan": {
+      "Actual Loops": 1,
+      "Actual Rows": 1,
+      "Actual Startup Time": 0.087,
+      "Actual Total Time": 0.087,
+      "Async Capable": false,
+      "Disabled": false,
+      "Local Dirtied Blocks": 0,
+      "Local Hit Blocks": 0,
+      "Local Read Blocks": 0,
+      "Local Written Blocks": 0,
+      "Node Type": "Aggregate",
+      "Parallel Aware": false,
+      "Partial Mode": "Simple",
+      "Plan Rows": 1,
+      "Plan Width": 8,
+      "Plans": [
+        {
+          "Actual Loops": 1,
+          "Actual Rows": 50,
+          "Actual Startup Time": 0.036,
+          "Actual Total Time": 0.08,
+          "Alias": "orders",
+          "Async Capable": false,
+          "Disabled": false,
+          "Heap Fetches": 50,
+          "Index Cond": "(status = 'refunded'::text)",
+          "Index Name": "orders_status_idx",
+          "Index Searches": 1,
+          "Local Dirtied Blocks": 0,
+          "Local Hit Blocks": 0,
+          "Local Read Blocks": 0,
+          "Local Written Blocks": 0,
+          "Node Type": "Index Only Scan",
+          "Parallel Aware": false,
+          "Parent Relationship": "Outer",
+          "Plan Rows": 50,
+          "Plan Width": 0,
+          "Relation Name": "orders",
+          "Rows Removed by Index Recheck": 0,
+          "Scan Direction": "Forward",
+          "Shared Dirtied Blocks": 0,
+          "Shared Hit Blocks": 52,
+          "Shared Read Blocks": 0,
+          "Shared Written Blocks": 0,
+          "Startup Cost": 0.29,
+          "Temp Read Blocks": 0,
+          "Temp Written Blocks": 0,
+          "Total Cost": 56.89
+        }
+      ],
+      "Shared Dirtied Blocks": 0,
+      "Shared Hit Blocks": 52,
+      "Shared Read Blocks": 0,
+      "Shared Written Blocks": 0,
+      "Startup Cost": 57.01,
+      "Strategy": "Plain",
+      "Temp Read Blocks": 0,
+      "Temp Written Blocks": 0,
+      "Total Cost": 57.02
+    },
+    "summary": {
+      "node_count": 2,
+      "node_types": [
+        "Aggregate",
+        "Index Only Scan"
+      ],
+      "relations": [
+        "orders"
+      ],
+      "indexes_used": [
+        "orders_status_idx"
+      ],
+      "seq_scans": [],
+      "index_scans": [
+        {
+          "relation": "orders",
+          "index": "orders_status_idx",
+          "node_type": "Index Only Scan"
+        }
+      ],
+      "max_estimated_rows": 50,
+      "plan_rows": 1,
+      "total_cost": 57.02,
+      "nodes": [
+        {
+          "depth": 0,
+          "node_type": "Aggregate",
+          "relation": null,
+          "alias": null,
+          "index": null,
+          "join_type": null,
+          "parent_relationship": null,
+          "estimated_rows": 1,
+          "estimated_cost": 57.02,
+          "actual_rows": 1,
+          "actual_time_ms": 0.087,
+          "loops": 1,
+          "buffers_read": 0,
+          "filter": null,
+          "index_condition": null,
+          "sort_key": null,
+          "warnings": []
+        },
+        {
+          "depth": 1,
+          "node_type": "Index Only Scan",
+          "relation": "orders",
+          "alias": "orders",
+          "index": "orders_status_idx",
+          "join_type": null,
+          "parent_relationship": "Outer",
+          "estimated_rows": 50,
+          "estimated_cost": 56.89,
+          "actual_rows": 50,
+          "actual_time_ms": 0.08,
+          "loops": 1,
+          "buffers_read": 0,
+          "filter": null,
+          "index_condition": "(status = 'refunded'::text)",
+          "sort_key": null,
+          "warnings": []
+        }
+      ]
+    },
+    "environment": {
+      "engine": "postgresql",
+      "engine_version": "18.3",
+      "scale_factor": 1,
+      "dataset": "perf",
+      "row_counts": {
+        "customers": 2000,
+        "order_items": 20000,
+        "orders": 10000,
+        "products": 500
+      },
+      "indexes": [
+        {
+          "relation": "customers",
+          "name": "customers_pkey",
+          "definition": "CREATE UNIQUE INDEX customers_pkey ON dataset.customers USING btree (id)"
+        },
+        {
+          "relation": "dataset_meta",
+          "name": "dataset_meta_pkey",
+          "definition": "CREATE UNIQUE INDEX dataset_meta_pkey ON dataset.dataset_meta USING btree (dataset)"
+        },
+        {
+          "relation": "order_items",
+          "name": "order_items_order_id_idx",
+          "definition": "CREATE INDEX order_items_order_id_idx ON dataset.order_items USING btree (order_id)"
+        },
+        {
+          "relation": "order_items",
+          "name": "order_items_pkey",
+          "definition": "CREATE UNIQUE INDEX order_items_pkey ON dataset.order_items USING btree (id)"
+        },
+        {
+          "relation": "order_items",
+          "name": "order_items_product_id_idx",
+          "definition": "CREATE INDEX order_items_product_id_idx ON dataset.order_items USING btree (product_id)"
+        },
+        {
+          "relation": "orders",
+          "name": "orders_customer_id_idx",
+          "definition": "CREATE INDEX orders_customer_id_idx ON dataset.orders USING btree (customer_id)"
+        },
+        {
+          "relation": "orders",
+          "name": "orders_pkey",
+          "definition": "CREATE UNIQUE INDEX orders_pkey ON dataset.orders USING btree (id)"
+        },
+        {
+          "relation": "orders",
+          "name": "orders_status_idx",
+          "definition": "CREATE INDEX orders_status_idx ON dataset.orders USING btree (status)"
+        },
+        {
+          "relation": "products",
+          "name": "products_pkey",
+          "definition": "CREATE UNIQUE INDEX products_pkey ON dataset.products USING btree (id)"
+        }
+      ],
+      "settings": {
+        "effective_cache_size": "4GB",
+        "enable_bitmapscan": "on",
+        "enable_hashjoin": "on",
+        "enable_indexscan": "on",
+        "enable_mergejoin": "on",
+        "enable_nestloop": "on",
+        "enable_seqscan": "on",
+        "random_page_cost": "4",
+        "seq_page_cost": "1",
+        "work_mem": "16MB"
+      }
+    },
+    "warnings": [],
+    "duration_ms": 5,
+    "statement": "SELECT count(*) FROM orders WHERE status = 'refunded'",
+    "request_id": null,
+    "error": null
+  },
+  "expected_outcome": {
+    "passed": true,
+    "failures": []
+  }
+}

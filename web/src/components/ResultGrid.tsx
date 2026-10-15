@@ -1,4 +1,5 @@
 import React from 'react';
+import { engineLabelFor } from '../lib/dialectChoice';
 import type { QueryResult } from '../types';
 
 /**
@@ -65,7 +66,14 @@ export default function ResultGrid({ qr, showFooter = true }: { qr: QueryResult 
             {qr.truncated ? ' · truncated' : ''}
             {qr.request_id ? ` · ${qr.request_id}` : ''}
           </span>
-          <span className="muted">{qr.duration_ms} ms · {qr.engine}</span>
+          {/* The label beside a result names the engine that produced *this*
+              result. `qr.dialect` is the contract's honest, machine-readable
+              answer, so it is what the words are built from — never the
+              chapter's dialect and never the adapter's — and the engine's own
+              free text is shown only when it already names that dialect. */}
+          <span className="muted" data-dialect={qr.dialect}>
+            {qr.duration_ms} ms · {engineLabelFor(qr.dialect, qr.engine)}
+          </span>
         </div>
       )}
     </>

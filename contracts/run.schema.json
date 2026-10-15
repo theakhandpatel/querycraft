@@ -1,0 +1,84 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://querycraft.app/contracts/run.schema.json",
+  "title": "Agent-run transcripts",
+  "description": "The audit trail for a generation run (design 11). Each run of the AI pipeline persists its whole conversation — every provider message, tool call and tool result, in order — attributed to the run, the kind (challenge or course), the owner and the terminal outcome. The record is redacted before it is stored and bounded, so a stored transcript is a prefix of the conversation when the bound was hit and says so. `$defs/runTranscript` is one run; `$defs/runSummary` is the list shape; `$defs/entry` is one ordered fact.",
+  "$defs": {
+    "entryKind": {
+      "enum": ["message", "tool_call", "tool_result", "error"],
+      "description": "message: a turn the model saw or produced. tool_call: a function the model asked for. tool_result: what the gateway answered with. error: a transport or policy failure."
+    },
+    "role": {
+      "enum": ["system", "user", "assistant", "tool"],
+      "description": "Set for a message entry; empty for the other kinds."
+    },
+    "runKind": {
+      "enum": ["challenge", "course"]
+    },
+    "runStatus": {
+      "enum": ["active", "rejected", "failed", "unavailable", "awaiting_approval"],
+      "description": "The run's terminal outcome, the same word the generation outcome envelope uses. `awaiting_approval` is a course run that stopped after storing its outline; the run itself ended there, and a later POST /courses/{id}/build continues the stored course."
+    },
+    "error": {
+      "type": "object",
+      "required": ["code", "message"],
+      "properties": {
+        "code": { "type": "string" },
+        "stage": { "type": "string" },
+        "message": { "type": "string" },
+        "detail": { "type": ["string", "null"] }
+      }
+    },
+    "entry": {
+      "type": "object",
+      "required": ["seq", "kind", "at"],
+      "properties": {
+        "seq": { "type": "integer", "minimum": 0, "description": "Position in the run, starting at 0." },
+        "kind": { "$ref": "#/$defs/entryKind" },
+        "role": { "$ref": "#/$defs/role" },
+        "content": { "type": "string" },
+        "tool_call_id": { "type": "string" },
+        "tool_name": { "type": "string" },
+        "at": { "type": "string", "format": "date-time" },
+        "ms": { "type": "number", "minimum": 0, "description": "The provider latency for the turn this entry belongs to." },
+        "truncated": { "type": "boolean", "description": "True when this entry's content was clipped to fit the per-entry bound." },
+        "redacted": { "type": "boolean", "description": "True when a credential scrub changed this entry's content." }
+      }
+    },
+    "runTranscript": {
+      "description": "One generation run's stored conversation, attributed to the run, its kind, its owner, when it ran and how it ended. owner_id is the session's own account and does not travel in the body.",
+      "type": "object",
+      "required": ["id", "kind", "status", "entries", "entry_count", "bytes", "started_at", "finished_at"],
+      "properties": {
+        "id": { "type": "string" },
+        "kind": { "$ref": "#/$defs/runKind" },
+        "owner_id": { "type": "string" },
+        "status": { "$ref": "#/$defs/runStatus" },
+        "entries": { "type": "array", "items": { "$ref": "#/$defs/entry" } },
+        "entry_count": { "type": "integer", "minimum": 0, "description": "How many entries the run produced; `entries` is what was stored. They differ only when truncated is true." },
+        "bytes": { "type": "integer", "minimum": 0, "description": "The stored content size, which the run's bound caps." },
+        "truncated": { "type": "boolean", "description": "True when the transcript is a prefix of the run because an entry or byte bound was reached." },
+        "error": { "oneOf": [{ "type": "null" }, { "$ref": "#/$defs/error" }] },
+        "started_at": { "type": "string", "format": "date-time" },
+        "finished_at": { "type": "string", "format": "date-time" }
+      }
+    },
+    "runSummary": {
+      "description": "A run without its entries, as GET /runs lists it.",
+      "type": "object",
+      "required": ["id", "kind", "status", "entry_count", "bytes", "started_at", "finished_at"],
+      "properties": {
+        "id": { "type": "string" },
+        "kind": { "$ref": "#/$defs/runKind" },
+        "owner_id": { "type": "string" },
+        "status": { "$ref": "#/$defs/runStatus" },
+        "entry_count": { "type": "integer", "minimum": 0 },
+        "bytes": { "type": "integer", "minimum": 0 },
+        "truncated": { "type": "boolean" },
+        "error": { "oneOf": [{ "type": "null" }, { "$ref": "#/$defs/error" }] },
+        "started_at": { "type": "string", "format": "date-time" },
+        "finished_at": { "type": "string", "format": "date-time" }
+      }
+    }
+  }
+}

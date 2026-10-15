@@ -12,8 +12,10 @@ the gateway, and emits **one binary** that serves both.
 
 The app has local accounts. A fresh install seeds an administrator at
 `admin@querycraft.local` with an **empty password**, so the first sign-in needs
-no setup; set `QC_ADMIN_PASSWORD` before exposing the port. Public signups get
-the `learner` role. Progress and events are scoped to the signed-in account.
+no setup; that blank password is accepted only on a loopback bind (the default
+`127.0.0.1:8080`), and binding the gateway to the network requires
+`QC_ADMIN_PASSWORD`. Public signups get the `learner` role. Progress and events
+are scoped to the signed-in account.
 
 | Track | Path | Stack | Purpose |
 | --- | --- | --- | --- |
@@ -202,7 +204,7 @@ cd backend
 go build ./...
 go vet ./...
 go test ./...          # all green with no database
-go run ./cmd/api       # listens on :8080 (override with QC_ADDR)
+go run ./cmd/api       # listens on 127.0.0.1:8080 (override with QC_ADDR)
 ```
 
 ### Database modes — no Docker required
@@ -216,12 +218,12 @@ so pointing the gateway at any other PostgreSQL is a one-variable change.
 
 | Env var | Default | Meaning |
 | --- | --- | --- |
-| `QC_ADDR` | `:8080` | HTTP listen address |
+| `QC_ADDR` | `127.0.0.1:8080` | HTTP listen address. Loopback by default. A non-loopback bind requires `QC_ADMIN_PASSWORD` (an empty-password admin is refused there). |
 | `QC_DATABASE_URL` | *(unset)* | Use this PostgreSQL instead of the embedded one |
 | `QC_NO_LOCAL_DB` | `0` | `1` = never start the embedded server |
 | `QC_ADMIN_DATABASE_URL` | falls back to `QC_DATABASE_URL` | Metadata store (accounts, sessions, progress, events) |
 | `QC_ADMIN_EMAIL` | `admin@querycraft.local` | Address of the seeded default administrator |
-| `QC_ADMIN_PASSWORD` | *(empty)* | Password for that admin. Empty = sign in with a blank password. Set it before exposing the port |
+| `QC_ADMIN_PASSWORD` | *(empty)* | Password for that admin. Empty = sign in with a blank password, allowed only on a loopback bind; the gateway refuses to start with an empty password on a non-loopback `QC_ADDR`. Set it before exposing the port |
 | `QC_PG_PORT` | `54329` | Embedded server port |
 | `QC_PG_DATA` / `QC_PG_RUNTIME` / `QC_PG_BINARIES` | `backend/.data/pg/...` | Cluster dirs |
 | `QC_PG_USER` / `QC_PG_PASSWORD` / `QC_PG_DATABASE` | `querycraft` | Credentials |
@@ -283,7 +285,7 @@ make audit-metrics    # /metrics and /diagnostics (hermetic) — audit-metrics-l
 parity, and `go test ./...`. The load test and parity audits boot their own
 gateway, so they are separate targets (`make audit-load`, `make audit-parity`).
 
-`make verify` boots the freshly built binary on `:18080` against a throwaway
+`make verify` boots the freshly built binary on `127.0.0.1:18080` against a throwaway
 PostgreSQL cluster: it wipes and cold-`initdb`s `backend/.data/smoke`, auto-picks
 a free port so it never collides with a dev gateway, applies the dataset, then
 asserts
@@ -326,9 +328,10 @@ each chapter stored as markdown in the database with rendered Mermaid diagrams,
 and every exercise graded against a result contract.
 
 It has local accounts: a fresh install seeds `admin@querycraft.local` with an
-empty password (`QC_ADMIN_PASSWORD` to override), public signups become learners,
-and progress and events are scoped to the signed-in account — the owner always
-comes from the session, never the request body. The workbook can export a
+empty password (`QC_ADMIN_PASSWORD` to override) that is accepted only on the
+loopback default; public signups become learners, and progress and events are
+scoped to the signed-in account — the owner always comes from the session, never
+the request body. The workbook can export a
 versioned, credential-free JSON copy of your data (`docs/export-format.md`).
 
 The Go gateway is the M3 Adapter B surface. It implements the full `contracts/`

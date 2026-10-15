@@ -78,8 +78,73 @@ func ByID(id string) (Dataset, bool) {
 	return Commerce(), true
 }
 
+// perfTableRows is the declared row count of each perf relation, in the order
+// perf.sql generates them. It is the same shape as the commerce Dataset, at the
+// scale the plan lessons are about.
+var perfTableRows = []struct {
+	Name string
+	Rows int
+}{
+	{"customers", 2000},
+	{"products", 500},
+	{"orders", PerfScaleFactorOrders},
+	{"order_items", 20000},
+}
+
+// perfTablesResponse describes the perf fixture for the tables drawer.
+//
+// The four relations are the same four the commerce dataset has, with the same
+// columns and types: perf.sql declares the same DDL at a larger scale, and the
+// schema is the thing the drawer exists to show. The column metadata is taken
+// from the commerce build rather than restated, so the two descriptions cannot
+// drift; the row counts are the counts the seed generates.
+//
+// There is deliberately no row *preview*. A preview is learner data, and the
+// perf rows live in the caller's own copy of the sealed template — an anonymous
+// caller has no such copy, and a signed-in one may have changed it. Returning
+// the header alone says "these are the columns" and shows no row, which is the
+// only honest answer available without an environment; inventing five rows
+// would be exactly the fabrication this endpoint must never commit.
+func perfTablesResponse() TablesResponse {
+	commerce := Commerce()
+	out := TablesResponse{Dataset: PerfDatasetID, Version: PerfVersion}
+	for _, spec := range perfTableRows {
+		source, found := findTable(commerce, spec.Name)
+		if !found {
+			continue
+		}
+		info := TableInfo{Name: spec.Name, Rows: spec.Rows}
+		info.Cols = make([][]string, len(source.Columns))
+		for i, c := range source.Columns {
+			info.Cols[i] = []string{c.Name, c.Type, c.Flags}
+		}
+		previewCols := source.PreviewCols
+		if len(previewCols) == 0 {
+			for _, c := range source.Columns {
+				previewCols = append(previewCols, c.Name)
+			}
+		}
+		info.Preview = [][]string{append([]string{}, previewCols...)}
+		out.Tables = append(out.Tables, info)
+		out.Rows += spec.Rows
+	}
+	return out
+}
+
+func findTable(ds Dataset, name string) (TableSpec, bool) {
+	for _, t := range ds.Tables {
+		if t.Name == name {
+			return t, true
+		}
+	}
+	return TableSpec{}, false
+}
+
 // Tables builds the introspection response for a dataset id.
 func Tables(id string) (TablesResponse, bool) {
+	if id == PerfDatasetID {
+		return perfTablesResponse(), true
+	}
 	ds, ok := ByID(id)
 	if !ok {
 		return TablesResponse{}, false

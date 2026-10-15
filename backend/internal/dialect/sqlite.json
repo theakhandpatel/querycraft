@@ -1,0 +1,349 @@
+{
+  "dialect": "sqlite",
+  "engine": "sqlite",
+  "engine_label": "SQLite 3.x",
+  "capabilities": {
+    "analyze": false,
+    "plan": false,
+    "roles": false,
+    "schemas": false,
+    "writable": true,
+    "sqlstate": false,
+    "explain_query_plan": true,
+    "window_functions": true,
+    "recursive_cte": true,
+    "filter_clause": true,
+    "returning": true,
+    "strict_tables": true,
+    "right_full_join": true,
+    "json1": true,
+    "boolean_type": false,
+    "date_type": false,
+    "interval_type": false,
+    "dynamic_typing": true,
+    "rowid_tables": true,
+    "without_rowid": true,
+    "autoincrement": true,
+    "like_case_insensitive_ascii": true,
+    "ilike": false,
+    "date_trunc": false,
+    "to_char": false,
+    "distinct_on": false,
+    "cast_operator": false,
+    "interrupt": true
+  },
+  "capability_notes": {
+    "analyze": "SQLite has no EXPLAIN ANALYZE. It has EXPLAIN QUERY PLAN (no actual row counts) and nothing that reports measured per-node time, so M5's plan-reading chapter cannot exist in this dialect.",
+    "plan": "The planner's output is a tree of scan and search steps, not a cost model: no estimated rows, no actual rows, no cost. Reporting costs would be invented, so plan:false.",
+    "roles": "Authentication is the host's job; SQLite has no roles, no GRANT, and no per-user privileges. Queries that probe pg_roles have no counterpart.",
+    "schemas": "There is one namespace and no search_path. Tables are unqualified; the PostgreSQL dataset schema has no SQLite equivalent.",
+    "writable": "The file is the database and the engine writes to it. The read-only posture of an anonymous learner is enforced by the host (query_only / a read-only open), not by the engine's permission model.",
+    "sqlstate": "SQLite has primary result codes such as SQLITE_CONSTRAINT(19), not five-character SQLSTATE values. Error classification is by message pattern and is tested per code.",
+    "explain_query_plan": "EXPLAIN QUERY PLAN returns one row per step as text; it is available and is the dialect's plan affordance, distinct from analyze.",
+    "window_functions": "Present since 3.25; the same shapes (PARTITION BY, ORDER BY, frame) parse, with SQLite's own typing and ordering rules.",
+    "recursive_cte": "WITH RECURSIVE is present; the M9 lesson shape has a SQLite counterpart.",
+    "filter_clause": "Aggregate FILTER (WHERE ...) is present since 3.30.",
+    "returning": "RETURNING is present since 3.35, so a writing exercise can see its own rows.",
+    "strict_tables": "STRICT tables (3.37) enforce the declared type, but they are opt-in per table; this dataset does not use them, so declared types stay advisory.",
+    "right_full_join": "RIGHT and FULL OUTER JOIN are present since 3.39; LEFT JOIN has always been.",
+    "json1": "JSON functions are compiled in by default from 3.38; the SQLite dataset does not rely on them.",
+    "boolean_type": "There is no BOOLEAN storage class. TRUE/FALSE are keywords for 1/0 (3.23+) and the domain is unenforced, so a boolean column is reported as an integer.",
+    "date_type": "There is no DATE or TIMESTAMP storage class. A DATE declaration only picks NUMERIC affinity, and ISO-8601 text is not a numeric literal, so the value is stored as text.",
+    "interval_type": "There is no INTERVAL type and no interval arithmetic; a duration is a count plus modifiers passed to date().",
+    "dynamic_typing": "A value's type is a property of the value, not the column. The declared type names an affinity applied on write; afterwards a column may hold any of the five classes.",
+    "rowid_tables": "Every ordinary table has a hidden rowid unless WITHOUT ROWID is declared; INTEGER PRIMARY KEY is an alias for it.",
+    "without_rowid": "WITHOUT ROWID is available for a table keyed by its primary key. This dataset keeps rowid tables so the hidden id is a teaching point.",
+    "autoincrement": "AUTOINCREMENT exists but is not the default and only changes INTEGER PRIMARY KEY reuse; this dataset supplies explicit ids, so no AUTOINCREMENT (and no sqlite_sequence table) is used. PostgreSQL's GENERATED ... IDENTITY has no SQLite counterpart.",
+    "like_case_insensitive_ascii": "LIKE is case-insensitive for ASCII by default (ILIKE does not exist). The wrong habit — assuming LIKE is case-sensitive — is what the dialect must teach against.",
+    "ilike": "No ILIKE. Case-insensitive matching is LIKE, or GLOB/UPPER for a case-sensitive or non-ASCII-precise comparison.",
+    "date_trunc": "DATE_TRUNC does not exist. The dialect's date_trunc equivalent is strftime('%Y-%m-01', d) or date(d, 'start of month').",
+    "to_char": "TO_CHAR does not exist; formatting is printf()/strftime().",
+    "distinct_on": "DISTINCT ON does not exist; the equivalent is a window function or GROUP BY plus an aggregate.",
+    "cast_operator": "The :: cast operator does not exist. CAST(x AS type) does, and its rules differ: SQLite's CAST follows SQLite's own affinity rules.",
+    "interrupt": "sqlite3_interrupt stops a running statement, and SQLITE_INTERRUPT(9) is a reachable result code, so the host can honour a deadline."
+  },
+  "types": {
+    "note": "A declared type in SQLite names an affinity, not a constraint. The first matching rule below decides the affinity; the order is SQLite's own, from https://sqlite.org/datatype3.html section 3.1.",
+    "affinity_rules": [
+      {
+        "affinity": "INTEGER",
+        "when": "the declared type contains \"INT\"",
+        "note": "INTEGER, INT and BIGINT all land here. INTEGER PRIMARY KEY is also the rowid alias, which is the only identity mechanism this dataset needs."
+      },
+      {
+        "affinity": "TEXT",
+        "when": "the declared type contains \"CHAR\", \"CLOB\" or \"TEXT\"",
+        "note": "TEXT, VARCHAR(20) and CHARACTER land here. TEXT affinity never converts a number into text on write, so a number stays a number in a TEXT column."
+      },
+      {
+        "affinity": "BLOB",
+        "when": "the declared type contains \"BLOB\", or the column has no declared type",
+        "note": "No affinity is applied: any value is stored as given. An untyped column and a BLOB column behave the same way."
+      },
+      {
+        "affinity": "REAL",
+        "when": "the declared type contains \"REAL\", \"FLOA\" or \"DOUB\"",
+        "note": "REAL, FLOAT and DOUBLE land here. An integral real is written as an integer on disk and read back as a float, so a REAL column always reports a number."
+      },
+      {
+        "affinity": "NUMERIC",
+        "when": "anything else (the catch-all)",
+        "note": "NUMERIC, DECIMAL(10,2), DATE, TIMESTAMP and BOOLEAN all land here. Numeric-looking text becomes INTEGER or REAL on write; non-numeric text (an ISO-8601 date) stays text. This is why a DATE column holds TEXT."
+      }
+    ],
+    "declared": {
+      "INTEGER": "INTEGER",
+      "TEXT": "TEXT",
+      "NUMERIC": "NUMERIC",
+      "DATE": "NUMERIC",
+      "TIMESTAMP": "NUMERIC",
+      "BOOLEAN": "NUMERIC"
+    }
+  },
+  "value_encoding": {
+    "note": "SQLite reports a value's storage class (NULL, INTEGER, REAL, TEXT, BLOB), never the declared type. This is the class -> JSON value map the adapter must use; the declared affinity of the column deliberately does not change it.",
+    "integer": {
+      "json": "number",
+      "rule": "an INTEGER is a JSON number",
+      "max_safe_integer": 9007199254740991,
+      "big_int": {
+        "json": "string",
+        "note": "Above 2^53-1 a JSON number cannot hold the value exactly, so it is a decimal string. Same rule web/src/api/pglite.ts already applies to PostgreSQL bigint, so the two dialects agree."
+      },
+      "note": "SQLite integers are signed 64-bit; only those outside the JSON safe range become strings."
+    },
+    "real": {
+      "json": "number",
+      "rule": "a REAL is a JSON number",
+      "non_finite": {
+        "nan": "null",
+        "positive_infinity": "Infinity",
+        "negative_infinity": "-Infinity",
+        "note": "SQLite stores NaN as NULL, so NaN is reported as null, which is the engine's own answer. Infinity has no JSON literal: reporting null would hide a value and reporting a number would fabricate one, so it is reported as the string \"Infinity\"/\"-Infinity\"."
+      },
+      "note": "JSON has no non-finite numbers; the named rule above keeps the report honest instead of rounding Inf to something finite."
+    },
+    "text": {
+      "json": "string",
+      "rule": "a TEXT value is the string verbatim",
+      "note": "No parsing on the way out: a stored date stays the same text, and a numeric-looking string in a TEXT column stays a string (it was not converted on write)."
+    },
+    "blob": {
+      "json": "string",
+      "rule": "a BLOB is \\x followed by lowercase hex",
+      "prefix": "\\x",
+      "encoding": "hex-lowercase",
+      "note": "Matches PostgreSQL bytea's text form and the \\x convention in web/src/api/pglite.ts, so both dialects report binary the same way."
+    },
+    "null": {
+      "json": "null",
+      "rule": "NULL is JSON null",
+      "note": "SQL NULL is not the empty string and not zero; it is reported as null and is never substituted."
+    },
+    "boolean": {
+      "json": "number",
+      "rule": "a BOOLEAN-declared column stores 0/1 and is reported as an integer",
+      "note": "There is no boolean class. TRUE/FALSE are keywords for 1/0 and the domain is unenforced, so coercion to true/false would be an invention; report the integer."
+    },
+    "date": {
+      "json": "string",
+      "rule": "a DATE- or TIMESTAMP-declared column stores ISO-8601 text and is reported verbatim",
+      "note": "Dates are not a type. The value's class is TEXT, so it is emitted as a string and never as a host Date object — a JS Date would reintroduce the timezone shift the adapter-parity audit found against PGlite. Both adapters report the stored text: the browser reads sqlite3_column_text, and the gateway's read path (backend/internal/engine/sqlite_raw.go) reads the storage class through the same raw API, so the declared type is a label and nothing is materialised on either side."
+    },
+    "time": {
+      "json": "string",
+      "format": "RFC3339",
+      "rule": "a value handed to the encoder as a time.Time is formatted as RFC3339 in UTC",
+      "note": "Neither adapter reaches this rule: both read paths report a column's storage class, so a DATE- or TIMESTAMP-declared column arrives as its stored TEXT under the `date` rule above. It answers for a driver value that is already a time.Time, where the stored text is gone; RFC3339 in UTC is then the least-lossy string form and keeps the value a string."
+    },
+    "column_type_label": {
+      "source": "sqlite3_column_decltype",
+      "fallback": "expression",
+      "rule": "the declared type verbatim when the column has one, otherwise the fallback label",
+      "note": "A declared type is not the value's type: a DATE column labels DATE while its values are TEXT. Expressions (COUNT(*), price * 2) have no declared type and must be labelled \"expression\" rather than claim a type the engine never had."
+    }
+  },
+  "error_classification": [
+    {
+      "match": "contains",
+      "pattern": "syntax error",
+      "code": "QUERY_SYNTAX_ERROR",
+      "note": "SQLITE_ERROR(1). The common form is 'near \"X\": syntax error'."
+    },
+    {
+      "match": "equals",
+      "pattern": "incomplete input",
+      "code": "QUERY_SYNTAX_ERROR",
+      "note": "SQLITE_ERROR(1). An equals match, not a contains match, because the whole message is exactly this text."
+    },
+    {
+      "match": "prefix",
+      "pattern": "unrecognized token:",
+      "code": "QUERY_SYNTAX_ERROR",
+      "note": "SQLITE_ERROR(1). A prefix match because the offending token is appended to the message."
+    },
+    {
+      "match": "contains",
+      "pattern": "unterminated",
+      "code": "QUERY_SYNTAX_ERROR",
+      "note": "SQLITE_ERROR(1): 'unterminated string literal', 'unterminated /* comment'."
+    },
+    {
+      "match": "equals",
+      "pattern": "database is locked",
+      "code": "QUERY_TIMEOUT",
+      "note": "SQLITE_BUSY(5). Contention spends the learner's deadline, exactly as PostgreSQL's pool-saturation path already reports QUERY_TIMEOUT. Equals so the shorter SQLITE_LOCKED message is not swallowed by it."
+    },
+    {
+      "match": "contains",
+      "pattern": "is locked",
+      "code": "QUERY_TIMEOUT",
+      "note": "SQLITE_LOCKED(6): 'database table is locked'. Same reasoning as SQLITE_BUSY(5); the message names the writer where SQLite gives one."
+    },
+    {
+      "match": "equals",
+      "pattern": "interrupted",
+      "code": "QUERY_TIMEOUT",
+      "note": "SQLITE_INTERRUPT(9). The host stopped the statement because the deadline passed, so this is a timeout and not a learner error."
+    },
+    {
+      "match": "contains",
+      "pattern": "unable to open database file",
+      "code": "ENVIRONMENT_UNAVAILABLE",
+      "note": "SQLITE_CANTOPEN(14): the database file is missing or the host cannot open it."
+    },
+    {
+      "match": "contains",
+      "pattern": "file is not a database",
+      "code": "ENVIRONMENT_UNAVAILABLE",
+      "note": "SQLITE_NOTADB(26): the file exists but is not a SQLite database."
+    },
+    {
+      "match": "contains",
+      "pattern": "database disk image is malformed",
+      "code": "ENVIRONMENT_UNAVAILABLE",
+      "note": "SQLITE_CORRUPT(11): the environment is damaged; a learner query cannot cause or fix this."
+    },
+    {
+      "match": "contains",
+      "pattern": "disk I/O error",
+      "code": "ENVIRONMENT_UNAVAILABLE",
+      "note": "SQLITE_IOERR(10): the storage layer failed."
+    },
+    {
+      "match": "contains",
+      "pattern": "database or disk is full",
+      "code": "ENVIRONMENT_UNAVAILABLE",
+      "note": "SQLITE_FULL(13): out of space, not a query error."
+    },
+    {
+      "match": "contains",
+      "pattern": "access permission denied",
+      "code": "ENVIRONMENT_UNAVAILABLE",
+      "note": "SQLITE_PERM(3): the host's file permissions, not SQLite's privilege model."
+    },
+    {
+      "match": "contains",
+      "pattern": "out of memory",
+      "code": "ENVIRONMENT_UNAVAILABLE",
+      "note": "SQLITE_NOMEM(7): the host ran out of memory serving the query."
+    },
+    {
+      "match": "contains",
+      "pattern": "API misuse",
+      "code": "ENVIRONMENT_UNAVAILABLE",
+      "note": "SQLITE_MISUSE(21), 'bad parameter or other API misuse': a host bug, not something a learner wrote."
+    },
+    {
+      "match": "contains",
+      "pattern": "called out of sequence",
+      "code": "ENVIRONMENT_UNAVAILABLE",
+      "note": "SQLITE_MISUSE(21), 'library routine called out of sequence': the second message form of the same primary code."
+    },
+    {
+      "match": "contains",
+      "pattern": "string or blob too big",
+      "code": "RESULT_LIMIT_EXCEEDED",
+      "note": "SQLITE_TOOBIG(18). The engine's own size cap. The adapter's row and byte caps are separate host limits and are reported with the same code, with truncated set."
+    },
+    {
+      "match": "contains",
+      "pattern": "no such table:",
+      "code": "QUERY_RUNTIME_ERROR",
+      "note": "SQLITE_ERROR(1) raised after parsing: the statement is valid but names something that does not exist."
+    },
+    {
+      "match": "contains",
+      "pattern": "no such column:",
+      "code": "QUERY_RUNTIME_ERROR",
+      "note": "SQLITE_ERROR(1), same reason as 'no such table'. PostgreSQL reports the equivalent SQLSTATE 42703 as a runtime error too."
+    },
+    {
+      "match": "contains",
+      "pattern": "no such function:",
+      "code": "QUERY_RUNTIME_ERROR",
+      "note": "SQLITE_ERROR(1). Covers a misspelled function and a function this build does not have."
+    },
+    {
+      "match": "contains",
+      "pattern": "no such module:",
+      "code": "QUERY_RUNTIME_ERROR",
+      "note": "SQLITE_ERROR(1): a virtual table or extension module is not compiled in."
+    },
+    {
+      "match": "contains",
+      "pattern": "ambiguous column name:",
+      "code": "QUERY_RUNTIME_ERROR",
+      "note": "SQLITE_ERROR(1). SQLite names the column; the message is reported verbatim so the learner can see which one."
+    },
+    {
+      "match": "contains",
+      "pattern": "constraint failed",
+      "code": "QUERY_RUNTIME_ERROR",
+      "note": "SQLITE_CONSTRAINT(19) and every extended subtype: 'UNIQUE constraint failed', 'NOT NULL constraint failed', 'CHECK constraint failed', 'FOREIGN KEY constraint failed', 'PRIMARY KEY constraint failed'. All are runtime errors, not syntax errors."
+    },
+    {
+      "match": "contains",
+      "pattern": "datatype mismatch",
+      "code": "QUERY_RUNTIME_ERROR",
+      "note": "SQLITE_MISMATCH(20), e.g. inserting text into a STRICT table's INTEGER column. Dynamic typing means this is rare, which is why it needs its own entry rather than being left to the catch-all."
+    },
+    {
+      "match": "contains",
+      "pattern": "misuse of",
+      "code": "QUERY_RUNTIME_ERROR",
+      "note": "SQLITE_ERROR(1): 'misuse of aggregate function', 'misuse of window function'. A valid-looking statement that misuses a construct."
+    },
+    {
+      "match": "contains",
+      "pattern": "attempt to write a readonly database",
+      "code": "QUERY_RUNTIME_ERROR",
+      "note": "SQLITE_READONLY(8). This is how the anonymous read-only dataset refuses a write (step 5), and it must be a runtime error rather than an environment fault."
+    },
+    {
+      "match": "contains",
+      "pattern": "not authorized",
+      "code": "QUERY_RUNTIME_ERROR",
+      "note": "SQLITE_AUTH(23): a host-installed authorizer refused the statement."
+    },
+    {
+      "match": "contains",
+      "pattern": "authorization denied",
+      "code": "QUERY_RUNTIME_ERROR",
+      "note": "SQLITE_AUTH(23), the second message form of the same primary code."
+    },
+    {
+      "match": "contains",
+      "pattern": "out of range",
+      "code": "QUERY_RUNTIME_ERROR",
+      "note": "SQLITE_RANGE(25): 'column index out of range', 'parameter index out of range'."
+    },
+    {
+      "match": "contains",
+      "pattern": "",
+      "code": "QUERY_RUNTIME_ERROR",
+      "note": "Catch-all: every remaining SQLITE_ERROR(1) message is a runtime error, the same default the PostgreSQL classifier uses. The empty pattern matches every message, so this rule must stay last."
+    }
+  ],
+  "source": "docs/sqlite-dialect.md"
+}

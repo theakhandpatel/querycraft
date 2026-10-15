@@ -1,13 +1,23 @@
 import React from 'react';
 import Icon from '../ui/Icon';
 import Ring from '../ui/Ring';
+import DialectBadge, { useChapterDialect } from '../ui/DialectBadge';
 import { useStore } from '../../state/store';
 import { COURSES } from '../../data/curriculum';
 import {
   activeModules, courseAttempts, courseDoneCount, courseExerciseTotal, coursePassed,
   exerciseIdsOfModule, lessonPercent, nextChapterIndex,
 } from '../../lib/model';
-import type { Course, ModalName } from '../../types';
+import type { Course, CourseModule, ModalName } from '../../types';
+
+/* One chapter row's badge. It is its own component because a chapter list
+   renders one badge per row and each subscribes to the learner's dialect
+   choice — a hook called from inside the list's `map` would break the rules of
+   hooks. The row and the open lesson therefore always agree. */
+function ChapterDialect({ mod, course }: { mod: CourseModule; course: Course }) {
+  const dialect = useChapterDialect(mod, course);
+  return <DialectBadge dialect={dialect} />;
+}
 
 export default function CourseScreen() {
   const s = useStore();
@@ -38,7 +48,7 @@ export default function CourseScreen() {
 
       <div className="coursehero">
         <div className="courseicon"><Icon name="layers" /></div>
-        <div style={{ flex: 1, minWidth: 200 }}>
+        <div style={{ flex: 1, minWidth: 'min(200px, 100%)' }}>
           <h2>{course.title}</h2>
           <p>{course.blurb}</p>
         </div>
@@ -74,7 +84,10 @@ export default function CourseScreen() {
                 <div className={`lessonrow${isDone ? ' done' : ''}`} key={m.id}>
                   <span className="lessonnum">{isDone ? '✓' : i + 1}</span>
                   <div className="lessontext">
-                    <strong>{m.title}</strong>
+                    <span className="lessontitle">
+                      <strong>{m.title}</strong>
+                      <ChapterDialect mod={m} course={course} />
+                    </span>
                     <small>{m.summary} · {exs.length ? `${exs.length} exercise${exs.length > 1 ? 's' : ''}` : 'reading'} · {m.minutes} min</small>
                   </div>
                   <div className="actions">

@@ -14,6 +14,7 @@ import (
 	"github.com/querycraft/sqlquery/backend/internal/engine"
 	"github.com/querycraft/sqlquery/backend/internal/eval"
 	"github.com/querycraft/sqlquery/backend/internal/metrics"
+	"github.com/querycraft/sqlquery/backend/internal/perf"
 )
 
 // Metric names. They are constants because /diagnostics publishes the list and
@@ -26,6 +27,7 @@ const (
 	metricPoolConns  = "querycraft_pool_connections"
 	metricPoolMax    = "querycraft_pool_max_connections"
 	metricReady      = "querycraft_engine_ready"
+	metricPlans      = "querycraft_plans_total"
 )
 
 // Help strings, declared once so /metrics and the diagnostics list agree.
@@ -36,6 +38,7 @@ const (
 	helpPoolConns  = "Execution pool connections, by state."
 	helpPoolMax    = "Maximum connections the execution pool opens."
 	helpReady      = "1 when learner statements can run, 0 when the execution database is unreachable."
+	helpPlans      = "Plans captured by POST /explain, by outcome and error code."
 )
 
 // declareMetrics publishes the instrumentation before the first request, so a
@@ -47,6 +50,9 @@ func (s *Server) declareMetrics() {
 	s.metrics.DescribeGauge(metricPoolConns, helpPoolConns)
 	s.metrics.DescribeGauge(metricPoolMax, helpPoolMax)
 	s.metrics.DescribeGauge(metricReady, helpReady)
+	s.metrics.DescribeCounter(metricGenerations, helpGenerations)
+	s.metrics.DescribeGauge(metricGenerationJobs, helpGenerationJobs)
+	s.metrics.DescribeCounter(metricPlans, helpPlans)
 }
 
 // ProgressVersion is the snapshot schema the frontend writes
@@ -177,27 +183,41 @@ const routeUnmatched = "unmatched"
 // deliberately decoupled from the URL so renaming a path does not change how
 // past logs read.
 var operations = map[string]string{
-	"/health":               "health",
-	"/metrics":              "metrics",
-	"/diagnostics":          "diagnostics",
-	"/capabilities":         "capabilities",
-	"/query":                "query",
-	"/answers/evaluate":     "evaluate",
-	"/environment":          "environment",
-	"/environment/reset":    "reset_environment",
-	"/datasets/{id}/tables": "tables",
-	"/auth/signup":          "signup",
-	"/auth/login":           "login",
-	"/auth/logout":          "logout",
-	"/auth/me":              "me",
-	"/progress/{course}":    "progress",
-	"/events":               "event",
-	"/courses/generate":     "generate_course",
-	"/challenges/generate":  "generate_challenge",
-	"/openapi.json":         "openapi",
-	"/docs":                 "docs",
-	"/":                     "spa",
-	routeUnmatched:          "unmatched",
+	"/health":                            "health",
+	"/metrics":                           "metrics",
+	"/diagnostics":                       "diagnostics",
+	"/capabilities":                      "capabilities",
+	"/query":                             "query",
+	"/explain":                           "explain",
+	"/answers/evaluate":                  "evaluate",
+	"/environment":                       "environment",
+	"/environment/reset":                 "reset_environment",
+	"/datasets/{id}/tables":              "tables",
+	"/auth/signup":                       "signup",
+	"/auth/login":                        "login",
+	"/auth/logout":                       "logout",
+	"/auth/me":                           "me",
+	"/progress/{course}":                 "progress",
+	"/events":                            "event",
+	"/courses/generate":                  "generate_course",
+	"/courses":                           "courses",
+	"/courses/{id}":                      "course",
+	"/courses/{id}/build":                "build_course",
+	"/generation/{id}":                   "generation_job",
+	"/challenges/generate":               "generate_challenge",
+	"/challenges":                        "challenges",
+	"/challenges/{id}":                   "challenge",
+	"/challenges/{id}/reset":             "reset_challenge",
+	"/challenges/{id}/critique":          "critique",
+	"/challenges/{id}/report":            "report_defect",
+	"/challenges/{id}/patches/{patchID}": "apply_patch",
+	"/tutor":                             "tutor",
+	"/runs":                              "runs",
+	"/runs/{id}":                         "run",
+	"/openapi.json":                      "openapi",
+	"/docs":                              "docs",
+	"/":                                  "spa",
+	routeUnmatched:                       "unmatched",
 }
 
 // operationOf names the work behind a route, defaulting to a constant so an
@@ -228,6 +248,26 @@ func (s *Server) recordStatement(res engine.QueryResult) {
 	s.metrics.Inc(metricStatements,
 		metrics.Labels{"status": res.Status, "code": code},
 		helpStatements)
+}
+
+// recordPlan counts one plan capture by outcome. It mirrors recordStatement:
+// the number of QUERY_TIMEOUT plans is a measurement, not an inference, and a
+// refusal (EMPTY_QUERY, ENVIRONMENT_UNAVAILABLE) is counted the same way.
+func (s *Server) recordPlan(bundle *perf.PlanBundle, analyze bool) {
+	status, code := "failed", ""
+	if bundle != nil {
+		status = bundle.Status
+		if bundle.Error != nil {
+			code = bundle.Error.Code
+		}
+	}
+	mode := "estimate"
+	if analyze {
+		mode = "analyze"
+	}
+	s.metrics.Inc(metricPlans,
+		metrics.Labels{"status": status, "code": code, "mode": mode},
+		helpPlans)
 }
 
 /* ---------- GET /metrics ---------- */

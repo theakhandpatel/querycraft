@@ -3,31 +3,99 @@ import Icon from '../ui/Icon';
 import { useStore } from '../../state/store';
 import { COURSES } from '../../data/curriculum';
 import { courseExerciseTotal, moduleExerciseBlocks } from '../../lib/model';
-import { executionEngineLabel, generationProvenance } from '../../lib/provenance';
+import { executionEngineLabel, generationProvenance, provenanceLabel } from '../../lib/provenance';
 import { runPipeline } from '../../lib/pipeline';
+import { authoredReport, reportFromOutcome, type DraftReport } from '../../lib/draft';
+import { jobIsRunning, outcomeFromJob } from '../../api/ai';
+import type { AiCourseRecord, AiJob, AiJobHandle, AiOutcome, AiStage } from '../../api/aiContract';
 import type { Block, Course } from '../../types';
 
-const PIPE_STEPS = [
-  ['Interpret your goal', 'Identify target skills, starting level, and what success looks like'],
-  ['Design the progression', 'Order concepts from prerequisites to independent problem solving'],
-  ['Build a realistic dataset', 'Create related tables, representative records, and edge cases'],
-  ['Write exercises and reference queries', 'Define result contracts, hints, explanations, and expected outcomes'],
-  ['Execute and verify', 'Run references, cross-check independent solutions, test edge cases'],
-  ['Prepare an editable draft', 'Keep assumptions and validation findings visible for your review'],
+/* Stage names and details arrive from the gateway (and, behind it, a model), so
+   they are untrusted text. The log renders innerHTML for the paced lines, so
+   anything interpolated from the response is escaped first. */
+function esc(value: string): string {
+  return value.replace(/[&<>"']/g, (c) => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' })[c] as string);
+}
+
+/* The checklist is the pipeline's report, not a script.
+ *
+ * Each step names the gateway stages whose success turns it "Done", so a step
+ * is never Done before something said so. The previous version advanced a step
+ * every 420 ms and had four of the six Done before the request had even
+ * answered, which is the same "it is still a mock" problem as a fabricated row
+ * count: the screen claimed work that nobody had reported. Step 0 is the one
+ * step the client performs itself, and it says so. */
+const PIPE_STEPS: { title: string; small: string; stages: readonly string[] }[] = [
+  {
+    title: 'Read your request',
+    small: 'The goal and the context you gave, taken as written — nothing is inferred here',
+    stages: [],
+  },
+  {
+    title: 'Design the progression',
+    small: 'Order concepts from prerequisites to independent problem solving',
+    stages: ['validate_request', 'request_bundle', 'validate_artifact'],
+  },
+  {
+    title: 'Build the practice environment',
+    small: 'A real scratch database holding the seeded dataset',
+    stages: ['scratch_environment'],
+  },
+  {
+    title: 'Execute and verify every exercise',
+    small: 'References, independent cross-checks, adversarial fixtures',
+    stages: ['reference_contract', 'cross_check', 'adversarial_fixtures'],
+  },
+  {
+    title: 'Store the course you can inspect',
+    small: 'With the assumptions and the validation findings kept beside it',
+    stages: ['activate'],
+  },
 ];
 
-/* Only the planning beats are paced by the client — there is nothing to measure
-   before a query runs. Everything from "Execute and verify" onward is driven by
-   real work against the configured engine, and the transcript prints the numbers
-   that come back. */
-const PLAN_LINES: string[] = [
-  'Interpreting goal → <span class="hi">analytical SQL</span>, level: intermediate',
-  'Prerequisites resolved → chapters ordered from prerequisites to independent work',
-  'Dataset plan → commerce tables, representative records, seeded edge cases',
-  'Collecting the authored exercises and their reference queries …',
-];
+/* The only lines paced by the client, because they describe the client's own
+   two acts: quoting the request it was given, and asking. Everything after them
+   is the gateway's transcript, printed with the durations it measured. */
+function pacedLines(goal: string, level: string, ask: string): string[] {
+  const excerpt = (text: string): string => {
+    const flat = text.replace(/\s+/g, ' ').trim();
+    if (!flat) return '';
+    return esc(flat.length > 72 ? `${flat.slice(0, 71)}…` : flat);
+  };
+  const note = excerpt(level);
+  return [
+    `Reading your goal → “<span class="hi">${excerpt(goal) || '(no goal given)'}</span>”`,
+    note
+      ? `Your note on level and context → “<span class="hi">${note}</span>”`
+      : 'No note on level and context was given, so the draft is asked to justify its own starting point',
+    `Asking <span class="hi">${ask}</span> — a whole course is one large answer, so this takes a minute or more`,
+  ];
+}
+
+/** Marks a step Done only when every stage it names reported done, and Working
+    once one of them has. A step whose stage failed is left where it was: the
+    failure itself is printed in the transcript and on the failure card. */
+function applyStages(
+  stages: readonly { name: string; state: string }[],
+  mark: (i: number, state: 'queued' | 'running' | 'done') => void
+): void {
+  const byName = new Map(stages.map((stage) => [stage.name, stage.state]));
+  PIPE_STEPS.forEach((step, i) => {
+    if (step.stages.length === 0) return;
+    const reported = step.stages.map((name) => byName.get(name));
+    if (reported.some((state) => state === 'failed')) return;
+    if (reported.every((state) => state === 'done' || state === 'skipped')) mark(i, 'done');
+    else if (reported.some((state) => state === 'done')) mark(i, 'running');
+  });
+}
 
 type Measured = { ran: number; failed: number; rows: number; ms: number };
+
+type Failure = {
+  title: string;
+  detail: string;
+  exercises: { id: string; title: string; stage: string; message: string; detail?: string | null }[];
+};
 
 /** Exercises in the draft that carry a reference query we can actually run. */
 function referenceExercises(course: Course): Block[] {
@@ -36,16 +104,51 @@ function referenceExercises(course: Course): Block[] {
     .filter((b) => typeof b.solution === 'string' && b.solution.trim().length > 0);
 }
 
+/** A poll pause a cancel can cut short, so leaving the screen never waits out
+    the interval before it can stop. */
+function pauseFor(ms: number, signal: AbortSignal): Promise<void> {
+  return new Promise((resolve) => {
+    if (signal.aborted) {
+      resolve();
+      return;
+    }
+    function done(): void {
+      clearTimeout(timer);
+      signal.removeEventListener('abort', done);
+      resolve();
+    }
+    const timer = setTimeout(done, ms);
+    signal.addEventListener('abort', done, { once: true });
+  });
+}
+
+/** How often a running job is read. The gateway's own stage list is what makes
+    the checklist move, so this is a read of a small document, not a poll for a
+    verdict. */
+const JOB_POLL_MS = 1200;
+
 export default function BuildingScreen() {
   const s = useStore();
-  /* The draft this build is for; COURSES[0] is only a fallback for the
-     standalone route. */
-  const draftCourse = s.draftCourse ?? COURSES[0];
-  const exerciseTotal = courseExerciseTotal(draftCourse);
+  /* The draft this build is for. Null until the build has produced one, which is
+     the honest state for the opening seconds: there is no course yet. */
+  const draftCourse = s.draftCourse;
+  const [runKey, setRunKey] = useState(0);
   const [states, setStates] = useState(PIPE_STEPS.map(() => 'queued'));
   const [log, setLog] = useState<{ t: string; html: string }[]>([]);
   const [logOpen, setLogOpen] = useState(true);
   const [measured, setMeasured] = useState<Measured | null>(null);
+  /* The draft the run produced, held locally so the right-hand card can show
+     what was planned even before the store's render catches up. */
+  const [built, setBuilt] = useState<Course | null>(null);
+  const [report, setReport] = useState<DraftReport | null>(null);
+  const [failure, setFailure] = useState<Failure | null>(null);
+  /* Present only when this run was a real gateway generation. */
+  const [generated, setGenerated] = useState<AiOutcome | null>(null);
+  /* The live view of a background run, and the lifecycle the stored course
+     reports while chapters are still being written. Both are absent for a
+     blocking run, which reports only when it is over. */
+  const [job, setJob] = useState<AiJob | null>(null);
+  const [recordStatus, setRecordStatus] = useState<string | null>(null);
   /* Cancel must actually cancel: the abort stops the pacing timers and the
      pending navigation, so leaving this screen never bounces the learner back
      into the review it just aborted.
@@ -56,6 +159,11 @@ export default function BuildingScreen() {
      second one believing a run it cannot see is already in flight. */
   const abortRef = useRef<AbortController | null>(null);
   const navTimer = useRef<ReturnType<typeof setTimeout> | null>(null);
+  /* The run effect owns its own lifecycle, so it sees the store as it was on
+     the first frame. Availability arrives from the gateway a moment later, so it
+     is read through a ref rather than captured. */
+  const availabilityRef = useRef(s.aiAvailability);
+  availabilityRef.current = s.aiAvailability;
 
   useEffect(() => {
     const controller = new AbortController();
@@ -71,49 +179,354 @@ export default function BuildingScreen() {
         next[i] = state;
         return next;
       });
+    const finish = (): void => {
+      if (signal.aborted) return;
+      navTimer.current = setTimeout(() => {
+        navTimer.current = null;
+        if (signal.aborted) return;
+        s.setReviewTab('overview');
+        s.showScreen('review');
+      }, 700);
+    };
+
     void (async () => {
       /* Pacing only: the four planning beats are instant on the server, so the
          shared pipeline primitive spreads them out. Its all-done event is
          ignored here — this screen finishes on measured work, not on a timer. */
-      await runPipeline(
-        {
-          steps: PLAN_LINES.map(() => ''),
-          lines: PLAN_LINES.map((line) => ['', line] as [string, string]),
-          stepMs: 420,
-          lineMs: 380,
-          startMs: 0,
-        },
-        (ev) => {
-          if (ev.type === 'step') mark(ev.index, ev.state === 'done' ? 'done' : 'running');
-          else if (ev.type === 'log') emit(ev.html);
-        },
-        signal
-      );
-      if (signal.aborted) return;
+      const availability = availabilityRef.current;
+      /* A run this tab was already watching when the page went away. The
+         gateway never stopped building it, so there is nothing to submit: the
+         run is picked up where it got to, because starting it again is the one
+         thing a resumed tab must never do. */
+      const resuming = s.resumeRun;
+      const goal = resuming ? resuming.goal : s.goalInput;
+      if (resuming) {
+        emit(`<span class="hi">↻</span> reattached to the run already going on the gateway<span class="mono"> ${esc(resuming.jobId)}</span>`);
+        mark(0, 'done');
+        mark(1, 'running');
+      } else {
+        const asking = availability?.available
+          ? `${esc(availability.provider)}${availability.model ? ` · ${esc(availability.model)}` : ''} to design the course, then executing every exercise it proposes`
+          : 'the built-in curriculum';
+        const beats = pacedLines(goal, s.buildContext.level ?? '', asking);
+        await runPipeline(
+          {
+            steps: beats.map(() => ''),
+            lines: beats.map((line) => ['', line] as [string, string]),
+            stepMs: 420,
+            lineMs: 380,
+            startMs: 0,
+          },
+          /* Only the transcript is written here. Advancing the checklist is the
+             job of applyStages() below, once something has actually reported. */
+          (ev) => {
+            if (ev.type === 'log') emit(ev.html);
+          },
+          signal
+        );
+        if (signal.aborted) return;
+        mark(0, 'done');
+        if (availability?.available) mark(1, 'running');
+      }
 
-      /* Step 5 — Execute and verify. Every reference query in the draft runs on
-         the configured engine; the duration and the counts are the real ones. */
-      mark(4, 'running');
-      const exercises = referenceExercises(draftCourse);
-      emit(`Running ${exercises.length} reference queries on <span class="hi">${executionEngineLabel(s.api)}</span> …`);
+      /* ---------- generated: the gateway designs and verifies the course ----
+       *
+       * The references, the cross-checks and the adversarial fixtures all run
+       * inside the pipeline, so this asks once and reports what came back. A
+       * refusal is a real outcome: it is printed in full and no draft is
+       * offered, because a course whose exercises did not run is not a course. */
+      /* A resumed run is a gateway run by construction — it was submitted to a
+         gateway that answered with a job — so it takes this branch even on the
+         first frame, before the availability probe has come back. */
+      if (availability?.available || resuming) {
+        /* One adoption path, whoever obtained the outcome: a request that was
+           held open to the end, or a job that was polled to its end. */
+        const settle = (outcome: AiOutcome): void => {
+          setGenerated(outcome);
+
+          /* The checklist follows the gateway's own stage report. */
+          applyStages(outcome.stages, mark);
+
+          /* The gateway's own stages, verbatim, with the durations it measured. */
+          for (const stage of outcome.stages) {
+            const glyph = stage.state === 'done' ? '✓' : stage.state === 'failed' ? '✕' : '–';
+            const cls = stage.state === 'done' ? 'ok' : stage.state === 'failed' ? 'fail' : 'hi';
+            const ms = typeof stage.ms === 'number' ? ` · ${stage.ms} ms` : '';
+            emit(`<span class="${cls}">${glyph}</span> ${esc(stage.name)}${ms}${stage.detail ? ` — ${esc(stage.detail)}` : ''}`);
+          }
+          for (const attempt of outcome.attempts) {
+            emit(`<span class="hi">attempt ${attempt.number}</span> ${esc(attempt.stage)} — ${esc(attempt.detail)}`);
+          }
+
+          const nextReport = reportFromOutcome(outcome, goal);
+          setReport(nextReport);
+          s.setDraftReport(nextReport);
+          setMeasured({
+            ran: nextReport.totals.verified,
+            failed: Math.max(0, nextReport.totals.exercises - nextReport.totals.verified),
+            rows: nextReport.totals.rows,
+            ms: nextReport.totals.ms,
+          });
+
+          if (outcome.error) {
+            emit(`<span class="fail">✕</span> generation ${outcome.status} · ${esc(outcome.error.code)} — ${esc(outcome.error.message)}`);
+          }
+
+          if (outcome.status !== 'active' || !outcome.plan) {
+            const failed = nextReport.chapters.flatMap((c) => c.failures.map((f) => ({ ...f })));
+            const refusedAt = outcome.error?.stage ?? 'verification';
+            for (const f of failed) {
+              emit(`<span class="fail">✕</span> ${esc(f.id)} · ${esc(f.stage)} — ${esc(f.message)}`);
+            }
+            mark(4, 'queued');
+            emit('<span class="caret"></span>');
+            setFailure({
+              title:
+                outcome.status === 'unavailable'
+                  ? 'Generation is not available'
+                  : outcome.error?.code === 'AI_UNAVAILABLE'
+                    ? 'The generation service did not answer'
+                    : `The course was rejected at the ${refusedAt} stage`,
+              detail: outcome.error
+                ? `${outcome.error.message}${outcome.error.detail ? ` — ${outcome.error.detail}` : ''}`
+                : 'The gateway refused this course; the exercises below are the ones it could not verify.',
+              exercises: failed,
+            });
+            return;
+          }
+
+          const adopted = s.adoptGeneratedCourse(outcome, goal);
+          if (!adopted) {
+            setFailure({
+              title: 'The course could not be opened',
+              detail: 'The gateway activated the course but the app could not add it. Nothing was saved to your learning.',
+              exercises: [],
+            });
+            return;
+          }
+          mark(4, 'running');
+          const plan = outcome.plan;
+          const chapterCount = plan.chapters.length;
+          const exerciseCount = plan.chapters.reduce((n, c) => n + c.exercises.length, 0);
+          emit(`<span class="ok">✓</span> ${chapterCount} chapter${chapterCount === 1 ? '' : 's'} · ${exerciseCount} exercise${exerciseCount === 1 ? '' : 's'}, each executed and cross-checked on the engine · ${nextReport.totals.rows} rows measured`);
+          emit(`Draft <span class="hi">${esc(plan.title)}</span> ready to inspect — every exercise carries the rows the engine returned.`);
+          mark(4, 'done');
+          emit('<span class="caret"></span>');
+          finish();
+        };
+
+        /* Follow a background run to its end, drawing the gateway's own live
+           view as it goes. Two things happen here that a blocking request
+           cannot do: the checklist advances on stages that are still
+           `running`/`queued`, and the course the run is writing is read as it
+           grows, so the chapters that already verified are on screen before the
+           run is over. Resolves null when this tab stopped watching; the run
+           itself continues on the gateway either way. */
+        const watchJob = async (handle: AiJobHandle): Promise<AiOutcome | null> => {
+          const seen = new Map<string, string>();
+          let lastPlanned = -1;
+          let lastVerified = -1;
+          let lastChapter = '';
+          let readCourseId = '';
+          let misses = 0;
+          /* The gateway advertises how long a run may take. Waiting a little
+             past that is patience; waiting forever is a hang. */
+          const deadline = Date.now() + (availability?.timeout_ms ?? 0) + 60_000;
+          for (;;) {
+            if (signal.aborted) return null;
+            let view: AiJob | null = null;
+            try {
+              view = await s.api.generationJob(handle.id);
+            } catch (e) {
+              misses += 1;
+              if (misses >= 3) {
+                emit(`<span class="fail">✕</span> the run could not be read — ${esc(e instanceof Error ? e.message : String(e))}`);
+                setFailure({
+                  title: 'The run could not be read',
+                  detail: 'The generation may still be going on the gateway. Every chapter it has already stored stays in your library.',
+                  exercises: [],
+                });
+                return null;
+              }
+            }
+            if (signal.aborted) return null;
+            if (view) {
+              misses = 0;
+              setJob(view);
+              applyStages(view.stages, mark);
+              for (const stage of view.stages) {
+                if (seen.get(stage.name) === stage.state) continue;
+                seen.set(stage.name, stage.state);
+                const glyph = stage.state === 'done' ? '✓' : stage.state === 'failed' ? '✕' : stage.state === 'running' ? '→' : '–';
+                const cls = stage.state === 'done' ? 'ok' : stage.state === 'failed' ? 'fail' : 'hi';
+                const ms = typeof stage.ms === 'number' ? ` · ${stage.ms} ms` : '';
+                emit(`<span class="${cls}">${glyph}</span> ${esc(stage.name)}${ms}${stage.detail ? ` — ${esc(stage.detail)}` : ''}`);
+              }
+              if (typeof view.chapters_planned === 'number' && view.chapters_planned !== lastPlanned) {
+                lastPlanned = view.chapters_planned;
+                emit(`the outline plans <span class="hi">${view.chapters_planned}</span> chapter${view.chapters_planned === 1 ? '' : 's'}`);
+              }
+              if (typeof view.chapters_verified === 'number' && view.chapters_verified !== lastVerified) {
+                lastVerified = view.chapters_verified;
+                const of = typeof view.chapters_planned === 'number' ? ` of ${view.chapters_planned}` : '';
+                emit(`<span class="ok">✓</span> ${view.chapters_verified}${of} chapter${view.chapters_verified === 1 ? '' : 's'} verified and stored`);
+              }
+              if (view.current_chapter && view.current_chapter !== lastChapter) {
+                lastChapter = view.current_chapter;
+                emit(`writing <span class="hi">${esc(view.current_chapter)}</span>`);
+              }
+              let record: AiCourseRecord | null = null;
+              /* Mid-run: read the course the gateway is still writing, so the
+                 chapters that already verified are on screen while it works. */
+              if (jobIsRunning(view) && view.course_id && view.course_id !== readCourseId) {
+                readCourseId = view.course_id;
+                try {
+                  record = await s.api.getCourse(view.course_id);
+                } catch {
+                  record = null;
+                }
+                if (signal.aborted) return null;
+                if (record) {
+                  setBuilt(s.adoptStoredCourse(record));
+                  setRecordStatus(record.status);
+                }
+              }
+              if (!jobIsRunning(view)) {
+                /* A job is a view and carries no plan, so a finished run is
+                   assembled from the record it stored — read once more,
+                   after the last chapter, so the plan is the final one. */
+                if (view.course_id) {
+                  try {
+                    record = await s.api.getCourse(view.course_id);
+                  } catch {
+                    record = null;
+                  }
+                  if (signal.aborted) return null;
+                  if (record) {
+                    setBuilt(s.adoptStoredCourse(record));
+                    setRecordStatus(record.status);
+                  }
+                }
+                return outcomeFromJob(view, record);
+              }
+            }
+            if (Date.now() > deadline) {
+              emit('<span class="fail">✕</span> the run is taking longer than the gateway budgeted');
+              setFailure({
+                title: 'Still building on the gateway',
+                detail: 'This run outlived the wait, but it continues on the gateway. Every chapter it verifies is added to the course in your library.',
+                exercises: [],
+              });
+              return null;
+            }
+            await pauseFor(JOB_POLL_MS, signal);
+          }
+        };
+
+        const request = {
+          kind: 'course' as const,
+          title: goal,
+          scenario: [s.buildContext.level, s.buildContext.source].filter(Boolean).join('\n') || undefined,
+          difficulty: undefined,
+          exercise_count: 8,
+        };
+
+        /* Ask for a job first. A blocking request holds this screen on one
+           spinner for the whole run; a job lets the gateway report each chapter
+           as it verifies and lets the course be read while it is still
+           `building`. A gateway that cannot answer the async ask answers the
+           blocking one, so a null handle is a fallback, not a failure.
+
+           A resumed run already holds a handle: it is not submitted again, it
+           is followed. */
+        let handle: AiJobHandle | null = null;
+        if (resuming) {
+          handle = { id: resuming.jobId, kind: 'course', status: 'running' };
+        } else {
+          try {
+            handle = await s.api.submitGeneration(request, 'course');
+          } catch {
+            handle = null;
+          }
+          if (signal.aborted) return;
+          /* Remember the run before watching it, so a reload in the next second
+             still finds something to come back to. */
+          if (handle) s.runStarted(handle.id, goal);
+        }
+
+        if (handle) {
+          const outcome = await watchJob(handle);
+          /* The breadcrumb survives a tab that merely stopped watching: the run
+             is still going, and the next load can pick it up again. */
+          if (signal.aborted || !outcome) return;
+          settle(outcome);
+          s.runSettled(handle.id);
+          return;
+        }
+
+        let outcome: AiOutcome;
+        try {
+          outcome = await s.api.generateCourse(request);
+        } catch {
+          if (signal.aborted) return;
+          emit('<span class="fail">✕</span> the gateway could not be reached, so no course was generated.');
+          setFailure({
+            title: 'The gateway could not be reached',
+            detail: 'Nothing was generated and no draft was created. Check that the gateway is running, then try again.',
+            exercises: [],
+          });
+          return;
+        }
+        if (signal.aborted) return;
+        settle(outcome);
+        return;
+      }
+
+      /* ---------- authored: no provider, so the built-in course runs here ---
+       *
+       * This path does real work too: it opens the curriculum that ships with
+       * the app and runs every reference query through the ExecutionService, so
+       * the row counts and durations printed are the engine's. What it is not is
+       * generated, and the report it produces says so. */
+      const id = s.useAuthoredDraft(goal);
+      const course = (id && s.COURSES.find((c) => c.id === id)) || null;
+      if (!course) {
+        setFailure({
+          title: 'The built-in course could not be opened',
+          detail: 'No provider is configured and the bundled curriculum could not be opened as a draft. Nothing was created.',
+          exercises: [],
+        });
+        return;
+      }
+      setBuilt(course);
+      /* These three are true here and now: the built-in curriculum is chosen,
+         the environment is the seeded dataset the app ships, and its exercises
+         carry their references. The next step is the one that runs them. */
+      mark(1, 'done');
+      mark(2, 'done');
+      mark(3, 'running');
+      const exercises = referenceExercises(course);
+      emit(`No provider is configured: opening the built-in curriculum and running its ${exercises.length} reference queries on <span class="hi">${executionEngineLabel(s.api)}</span> …`);
       const startedAt = performance.now();
       let ran = 0;
-      let failed = 0;
+      let failedCount = 0;
       let rows = 0;
       for (const ex of exercises) {
         if (signal.aborted) return;
         const sql = String(ex.solution);
         let result;
         try {
-          result = await s.api.runQuery(sql, ex);
+          /* The reference queries are the draft course's own, so they run where
+             that course runs; the draft declares the commerce dataset. */
+          result = await s.api.runQuery(sql, { block: ex, course });
         } catch {
-          failed += 1;
+          failedCount += 1;
           emit(`<span class="fail">✕</span> ${ex.id} — engine unreachable`);
           continue;
         }
         if (signal.aborted) return;
         if (result.error) {
-          failed += 1;
+          failedCount += 1;
           emit(`<span class="fail">✕</span> ${ex.id} — ${result.error.message || result.error.code}`);
         } else {
           ran += 1;
@@ -122,22 +535,21 @@ export default function BuildingScreen() {
         }
       }
       const verifyMs = Math.round(performance.now() - startedAt);
-      setMeasured({ ran, failed, rows, ms: verifyMs });
-      if (failed > 0) {
-        emit(`<span class="fail">✕</span> ${failed} of ${exercises.length} references failed on the engine — draft ships with the failures listed`);
+      setMeasured({ ran, failed: failedCount, rows, ms: verifyMs });
+      if (failedCount > 0) {
+        emit(`<span class="fail">✕</span> ${failedCount} of ${exercises.length} references failed on the engine — the draft ships with the failures listed`);
       } else {
         emit(`<span class="ok">✓</span> ${ran}/${exercises.length} references executed · ${rows} rows · ${verifyMs} ms`);
       }
-      mark(4, 'done');
+      mark(3, 'done');
 
-      /* Step 6 — the draft record itself comes from the API, not a timer. */
-      mark(5, 'running');
+      mark(4, 'running');
       if (signal.aborted) return;
       try {
         const draft = await s.api.draftCourse({
-          title: draftCourse.title,
-          exercises: exerciseTotal,
-          steps: PIPE_STEPS.map(() => ''),
+          title: course.title,
+          exercises: courseExerciseTotal(course),
+          steps: PIPE_STEPS.map((step) => step.title),
         });
         if (signal.aborted) return;
         emit(`<span class="ok">✓</span> draft accepted by the API · dataset_version ${draft.datasetVersion}`);
@@ -145,16 +557,12 @@ export default function BuildingScreen() {
         if (signal.aborted) return;
         emit('<span class="fail">✕</span> the API rejected the draft — review it before enrolling');
       }
-      mark(5, 'done');
+      const authored = authoredReport(goal, { ran, failed: failedCount, rows, ms: verifyMs }, course);
+      setReport(authored);
+      s.setDraftReport(authored);
+      mark(4, 'done');
       emit('<span class="caret"></span>');
-
-      if (signal.aborted) return;
-      navTimer.current = setTimeout(() => {
-        navTimer.current = null;
-        if (signal.aborted) return;
-        s.setReviewTab('overview');
-        s.showScreen('review');
-      }, 700);
+      finish();
     })();
 
     return () => {
@@ -166,9 +574,14 @@ export default function BuildingScreen() {
       }
       setStates(PIPE_STEPS.map(() => 'queued'));
       setLog([]);
+      setJob(null);
+      setRecordStatus(null);
     };
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, []);
+  }, [runKey]);
+
+  const shown = built ?? draftCourse;
+  const exerciseTotal = shown ? courseExerciseTotal(shown) : null;
 
   return (
     <div className="content">
@@ -180,15 +593,40 @@ export default function BuildingScreen() {
         </div>
         <button onClick={() => { abortRef.current?.abort(); s.showScreen('create'); }}>Cancel</button>
       </div>
+
+      {failure && (
+        <div className="card" style={{ borderColor: 'var(--amber)' }}>
+          <h2>Nothing was created</h2>
+          <p className="mt-8" style={{ fontSize: 13 }}><strong>{failure.title}.</strong> {failure.detail}</p>
+          {failure.exercises.length > 0 && (
+            <div className="mt-12">
+              {failure.exercises.map((f) => (
+                <div className="reportrow" key={f.id}>
+                  <span><span className="mono" style={{ fontSize: 12 }}>{f.id}</span> &nbsp;{f.title}</span>
+                  <span className="fail">{f.stage}</span>
+                </div>
+              ))}
+            </div>
+          )}
+          <div className="actions mt-12">
+            <button className="primary" onClick={() => { setFailure(null); setLog([]); setMeasured(null); setReport(null); setGenerated(null); setBuilt(null); setJob(null); setRecordStatus(null); setRunKey((k) => k + 1); }}>Try again</button>
+            <button onClick={() => s.showScreen('create')}>Change the goal</button>
+            {report && <button className="ghost" onClick={() => { s.setDraftReport(report); s.setReviewTab('validation'); s.showScreen('review'); }}>See what was measured</button>}
+          </div>
+        </div>
+      )}
+
       <div className="grid2">
         <div className="card">
           <h2>Build pipeline</h2>
           <div className="callout mt-12">
             <strong>Your request</strong><br />
-            <span className="mono" style={{ fontSize: 12 }}>{s.goalInput || '—'}</span>
+            {/* A resumed run has no form behind it, so the goal comes from the
+                breadcrumb rather than the input the learner had typed. */}
+            <span className="mono" style={{ fontSize: 12 }}>{s.goalInput || s.resumeRun?.goal || '—'}</span>
           </div>
           <div className="pipeline">
-            {PIPE_STEPS.map(([title, small], i) => (
+            {PIPE_STEPS.map(({ title, small }, i) => (
               <div className={`pipe ${states[i]}`} key={i}>
                 <div className="check">{states[i] === 'done' ? '✓' : i + 1}</div>
                 <div><strong>{title}</strong><small>{small}</small></div>
@@ -207,10 +645,25 @@ export default function BuildingScreen() {
         </div>
         <div className="card">
           <h2>Why this takes a moment</h2>
-          <div className="reportrow mt-8"><span>Chapters planned</span><span>{(draftCourse.modules ?? []).length}</span></div>
-          <div className="reportrow"><span>Exercises with result contracts</span><span>{exerciseTotal}</span></div>
+          <div className="reportrow mt-8"><span>Chapters planned</span><span>{shown ? (shown.modules ?? []).length : '—'}</span></div>
+          {/* A background run reports its own chapter count as it goes, so the
+              row is the gateway's, not this tab's guess — and it is absent for a
+              blocking run, which has no live view to read. */}
+          {job && typeof job.chapters_planned === 'number' && (
+            <div className="reportrow">
+              <span>Chapters verified and stored</span>
+              <span>{`${typeof job.chapters_verified === 'number' ? job.chapters_verified : 0} of ${job.chapters_planned}`}</span>
+            </div>
+          )}
+          {job?.current_chapter && (
+            <div className="reportrow"><span>Chapter in progress</span><span>{job.current_chapter}</span></div>
+          )}
+          {!generated && recordStatus && (
+            <div className="reportrow"><span>Stored course</span><span>{recordStatus}</span></div>
+          )}
+          <div className="reportrow"><span>Exercises with result contracts</span><span>{exerciseTotal ?? '—'}</span></div>
           <div className="reportrow">
-            <span>Reference queries executed</span>
+            <span>Exercises executed and cross-checked</span>
             <span>{measured ? `${measured.ran}/${measured.ran + measured.failed} · ${measured.rows} rows` : 'measuring …'}</span>
           </div>
           <div className="reportrow">
@@ -224,11 +677,29 @@ export default function BuildingScreen() {
             </span>
           </div>
           <div className="reportrow"><span>Execution engine</span><span className="mono">{executionEngineLabel(s.api)}</span></div>
-          <div className="reportrow"><span>Draft pipeline</span><span className="mono" style={{ fontSize: 11 }}>{generationProvenance(s.api)}</span></div>
+          <div className="reportrow"><span>Draft pipeline</span><span className="mono" style={{ fontSize: 11 }}>{report?.source === 'authored' ? 'built-in curriculum (no AI)' : generationProvenance(s.api)}</span></div>
+          {generated?.plan && (
+            <div className="reportrow">
+              <span>Provider</span>
+              <span className="mono" style={{ fontSize: 11 }}>{provenanceLabel(generated.plan.provenance)}</span>
+            </div>
+          )}
+          {generated && (
+            <div className="reportrow">
+              <span>Generation</span>
+              <span className={generated.status === 'active' || generated.status === 'unavailable' ? undefined : 'fail'}>
+                {generated.status}{generated.error ? ` · ${generated.error.code}` : ''}
+              </span>
+            </div>
+          )}
           <div className="callout mt-16">
-            <strong>What is measured here.</strong> The planning beats are paced in the client because they are instant.
-            From “Execute and verify” on, every line is a real request: each reference query runs on the engine named
-            above and the row counts, timings and failures printed are the ones it returned.
+            <strong>What is measured here.</strong> A step turns Done when the pipeline reports that stage complete —
+            never on a timer. The three opening lines are this tab quoting the request you gave it and asking; every
+            line after them is the gateway's own transcript. Each reference query runs on the engine named above, so
+            the row counts, timings and failures printed are the ones it returned.
+            {availabilityRef.current?.available
+              ? ' Because a generation service is configured, the design and the verification both happen on the gateway and the stages and durations shown are its own.'
+              : ' No generation service is configured, so the course is the built-in curriculum and its references are executed here, in this tab.'}
           </div>
         </div>
       </div>

@@ -23,7 +23,10 @@ export default function CreateScreen() {
       s.toast('Tell me the skill you want to build.');
       return;
     }
-    s.submitBuild(g, !!(level.trim() || source.trim()));
+    /* The learner's own words about their level and their source material travel
+       with the request, so the generation is shaped by them rather than by a
+       boolean that only says some context exists. */
+    s.submitBuild(g, { level, source });
     s.showScreen('building');
   }
 

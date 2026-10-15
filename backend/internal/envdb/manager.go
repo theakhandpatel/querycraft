@@ -76,19 +76,23 @@ var ErrTooManyEnvironments = errors.New("too many active challenge environments"
 
 // Options configures a Manager.
 type Options struct {
-	AdminDSN        string            // owner/superuser DSN: CREATE/DROP DATABASE and the template build
-	LearnerPassword string            // the password the existing querycraft_learner role has
-	TemplateName    string            // default dataset.TemplateDatabaseName
-	MaxEnvironments int               // default 8
-	MaxConnsPerEnv  int32             // default 2
-	IdleTTL         time.Duration     // default 15 * time.Minute
-	Log             *slog.Logger      // nil => discard
-	Metrics         *metrics.Registry // nil => no metrics
+	AdminDSN         string            // owner/superuser DSN: CREATE/DROP DATABASE and the template build
+	LearnerPassword  string            // the password the existing querycraft_learner role has
+	TemplateName     string            // default dataset.TemplateDatabaseName
+	PerfTemplateName string            // default dataset.PerfTemplateDatabaseName (M5 plan environments)
+	MaxEnvironments  int               // default 8
+	MaxConnsPerEnv   int32             // default 2
+	IdleTTL          time.Duration     // default 15 * time.Minute
+	Log              *slog.Logger      // nil => discard
+	Metrics          *metrics.Registry // nil => no metrics
 }
 
 func (o Options) withDefaults() Options {
 	if o.TemplateName == "" {
 		o.TemplateName = dataset.TemplateDatabaseName
+	}
+	if o.PerfTemplateName == "" {
+		o.PerfTemplateName = dataset.PerfTemplateDatabaseName
 	}
 	if o.MaxEnvironments <= 0 {
 		o.MaxEnvironments = defaultMaxEnvironments
@@ -208,6 +212,154 @@ func (m *Manager) ensureTemplateLocked(ctx context.Context) error {
 		return envErr(err)
 	}
 	return nil
+}
+
+// EnsurePerfTemplate builds and seals the perf template if it is missing, and
+// re-seals it otherwise. It is exported so the gateway can pay for the larger
+// fixture at boot rather than on a learner's first plan request.
+func (m *Manager) EnsurePerfTemplate(ctx context.Context) error {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	if m.closed {
+		return errClosed()
+	}
+	return m.ensurePerfTemplateLocked(ctx)
+}
+
+func (m *Manager) ensurePerfTemplateLocked(ctx context.Context) error {
+	name := m.opts.PerfTemplateName
+	var exists bool
+	if err := m.admin.QueryRow(ctx,
+		"SELECT EXISTS (SELECT 1 FROM pg_database WHERE datname = $1)", name,
+	).Scan(&exists); err != nil {
+		return envErr(fmt.Errorf("look up perf template %q: %w", name, err))
+	}
+	if !exists {
+		m.opts.Log.Info("building perf template", "template", name)
+		if err := dataset.CreateDatabase(ctx, m.admin, name); err != nil {
+			return envErr(err)
+		}
+		// Writable: the plan lessons ask the learner to add the missing index
+		// and re-run the statement, which only an environment they own can do.
+		if err := dataset.LoadPerfIntoTemplate(ctx, m.admin, name, m.opts.LearnerPassword); err != nil {
+			return envErr(err)
+		}
+	}
+	if err := dataset.SealTemplate(ctx, m.admin, name); err != nil {
+		return envErr(err)
+	}
+	return nil
+}
+
+// EnsurePerf returns a writable executor over the account's plan environment:
+// the perf dataset, copied from its own sealed template on first use.
+//
+// It is deliberately a second environment rather than a second dataset inside
+// the challenge environment. A plan lesson asks the learner to CREATE INDEX, and
+// a challenge lesson asks them to INSERT and DELETE; sharing one database would
+// let an experiment in one lesson decide the plan the other one is graded on.
+// The entry lives in the same environment map, so the capacity cap, the idle
+// reaper, the metrics and Close see it exactly like any other environment.
+func (m *Manager) EnsurePerf(ctx context.Context, accountID string) (*engine.PgxExecutor, error) {
+	if strings.TrimSpace(accountID) == "" {
+		return nil, errors.New("envdb: empty account id")
+	}
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	if m.closed {
+		return nil, errClosed()
+	}
+
+	key := "perf:" + digest(accountID)
+	if e, ok := m.envs[key]; ok {
+		e.lastUsed = time.Now()
+		return e.exec, nil
+	}
+	if len(m.envs) >= m.opts.MaxEnvironments {
+		return nil, fmt.Errorf("%w: %w (limit %d active)", engine.ErrEnvironmentUnavailable, ErrTooManyEnvironments, m.opts.MaxEnvironments)
+	}
+	if err := m.ensurePerfTemplateLocked(ctx); err != nil {
+		return nil, err
+	}
+
+	database := dataset.EnvironmentDatabaseName("perf_" + digest(accountID)[:32])
+	dsn, err := m.learnerDSN(database)
+	if err != nil {
+		return nil, err
+	}
+
+	start := time.Now()
+	if err := m.createIfAbsentFromLocked(ctx, database, m.opts.PerfTemplateName); err != nil {
+		return nil, err
+	}
+	exec, err := engine.NewPgxExecutorWithConfig(ctx, dsn, engine.PgxConfig{
+		MaxConns: m.opts.MaxConnsPerEnv,
+		MinConns: 1,
+		Writable: true,
+	})
+	if err != nil {
+		return nil, envErr(err)
+	}
+	if err := probeWritable(ctx, exec); err != nil {
+		exec.Close()
+		return nil, envErr(fmt.Errorf("plan environment %q is not writable: %w", database, err))
+	}
+
+	now := time.Now()
+	m.envs[key] = &environment{
+		account:   accountID,
+		database:  database,
+		exec:      exec,
+		createdAt: now,
+		lastUsed:  now,
+	}
+	m.observeCreate(time.Since(start))
+	m.publishActiveLocked()
+	m.opts.Log.Info("plan environment ready",
+		"account", accountID, "database", database, "created_in", time.Since(start).String())
+	return exec, nil
+}
+
+// ResetPerf restores the account's plan environment from the sealed perf
+// template, reporting how long the copy took.
+//
+// It is the perf counterpart of Reset and deliberately does not touch the
+// challenge environment. The two are separate databases on purpose — a
+// re-indexed perf table must not be able to decide the plan a challenge lesson
+// is graded on — so a reset that restored both would throw away the learner's
+// commerce work as a side effect of asking for a clean lab.
+func (m *Manager) ResetPerf(ctx context.Context, accountID string) (time.Duration, error) {
+	if strings.TrimSpace(accountID) == "" {
+		return 0, errors.New("envdb: empty account id")
+	}
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	if m.closed {
+		return 0, errClosed()
+	}
+
+	key := "perf:" + digest(accountID)
+	if e, ok := m.envs[key]; ok {
+		e.exec.Close()
+		delete(m.envs, key)
+	}
+	if err := m.ensurePerfTemplateLocked(ctx); err != nil {
+		return 0, err
+	}
+
+	// The same name EnsurePerf creates, so a reset restores the environment the
+	// lesson is actually running against rather than a second, empty one.
+	database := dataset.EnvironmentDatabaseName("perf_" + digest(accountID)[:32])
+	start := time.Now()
+	if err := dataset.ResetEnvironment(ctx, m.admin, database, m.opts.PerfTemplateName); err != nil {
+		return 0, envErr(err)
+	}
+	took := time.Since(start)
+	m.observeReset(took)
+	m.publishActiveLocked()
+	m.opts.Log.Info("plan environment reset",
+		"account", accountID, "database", database, "took", took.String())
+	return took, nil
 }
 
 // Ensure returns a writable executor for the account's environment, creating
@@ -399,6 +551,14 @@ func (m *Manager) Close() {
 /* ---------- internals ---------- */
 
 func (m *Manager) createIfAbsentLocked(ctx context.Context, database string) error {
+	return m.createIfAbsentFromLocked(ctx, database, m.opts.TemplateName)
+}
+
+// createIfAbsentFromLocked copies one sealed template into an environment
+// database. It takes the template as an argument because the M5 plan
+// environments are copied from the perf template while every other environment
+// is copied from the challenge template.
+func (m *Manager) createIfAbsentFromLocked(ctx context.Context, database, template string) error {
 	var exists bool
 	if err := m.admin.QueryRow(ctx,
 		"SELECT EXISTS (SELECT 1 FROM pg_database WHERE datname = $1)", database,
@@ -408,7 +568,7 @@ func (m *Manager) createIfAbsentLocked(ctx context.Context, database string) err
 	if exists {
 		return nil
 	}
-	if err := dataset.CreateDatabaseFromTemplate(ctx, m.admin, database, m.opts.TemplateName); err != nil {
+	if err := dataset.CreateDatabaseFromTemplate(ctx, m.admin, database, template); err != nil {
 		return envErr(err)
 	}
 	return nil

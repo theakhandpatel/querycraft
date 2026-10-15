@@ -1,7 +1,9 @@
 import React from 'react';
 import Icon from '../ui/Icon';
+import DialectBadge from '../ui/DialectBadge';
 import { useStore } from '../../state/store';
 import { COURSES } from '../../data/curriculum';
+import { effectiveDialect } from '../../lib/dialect';
 import { courseExerciseTotal } from '../../lib/model';
 import type { Course } from '../../types';
 
@@ -21,7 +23,10 @@ export default function LibraryScreen() {
   const isAdmin = s.role === 'admin';
   const courses = COURSES.filter((c) => {
     if (f === 'enrolled' && !c.enrolled) return false;
-    if (f === 'mine' && c.source !== 'created') return false;
+    /* "Created by you" is the learner's own courses, which now live on the
+       gateway; `source: 'generated'` is how a stored course is marked, and a
+       built-in course never carries it. */
+    if (f === 'mine' && c.source !== 'created' && c.source !== 'generated') return false;
     if (f === 'new' && c.enrolled) return false;
     return true;
   }) as ViewCourse[];
@@ -58,13 +63,24 @@ export default function LibraryScreen() {
           else btn = <button className="small" onClick={() => s.toast('Preview: this course would generate with the same pipeline.')}><Icon name="eye" />Preview</button>;
           return (
             <div className="coursecard" key={c.id}>
-              <div className="coursemeta">{tag}<span className="pill subtle">{c.level}</span></div>
+              <div className="coursemeta">
+                {tag}
+                <span className="pill subtle">{c.level}</span>
+                {/* The course card says which engine its chapters run on. */}
+                <DialectBadge dialect={effectiveDialect(undefined, c)} />
+              </div>
               <h2>{c.title}</h2>
               <p>{c.blurb}</p>
               <div className="reportrow"><span>Chapters</span><span>{c.modules ? `${c.modules.length} · ${courseExerciseTotal(c)} exercises` : '—'}</span></div>
               <div className="reportrow"><span>Est. time</span><span>{c.minutes} min · {c.domain}</span></div>
               <div className="actions mt-8">
                 {btn}
+                {/* A course the gateway stores is the learner's own record, so
+                    removing it is a real action; the built-in curriculum is not
+                    theirs to delete and never shows this. */}
+                {c.gateway === true && (
+                  <button className="small ghost" onClick={() => void s.deleteCourse(c.id)}>Remove</button>
+                )}
                 {isAdmin && (
                   <button className="small ghost" onClick={() => s.showScreen('create')}>Remix</button>
                 )}

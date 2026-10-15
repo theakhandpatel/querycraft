@@ -24,7 +24,7 @@ BIN         := $(BACKEND_DIR)/bin/querycraft
 # The `verify` smoke test boots the real binary against its own embedded
 # PostgreSQL, in a throwaway cluster on its own port, so it never collides with
 # a dev gateway that happens to be running.
-SMOKE_ADDR    ?= :18080
+SMOKE_ADDR    ?= 127.0.0.1:18080
 # Leave empty to auto-pick a free port; set it to pin one.
 SMOKE_PG_PORT ?=
 SMOKE_PG_DIR  ?= $(BACKEND_DIR)/.data/smoke
@@ -33,7 +33,7 @@ SMOKE_PG_DIR  ?= $(BACKEND_DIR)/.data/smoke
 # cache but keep the smoke cluster's data and runtime dirs isolated.
 PG_BINARIES_DIR ?= $(BACKEND_DIR)/.data/pg/binaries
 
-.PHONY: help install web typecheck embed backend build test verify verify-mock serve run dev docs dataset audit-lessons audit-content audit-storage audit-search audit-courses audit-progress audit-export audit-import audit-fixtures audit-metrics audit-metrics-live audit-adversarial audit-adversarial-live audit-load audit-parity db-reset clean
+.PHONY: help install web typecheck check-cgo embed backend build test verify verify-mock serve run dev docs dataset audit-lessons audit-content audit-storage audit-search audit-courses audit-progress audit-export audit-import audit-fixtures audit-metrics audit-metrics-live audit-adversarial audit-adversarial-live audit-load audit-parity audit-ai audit-ai-adapters audit-course-store audit-ai-live audit-perf audit-perf-content audit-perf-seam audit-perf-fixtures audit-dataset-map audit-shell audit-sqlite-errors audit-boot audit-course-gen db-reset clean disk
 
 help: ## List the available targets with a one-line description.
 	@echo "Querycraft — make targets"
@@ -72,8 +72,23 @@ backend: ## Compile the gateway to backend/bin/querycraft, stamping BuildVersion
 
 build: web embed backend ## Produce the single deployable binary (web + embed + backend).
 
-test: typecheck audit-lessons audit-content audit-storage audit-search audit-progress audit-export audit-import audit-fixtures audit-metrics audit-adversarial audit-parity ## Run the Go test suite, the frontend type-check and the audit suites.
+test: typecheck check-cgo audit-lessons audit-content audit-courses audit-storage audit-search audit-progress audit-export audit-import audit-fixtures audit-metrics audit-adversarial audit-parity audit-dataset-map audit-sqlite-errors audit-perf audit-perf-fixtures audit-perf-content audit-perf-seam audit-ai-adapters audit-course-store audit-course-gen audit-shell audit-boot ## Run the Go test suite, the frontend type-check and the audit suites.
 	cd $(BACKEND_DIR) && $(GO) test ./...
+
+check-cgo: ## Prove the single binary stays cgo-free (CGO_ENABLED=0 build + a cgo dependency scan).
+	cd $(BACKEND_DIR) && CGO_ENABLED=0 $(GO) build ./...
+	@cd $(BACKEND_DIR) && set -e; \
+		cgo_pkgs="$$(CGO_ENABLED=1 $(GO) list -deps -f '{{if and (not .Standard) .CgoFiles}}{{.ImportPath}}: {{.CgoFiles}}{{end}}' ./...)"; \
+		cgo_refs="$$(printf '%s\n' "$$cgo_pkgs" | grep . || true)"; \
+		if [ -n "$$cgo_refs" ]; then \
+			echo "check-cgo: these packages need cgo, but the single binary must stay cgo-free:" >&2; \
+			printf '%s\n' "$$cgo_refs" >&2; \
+			exit 1; \
+		fi
+	@cd $(BACKEND_DIR) && if grep -rn --include='*.go' -E '^//(go:build|[[:space:]]+\+build).*\bcgo\b' . | grep -v '!cgo'; then \
+		echo "check-cgo: the cgo-gated files above cannot build with CGO_ENABLED=0" >&2; \
+		exit 1; \
+	fi
 
 verify: build test ## build + test + smoke-test the binary on an isolated embedded PostgreSQL.
 	@set -eu; \
@@ -93,36 +108,36 @@ verify: build test ## build + test + smoke-test the binary on an isolated embedd
 	QC_PG_BINARIES="$(PG_BINARIES_DIR)" \
 	$(BIN) >"$$log" 2>&1 & \
 	pid=$$!; \
-	cleanup() { kill "$$pid" 2>/dev/null || true; wait "$$pid" 2>/dev/null || true; rm -f "$$root" "$$log"; }; \
+	cleanup() { kill "$$pid" 2>/dev/null || true; wait "$$pid" 2>/dev/null || true; rm -f "$$root" "$$log"; rm -rf "$(SMOKE_PG_DIR)"; }; \
 	trap cleanup EXIT INT TERM; \
 	echo "verify: starting $(BIN) on $(SMOKE_ADDR) with embedded PostgreSQL on :$$port (pid $$pid)"; \
 	up=0; \
 	for _ in $$(seq 1 100); do \
-		if curl -fsS "http://localhost$(SMOKE_ADDR)/health" >/dev/null 2>&1; then up=1; break; fi; \
+		if curl -fsS "http://$(SMOKE_ADDR)/health" >/dev/null 2>&1; then up=1; break; fi; \
 		if ! kill -0 "$$pid" 2>/dev/null; then echo "verify: server exited before becoming ready" >&2; cat "$$log" >&2; exit 1; fi; \
 		sleep 0.25; \
 	done; \
 	if [ "$$up" != 1 ]; then echo "verify: /health did not become ready" >&2; cat "$$log" >&2; exit 1; fi; \
-	health=$$(curl -fsS "http://localhost$(SMOKE_ADDR)/health"); \
+	health=$$(curl -fsS "http://$(SMOKE_ADDR)/health"); \
 	echo "verify: /health -> $$health"; \
 	case "$$health" in *'"version":"PostgreSQL'*) ;; \
 		*) echo "verify: embedded PostgreSQL did not attach (health shows the build version, not the server version)" >&2; cat "$$log" >&2; exit 1;; esac; \
 	qcode=$$(curl -sS -o "$$root" -w '%{http_code}' -X POST -H 'content-type: application/json' \
 		-d '{"sql":"select count(*) as n from orders"}' \
-		"http://localhost$(SMOKE_ADDR)/query"); \
+		"http://$(SMOKE_ADDR)/query"); \
 	qr=$$(cat "$$root"); \
 	echo "verify: /query -> HTTP $$qcode $$qr"; \
 	if [ "$$qcode" != "200" ] || ! grep -q '"status":"succeeded"' "$$root"; then \
 		echo "verify: /query did not run against PostgreSQL" >&2; cat "$$log" >&2; exit 1; \
 	fi; \
-	anon=$$(curl -sS -o /dev/null -w '%{http_code}' "http://localhost$(SMOKE_ADDR)/progress/smoke"); \
+	anon=$$(curl -sS -o /dev/null -w '%{http_code}' "http://$(SMOKE_ADDR)/progress/smoke"); \
 	echo "verify: anonymous GET /progress -> HTTP $$anon"; \
 	if [ "$$anon" != "401" ]; then \
 		echo "verify: /progress must require a session, got $$anon" >&2; cat "$$log" >&2; exit 1; \
 	fi; \
 	admin=$$(curl -sS -o "$$root" -w '%{http_code}' -X POST -H 'content-type: application/json' \
 		-d '{"email":"admin@querycraft.local","password":""}' \
-		"http://localhost$(SMOKE_ADDR)/auth/login"); \
+		"http://$(SMOKE_ADDR)/auth/login"); \
 	echo "verify: default admin login -> HTTP $$admin"; \
 	if [ "$$admin" != "200" ] || ! grep -q '"role":"admin"' "$$root"; then \
 		echo "verify: the seeded default administrator could not sign in" >&2; cat "$$root" >&2; cat "$$log" >&2; exit 1; \
@@ -131,7 +146,7 @@ verify: build test ## build + test + smoke-test the binary on an isolated embedd
 	if [ -z "$$tok" ]; then echo "verify: /auth/login returned no token" >&2; cat "$$root" >&2; exit 1; fi; \
 	signup=$$(curl -sS -o "$$root" -w '%{http_code}' -X POST -H 'content-type: application/json' \
 		-d '{"email":"smoke@querycraft.local","name":"Smoke","password":"smoke-passphrase"}' \
-		"http://localhost$(SMOKE_ADDR)/auth/signup"); \
+		"http://$(SMOKE_ADDR)/auth/signup"); \
 	echo "verify: learner signup -> HTTP $$signup"; \
 	if [ "$$signup" != "201" ]; then \
 		echo "verify: /auth/signup expected 201, got $$signup" >&2; cat "$$root" >&2; cat "$$log" >&2; exit 1; \
@@ -141,28 +156,28 @@ verify: build test ## build + test + smoke-test the binary on an isolated embedd
 	put=$$(curl -sS -o /dev/null -w '%{http_code}' -X PUT -H 'content-type: application/json' \
 		-H "Authorization: Bearer $$learner" \
 		-d '{"version":5,"passed":{"smoke.1":true}}' \
-		"http://localhost$(SMOKE_ADDR)/progress/smoke"); \
+		"http://$(SMOKE_ADDR)/progress/smoke"); \
 	get=$$(curl -sS -o "$$root" -w '%{http_code}' -H "Authorization: Bearer $$learner" \
-		"http://localhost$(SMOKE_ADDR)/progress/smoke"); \
+		"http://$(SMOKE_ADDR)/progress/smoke"); \
 	echo "verify: scoped progress PUT/GET -> $$put/$$get"; \
 	if [ "$$put" != "200" ] || [ "$$get" != "200" ] || ! grep -q '"smoke.1":true' "$$root"; then \
 		echo "verify: progress did not round-trip for the signed-in learner" >&2; cat "$$root" >&2; cat "$$log" >&2; exit 1; \
 	fi; \
-	leak=$$(curl -sS -H "Authorization: Bearer $$tok" "http://localhost$(SMOKE_ADDR)/progress/smoke"); \
+	leak=$$(curl -sS -H "Authorization: Bearer $$tok" "http://$(SMOKE_ADDR)/progress/smoke"); \
 	if printf '%s' "$$leak" | grep -q '"smoke.1":true'; then \
 		echo "verify: progress leaked across owners (admin saw the learner's snapshot)" >&2; cat "$$log" >&2; exit 1; \
 	fi; \
 	out=$$(curl -sS -o /dev/null -w '%{http_code}' -X POST -H "Authorization: Bearer $$learner" \
-		"http://localhost$(SMOKE_ADDR)/auth/logout"); \
+		"http://$(SMOKE_ADDR)/auth/logout"); \
 	echo "verify: logout -> HTTP $$out"; \
 	if [ "$$out" != "200" ]; then echo "verify: logout failed" >&2; exit 1; fi; \
 	after=$$(curl -sS -o /dev/null -w '%{http_code}' -H "Authorization: Bearer $$learner" \
-		"http://localhost$(SMOKE_ADDR)/progress/smoke"); \
+		"http://$(SMOKE_ADDR)/progress/smoke"); \
 	echo "verify: revoked token -> HTTP $$after"; \
 	if [ "$$after" != "401" ]; then \
 		echo "verify: a logged-out token still worked" >&2; cat "$$log" >&2; exit 1; \
 	fi; \
-	code=$$(curl -sS -o "$$root" -w '%{http_code}' "http://localhost$(SMOKE_ADDR)/"); \
+	code=$$(curl -sS -o "$$root" -w '%{http_code}' "http://$(SMOKE_ADDR)/"); \
 	echo "verify: GET / -> HTTP $$code"; \
 	if [ "$$code" != "200" ]; then echo "verify: GET / expected 200, got $$code" >&2; exit 1; fi; \
 	if ! grep -qE 'Querycraft|make build' "$$root"; then \
@@ -173,42 +188,41 @@ verify: build test ## build + test + smoke-test the binary on an isolated embedd
 
 verify-mock: build test ## Smoke-test the binary with no embedded database (degraded mode).
 	@set -eu; \
-	log=$$(mktemp); \
+	log=$$(mktemp); scratch=$$(mktemp -d); \
 	QC_ADDR=$(SMOKE_ADDR) QC_NO_LOCAL_DB=1 $(BIN) >"$$log" 2>&1 & \
 	pid=$$!; \
-	cleanup() { kill "$$pid" 2>/dev/null || true; wait "$$pid" 2>/dev/null || true; rm -f "$$log"; }; \
+	cleanup() { kill "$$pid" 2>/dev/null || true; wait "$$pid" 2>/dev/null || true; rm -f "$$log"; rm -rf "$$scratch"; }; \
 	trap cleanup EXIT INT TERM; \
 	up=0; \
 	for _ in $$(seq 1 60); do \
-		if curl -fsS "http://localhost$(SMOKE_ADDR)/health" >/dev/null 2>&1; then up=1; break; fi; \
+		if curl -fsS "http://$(SMOKE_ADDR)/health" >/dev/null 2>&1; then up=1; break; fi; \
 		if ! kill -0 "$$pid" 2>/dev/null; then echo "verify-mock: server exited early" >&2; cat "$$log" >&2; exit 1; fi; \
 		sleep 0.1; \
 	done; \
 	if [ "$$up" != 1 ]; then echo "verify-mock: /health did not become ready" >&2; cat "$$log" >&2; exit 1; fi; \
-	echo "verify-mock: /health -> $$(curl -fsS "http://localhost$(SMOKE_ADDR)/health")"; \
-	q=$$(curl -sS -o /tmp/qc-mock-q.json -w '%{http_code}' -X POST -H 'content-type: application/json' \
-		-d '{"sql":"select 1"}' "http://localhost$(SMOKE_ADDR)/query"); \
+	echo "verify-mock: /health -> $$(curl -fsS "http://$(SMOKE_ADDR)/health")"; \
+	q=$$(curl -sS -o "$$scratch/q.json" -w '%{http_code}' -X POST -H 'content-type: application/json' \
+		-d '{"sql":"select 1"}' "http://$(SMOKE_ADDR)/query"); \
 	echo "verify-mock: /query -> HTTP $$q"; \
-	if [ "$$q" != "400" ] || ! grep -q 'ENVIRONMENT_UNAVAILABLE' /tmp/qc-mock-q.json; then \
-		echo "verify-mock: degraded mode must report ENVIRONMENT_UNAVAILABLE, not invent rows" >&2; cat /tmp/qc-mock-q.json >&2; exit 1; \
+	if [ "$$q" != "400" ] || ! grep -q 'ENVIRONMENT_UNAVAILABLE' "$$scratch/q.json"; then \
+		echo "verify-mock: degraded mode must report ENVIRONMENT_UNAVAILABLE, not invent rows" >&2; cat "$$scratch/q.json" >&2; exit 1; \
 	fi; \
-	anon=$$(curl -sS -o /dev/null -w '%{http_code}' "http://localhost$(SMOKE_ADDR)/progress/smoke"); \
+	anon=$$(curl -sS -o /dev/null -w '%{http_code}' "http://$(SMOKE_ADDR)/progress/smoke"); \
 	if [ "$$anon" != "401" ]; then echo "verify-mock: /progress must still require a session in degraded mode, got $$anon" >&2; exit 1; fi; \
-	adm=$$(curl -sS -o /tmp/qc-mock-a.json -w '%{http_code}' -X POST -H 'content-type: application/json' \
-		-d '{"email":"admin@querycraft.local","password":""}' "http://localhost$(SMOKE_ADDR)/auth/login"); \
+	adm=$$(curl -sS -o "$$scratch/a.json" -w '%{http_code}' -X POST -H 'content-type: application/json' \
+		-d '{"email":"admin@querycraft.local","password":""}' "http://$(SMOKE_ADDR)/auth/login"); \
 	echo "verify-mock: in-memory admin login -> HTTP $$adm"; \
-	if [ "$$adm" != "200" ] || ! grep -q '"role":"admin"' /tmp/qc-mock-a.json; then \
-		echo "verify-mock: the in-memory store must still seed the default admin" >&2; cat /tmp/qc-mock-a.json >&2; cat "$$log" >&2; exit 1; \
+	if [ "$$adm" != "200" ] || ! grep -q '"role":"admin"' "$$scratch/a.json"; then \
+		echo "verify-mock: the in-memory store must still seed the default admin" >&2; cat "$$scratch/a.json" >&2; cat "$$log" >&2; exit 1; \
 	fi; \
-	mtok=$$(sed -n 's/.*"token":"\([^"]*\)".*/\1/p' /tmp/qc-mock-a.json); \
+	mtok=$$(sed -n 's/.*"token":"\([^"]*\)".*/\1/p' "$$scratch/a.json"); \
 	mput=$$(curl -sS -o /dev/null -w '%{http_code}' -X PUT -H 'content-type: application/json' -H "Authorization: Bearer $$mtok" \
-		-d '{"version":5,"passed":{"m":true}}' "http://localhost$(SMOKE_ADDR)/progress/smoke"); \
-	mget=$$(curl -sS -H "Authorization: Bearer $$mtok" "http://localhost$(SMOKE_ADDR)/progress/smoke"); \
+		-d '{"version":5,"passed":{"m":true}}' "http://$(SMOKE_ADDR)/progress/smoke"); \
+	mget=$$(curl -sS -H "Authorization: Bearer $$mtok" "http://$(SMOKE_ADDR)/progress/smoke"); \
 	echo "verify-mock: in-memory progress PUT -> $$mput"; \
 	if [ "$$mput" != "200" ] || ! printf '%s' "$$mget" | grep -q '"m":true'; then \
 		echo "verify-mock: in-memory progress did not round-trip" >&2; printf '%s\n' "$$mget" >&2; exit 1; \
 	fi; \
-	rm -f /tmp/qc-mock-q.json /tmp/qc-mock-a.json; \
 	echo "verify-mock: OK (no database, honest degradation, auth still enforced)"
 
 db-reset: ## Delete the dev and smoke PostgreSQL clusters (fresh dataset next boot).
@@ -234,10 +248,14 @@ dataset: ## Regenerate backend/internal/dataset/schema.sql and seed.sql from the
 	cd $(BACKEND_DIR) && $(GO) test ./internal/dataset -run 'Test(Schema|Seed)SQLUpToDate' -update
 	@echo "dataset: regenerated backend/internal/dataset/{schema,seed}.sql"
 
-audit-courses: ## Run every authored exercise solution through a running gateway (see docs/course-audit.md).
+audit-courses: ## Run every authored exercise solution through a gateway, on the dialect and dataset the app would use (see docs/course-audit.md).
 	cd $(WEB_DIR) && ./node_modules/.bin/esbuild --bundle --format=cjs --platform=node \
 		--outfile=/tmp/curriculum.cjs src/data/curriculum.ts >/dev/null
-	node scripts/course-audit.mjs
+	cd $(WEB_DIR) && ./node_modules/.bin/esbuild --bundle --format=cjs --platform=node \
+		--outfile=/tmp/dialect-for-courses.cjs src/lib/dialect.ts >/dev/null
+	cd $(WEB_DIR) && ./node_modules/.bin/esbuild --bundle --format=cjs --platform=node \
+		--outfile=/tmp/dataset-for-courses.cjs src/lib/dataset.ts >/dev/null
+	QC_GO=$(GO) QC_BACKEND=$(BACKEND_DIR) node scripts/course-audit.mjs
 
 audit-lessons: ## Check every lesson has objectives, an example with a result, and an exercise or a reading-only reason (design 14, M2).
 	cd $(WEB_DIR) && ./node_modules/.bin/esbuild --bundle --format=cjs --platform=node \
@@ -249,6 +267,10 @@ audit-content: ## Check the chapter-content seeder: fingerprint, ensure-not-once
 		--outfile=/tmp/content-seed.cjs src/lib/contentSeed.ts >/dev/null
 	cd $(WEB_DIR) && ./node_modules/.bin/esbuild --bundle --format=cjs --platform=node \
 		--outfile=/tmp/curriculum-for-content.cjs src/data/curriculum.ts >/dev/null
+	cd $(WEB_DIR) && ./node_modules/.bin/esbuild --bundle --format=cjs --platform=node \
+		--outfile=/tmp/dialect-for-content.cjs src/lib/dialect.ts >/dev/null
+	cd $(WEB_DIR) && ./node_modules/.bin/esbuild --bundle --format=cjs --platform=node \
+		--outfile=/tmp/dataset-for-content.cjs src/lib/dataset.ts >/dev/null
 	node scripts/content-audit.mjs
 
 audit-storage: ## Check the offline store layout and split match design 8.1, and that a failed write is typed (M2 step 2).
@@ -309,8 +331,63 @@ audit-load: ## Drive concurrent POST /query load and cross-check client latency 
 audit-load-live: ## Same load against a gateway you already run (QC_GATEWAY, default http://localhost:18077).
 	QC_GATEWAY=$${QC_GATEWAY:-http://localhost:18077} node scripts/load-test.mjs
 
-audit-parity: ## Prove the same lesson SQL returns the same rows on PGlite (Adapter A) and the Go gateway (Adapter B) (M3 exit gate).
+audit-ai-adapters: ## Check the frontend AI seam (both adapters, no gateway needed) against contracts/ai.schema.json (M4 step 6).
+	@set -e; trap 'rm -f /tmp/qc-ai.cjs /tmp/qc-deadline.cjs' EXIT INT TERM; cd $(WEB_DIR) && npm run audit-ai
+
+audit-course-store: ## Check the M8 stored-course seam: a stored record parses whole (or is dropped), a building course is readable, a failed read refuses instead of reporting none, and the record's measured rows are the rows the lesson page shows.
+	@set -e; trap 'rm -f /tmp/qc-ai.cjs /tmp/qc-draft.cjs /tmp/qc-runresume.cjs' EXIT INT TERM; cd $(WEB_DIR) && npm run audit-course-store
+
+audit-ai: ## Run the M4 exit gate against a freshly booted gateway with the deterministic provider (design 11, 14).
+	QC_GO=$(GO) QC_BACKEND=$(BACKEND_DIR) node scripts/ai-audit.mjs
+
+audit-ai-live: ## Drive the M4 pipeline with a real OpenAI-compatible model (set QC_AI_BASE_URL / QC_AI_MODEL / QC_AI_KEY_FILE).
+	node scripts/ai-live-audit.mjs
+
+audit-shell: ## Check the app shell's two layout rules: the clipping container is a containing block, and the 64px rail still names its controls (see the UI pass in progress.md).
+	node scripts/shell-audit.mjs
+
+audit-boot: ## Drive the in-browser engine's boot with a worker that never answers: it must give up, take the page engine, say so, and run the dataset -- and its election id must be per dataset and per page load (see the UI pass in progress.md).
+	node scripts/boot-audit.mjs
+
+audit-course-gen: ## Run the M8 exit gate against a freshly booted gateway: the deterministic provider writes a course chapter by chapter and it activates; a stub provider proves the streaming read (a building course readable mid-run), a chapter that cannot be repaired is dropped while the rest of the course survives, and a run in which nothing verifies leaves no row behind (design 11, 14).
+	QC_GO=$(GO) QC_BACKEND=$(BACKEND_DIR) node scripts/course-gen-audit.mjs
+
+audit-perf: ## Run the M5 exit gate: plan capture, structural grading and reproducibility on pinned fixtures.
+	QC_GO=$(GO) QC_BACKEND=$(BACKEND_DIR) node scripts/perf-audit.mjs
+	cd $(WEB_DIR) && npm run audit-perf
+
+audit-perf-fixtures: ## Check every plan fixture's summary is the walk of its own plan, and that its verdict is the pinned one.
+	node scripts/perf-fixture-normalize.mjs --check
+
+audit-perf-content: ## Check the perf course against the fixture it describes: every authored row, and every exercise contract against its own solution (M5).
+	cd $(WEB_DIR) && ./node_modules/.bin/esbuild --bundle --format=cjs --platform=node \
+		--outfile=/tmp/curriculum.cjs src/data/curriculum.ts >/dev/null
+	cd $(WEB_DIR) && ./node_modules/.bin/esbuild --bundle --format=cjs --platform=node \
+		--outfile=/tmp/plan-contract.cjs src/api/planContract.ts >/dev/null
+	QC_GO=$(GO) QC_BACKEND=$(BACKEND_DIR) node scripts/perf-content-audit.mjs
+
+audit-perf-seam: ## Drive the dataset seam through the shipping browser adapter: a perf chapter routes to the perf fixture, its authored rows come back from it, its plans are graded against it, and a perf write cannot touch commerce (M5).
+	cd $(WEB_DIR) && ./node_modules/.bin/esbuild --bundle --format=cjs --platform=node \
+		--outfile=/tmp/curriculum.cjs src/data/curriculum.ts >/dev/null
+	cd $(WEB_DIR) && ./node_modules/.bin/esbuild --bundle --format=cjs --platform=node \
+		--outfile=/tmp/plan-contract.cjs src/api/planContract.ts >/dev/null
+	cd $(WEB_DIR) && ./node_modules/.bin/esbuild --bundle --format=cjs --platform=node \
+		--outfile=/tmp/dataset-for-seam.cjs src/lib/dataset.ts >/dev/null
+	node scripts/perf-seam-audit.mjs
+
+audit-dataset-map: ## Check the SQLite dataset mapping against both schemas, every mismatch carrying its reason (M6 step 3).
+	node scripts/dataset-map-audit.mjs
+
+audit-sqlite-errors: ## Check the SQLite dialect profile against contracts/dialect.schema.json: closed codes, capability notes, value encoding, affinity, and the browser reader's own framing/classification (M6 step 3).
+	cd $(WEB_DIR) && ./node_modules/.bin/esbuild --bundle --format=cjs --platform=node \
+		--outfile=/tmp/sqlite-framing.cjs src/api/sqliteFraming.ts >/dev/null
+	cd $(WEB_DIR) && ./node_modules/.bin/esbuild --bundle --format=cjs --platform=node \
+		--outfile=/tmp/sqlite-profile.cjs src/api/sqliteProfile.ts >/dev/null
+	node scripts/sqlite-error-codes.mjs
+
+audit-parity: ## Prove the same lesson SQL returns the same rows on both adapters, for PostgreSQL (PGlite vs the gateway) and for SQLite (browser wasm vs the gateway) (M3/M6 exit gate).
 	QC_GO=$(GO) QC_BACKEND=$(BACKEND_DIR) node scripts/adapter-parity-audit.mjs
+	QC_GO=$(GO) QC_BACKEND=$(BACKEND_DIR) node scripts/adapter-parity-audit.mjs --dialect sqlite
 
 docs: ## Print the Swagger UI and OpenAPI URLs.
 	@echo "Swagger UI: http://localhost:8080/docs"
@@ -322,3 +399,26 @@ clean: ## Remove web/dist, the binary, and embedded assets (keeps .gitkeep).
 	@find $(EMBED_DIR) -mindepth 1 ! -name .gitkeep -exec rm -rf {} +
 	@touch $(EMBED_DIR)/.gitkeep
 	@echo "clean: removed build outputs"
+
+disk: ## Report free space and the disk footprint this harness leaves behind (read-only).
+	@set -u; tmp="$${TMPDIR:-/tmp}"; \
+	echo "Querycraft — disk usage (read-only)"; echo; \
+	echo "free space:"; \
+	df -h "$$PWD" "$$tmp" 2>/dev/null | awk 'NR==1{printf "  %-22s %6s %6s %6s %5s\n","filesystem","size","used","avail","use%"; next} !seen[$$1]++{printf "  %-22s %6s %6s %6s %5s\n",$$1,$$2,$$3,$$4,$$5}'; \
+	echo; \
+	echo "repo cache ($(BACKEND_DIR)/.data):"; \
+	if [ -d "$(BACKEND_DIR)/.data" ]; then \
+		echo "  total   $$(du -sh "$(BACKEND_DIR)/.data" | cut -f1)"; \
+		du -sh "$(BACKEND_DIR)"/.data/* 2>/dev/null | sort -rh | head -8 | awk '{printf "  %7s  %s\n",$$1,$$2}'; \
+	else echo "  (none)"; fi; \
+	echo; \
+	echo "harness temp footprint in $$tmp:"; \
+	hits=$$(find "$$tmp" -maxdepth 1 \( -name 'qc-*' -o -name 'embedded_postgres_log*' -o -name '*.cjs' \) 2>/dev/null); \
+	if [ -z "$$hits" ]; then echo "  clean — no qc-*, embedded_postgres_log* or esbuild *.cjs entries"; \
+	else \
+		count=$$(printf '%s\n' "$$hits" | wc -l | tr -d ' '); \
+		bytes=$$(printf '%s\n' "$$hits" | tr '\n' '\0' | xargs -0 -r du -scb 2>/dev/null | tail -1 | cut -f1); \
+		echo "  $$count entries, $$(numfmt --to=iec "$$bytes" 2>/dev/null || echo "$$bytes bytes")"; \
+		echo "  largest offenders:"; \
+		printf '%s\n' "$$hits" | tr '\n' '\0' | xargs -0 -r du -sh 2>/dev/null | sort -rh | head -8 | awk '{printf "    %7s  %s\n",$$1,$$2}'; \
+	fi

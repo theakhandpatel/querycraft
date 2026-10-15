@@ -38,6 +38,15 @@ anonymous path is then checked separately, as the property it is — an anonymou
 caller must be refused a write, must leave the shared dataset untouched, and must
 be told it has no workspace rather than be given one.
 
+A **course setup** section (M9) checks the other half of that rule: a stored
+course's `setup.statements` are re-applied after the template is copied, so the
+learner's database is the one the course's exercises were verified in. The
+browser adapter applies exactly the statements it is handed and reports how many;
+the gateway resolves the course owner-scoped, reports `setup_statements: 0` when
+no course is named, and refuses a named-but-unknown course instead of ignoring
+it. The gateway's applied path is proved in Go
+(`backend/internal/httpapi/environment_setup_test.go`, under `go test ./...`).
+
 ## Running it
 
 ```sh
@@ -196,3 +205,190 @@ adapter-parity-audit: OK (4 skipped)
 - Running PGlite under Node exercises the adapter's main-thread path, not its
   Worker path. The Worker deadline and the "worker blocked" fallback have their
   own tests; this audit is about values.
+
+## The SQLite dialect (`--dialect sqlite`)
+
+`docs/technical-design.md` / `docs/m6-implementation-plan.md` add a second
+dialect to the same product: a learner can write SQLite as well as PostgreSQL.
+The parity gate is the same idea with a different pair of engines, so it is the
+same instrument with `--dialect sqlite` (M6 step 8). The PostgreSQL half is
+untouched and is still the default:
+
+```sh
+node scripts/adapter-parity-audit.mjs                     # postgresql (the M3 gate)
+node scripts/adapter-parity-audit.mjs --dialect sqlite    # sqlite (the M6 gate)
+make audit-parity                                         # both, and red if either is red
+```
+
+`make audit-parity` builds the gateway once and then runs both halves; the
+existing knobs (`QC_GO`, `QC_BACKEND`, `QC_BIN`, `QC_GATEWAY`,
+`QC_SKIP_PGLITE`) apply to each half unchanged.
+
+### Adapter A and Adapter B for this dialect
+
+- **Adapter A (web)** is the browser's own SQLite adapter,
+  `web/src/api/sqlite.ts` over `web/src/api/sqliteEngine.ts`
+  (the official `@sqlite.org/sqlite-wasm` build). In the app it runs in a Web
+  Worker; the audit bundles the shipping adapter with esbuild and runs it in
+  Node, where it takes its documented main-thread fallback because Node has no
+  `Worker`. The audit's esbuild step carries a small plugin for
+  `import sqliteWasmUrl from '@sqlite.org/sqlite-wasm/sqlite3.wasm?url'`, which
+  esbuild cannot resolve on its own: the plugin answers the `?url` import with
+  the **absolute filesystem path** of the wasm file, which is what
+  `sqlite3InitModule`'s `locateFile` needs under Node.
+- **Adapter B (gateway)** is the Go gateway's SQLite engine
+  (`backend/internal/engine/sqlite.go`, pure-Go modernc) reached with
+  `POST /query` and `{"dialect":"sqlite"}`, driven exactly as the browser drives
+  it. The run signs a fresh learner in first, because a signed-in learner gets a
+  per-account SQLite file, which is the same kind of writable workspace as the
+  browser side; the anonymous read-only path is a different kind of thing and is
+  not what this gate compares.
+
+### The two sides are different builds — the semantics are the contract
+
+The browser engine is the **wasm** build of SQLite and the gateway engine is the
+pure-Go `modernc` build, so their `engine` strings differ by construction
+(measured: `SQLite 3.53.4` in the browser, `SQLite 3.50.3` on the gateway). The
+audit prints both strings as *information* and **never compares them** — a
+version-string difference is expected and is never a finding. What is compared
+is the contract: `dialect`, status, error code, column labels, the row count,
+the `truncated` flag and the cell values, under the project's own §6.1 rule
+(`web/src/api/compare.ts`). Two different builds that answer the same lesson SQL
+with the same rows are what "the same lesson on both engines" means.
+
+### Canonical column-type spelling for SQLite
+
+Column *types* are compared through a canonical table, as on the PostgreSQL
+side. For SQLite the canonical spelling is the **declared type verbatim**, and
+`expression` for a column that has no declared type — the rule stated in
+`contracts/dialects/sqlite.json` under
+`value_encoding.column_type_label` (and mirrored by
+`canonicalSqliteType()` in the audit). Both sides report the declared type
+verbatim (`sqlite3_column_decltype`), and the dataset authors those declarations
+upper-case (`INTEGER`, `TEXT`, `NUMERIC`, `DATE`, `TIMESTAMP`, `BOOLEAN`), so
+there is no case translation to apply: the labels are compared as exact strings.
+
+### What is deliberately not compared (SQLite)
+
+Each exclusion is printed with its reason, is still **executed** on both sides,
+and — where its shape allows it — carries a *verified* claim, so an exclusion
+can never hide a second difference. All three are specific to SQLite (the first
+mirrors the PostgreSQL half's own `EXPLAIN` exclusion):
+
+- **`EXPLAIN QUERY PLAN`** — returns the planner's own text (which scan or
+  search each step chose), a property of the build and its statistics, not a
+  value the contract covers. The two sides are different SQLite builds, so their
+  plans are not required to agree. The PostgreSQL half excludes `EXPLAIN` for
+  the same reason.
+- **`rowid`** — a physical address, not a key: SQLite documents it as unstable
+  across `VACUUM`, and each adapter's database is its own file with its own
+  insertion history, so the two are not required to number rows the same way.
+  The label differs too (the wasm build reports `INTEGER` from
+  `sqlite3_column_decltype`, the Go driver reports `expression`, because
+  `decltype` answers for a declared column and `rowid` is implicit). Both are
+  properties of the file, like a plan.
+- **`storage-layer-pragma`** (SQLite-only) — `PRAGMA journal_mode`, `page_size`,
+  `page_count`, `freelist_count`, the cache and locking settings, `encoding`,
+  `integrity_check`, `data_version`, `wal_checkpoint` and the rest read a fact
+  about the database *file*, and the two adapters are two files: the browser's
+  workspace is an in-memory database (ADR 0007, `journal_mode = memory`) while
+  the gateway's is a file on disk (`journal_mode = delete`), and the two builds
+  ship different defaults (measured `page_size`: `8192` web, `4096` gateway,
+  with `page_count` and anything computed from it moving with it). The exclusion
+  is *verified* — every column in such a statement that is not a bare
+  `expression` must still agree, so a real divergence in stored data cannot hide
+  under it — and it recognises the table-valued form (`pragma_journal_mode()`,
+  `pragma_page_size()`) the schema lessons use, not only the bare `PRAGMA x`
+  spelling. A *data* pragma the lessons read for their schema
+  (`pragma_table_info`, `pragma_foreign_key_list`) is **not** excluded and is
+  compared normally.
+A `DATE`/`TIMESTAMP`-declared column is **not** excluded. Both adapters report
+the stored text verbatim — the browser through `sqlite3_column_text`, the
+gateway through the same raw sqlite3 API on its read path
+(`backend/internal/engine/sqlite_raw.go`), so the declared type is only a label
+and no `time.Time` is ever materialised. The two date probes are ordinary
+statements the audit compares cell by cell.
+
+### Measured result
+
+Run against the embedded gateway, `--dialect sqlite --markdown`:
+
+```
+statements compared:    51
+match:                  51
+representation:         0 (same values under §6.1, different JSON shape)
+diverge:                0
+excluded (driver rule): 6
+multi-statement:        0
+
+adapter-parity-audit: OK (4 skipped)
+```
+
+The 57 statements executed (51 compared, 6 excluded) are the real lesson SQL of
+every `dialect: 'sqlite'` chapter (`sqlite-essentials` s1–s7,
+`sqlite-in-production` r1–r7, `x1`–`x7`) — each exercise's reference solution
+and each worked example, 42 statements — plus 15 probes for the paths a curated
+lesson never hits: syntax error, incomplete input, no such
+table/column/function, a UNIQUE and a NOT NULL constraint failure, the storage
+classes, division by zero, an empty result, a declared `DATE` and `TIMESTAMP`
+column, the 500-row cap and the 5 s deadline.
+
+| statement | status web | status gateway | rows web | rows gateway | verdict |
+| --- | --- | --- | --- | --- | --- |
+| ex.s1.demo | succeeded | succeeded | 10 | 10 | match |
+| ex.s1.1 | succeeded | succeeded | 5 | 5 | match |
+| ex.s2.demo | succeeded | succeeded | 2 | 2 | match |
+| ex.s2.1 | succeeded | succeeded | 10 | 10 | match |
+| ex.s3.demo | succeeded | succeeded | 1 | 1 | excluded (driver rule) |
+| ex.s3.1 | succeeded | succeeded | 3 | 3 | excluded (driver rule) |
+| ex.s4.demo | succeeded | succeeded | 5 | 5 | match |
+| ex.s4.1 | succeeded | succeeded | 7 | 7 | match |
+| ex.s5.demo | succeeded | succeeded | 1 | 1 | match |
+| ex.s5.1 | succeeded | succeeded | 1 | 1 | match |
+| ex.s6.demo | succeeded | succeeded | 5 | 5 | match |
+| ex.s6.1 | succeeded | succeeded | 4 | 4 | match |
+| ex.s7.demo | succeeded | succeeded | 1 | 1 | match |
+| ex.s7.1 | succeeded | succeeded | 4 | 4 | match |
+| ex.r1.demo | succeeded | succeeded | 1 | 1 | excluded (driver rule) |
+| ex.r1.1 | succeeded | succeeded | 1 | 1 | excluded (driver rule) |
+| ex.r2.demo | succeeded | succeeded | 6 | 6 | match |
+| ex.r2.1 | succeeded | succeeded | 5 | 5 | match |
+| ex.r3.demo | succeeded | succeeded | 2 | 2 | match |
+| ex.r3.1 | succeeded | succeeded | 5 | 5 | match |
+| ex.r4.demo | succeeded | succeeded | 2 | 2 | match |
+| ex.r4.1 | succeeded | succeeded | 3 | 3 | match |
+| ex.r5.demo | succeeded | succeeded | 4 | 4 | match |
+| ex.r5.1 | succeeded | succeeded | 4 | 4 | match |
+| ex.r6.demo | succeeded | succeeded | 1 | 1 | match |
+| ex.r6.1 | succeeded | succeeded | 1 | 1 | match |
+| ex.r7.demo | succeeded | succeeded | 1 | 1 | excluded (driver rule) |
+| ex.r7.1 | succeeded | succeeded | 1 | 1 | excluded (driver rule) |
+| ex.x1.demo | succeeded | succeeded | 1 | 1 | match |
+| ex.x1.1 | succeeded | succeeded | 3 | 3 | match |
+| ex.x2.demo | succeeded | succeeded | 1 | 1 | match |
+| ex.x2.1 | succeeded | succeeded | 4 | 4 | match |
+| ex.x3.demo | succeeded | succeeded | 1 | 1 | match |
+| ex.x3.1 | succeeded | succeeded | 5 | 5 | match |
+| ex.x4.demo | succeeded | succeeded | 1 | 1 | match |
+| ex.x4.1 | succeeded | succeeded | 6 | 6 | match |
+| ex.x5.demo | succeeded | succeeded | 1 | 1 | match |
+| ex.x5.1 | succeeded | succeeded | 1 | 1 | match |
+| ex.x6.demo | succeeded | succeeded | 6 | 6 | match |
+| ex.x6.1 | succeeded | succeeded | 1 | 1 | match |
+| ex.x7.demo | succeeded | succeeded | 4 | 4 | match |
+| ex.x7.1 | succeeded | succeeded | 5 | 5 | match |
+| probe sqlite syntax error | failed | failed | 0 | 0 | match |
+| probe sqlite incomplete input | failed | failed | 0 | 0 | match |
+| probe sqlite no such table | failed | failed | 0 | 0 | match |
+| probe sqlite no such column | failed | failed | 0 | 0 | match |
+| probe sqlite no such function | failed | failed | 0 | 0 | match |
+| probe sqlite unique constraint | failed | failed | 0 | 0 | match |
+| probe sqlite not null constraint | failed | failed | 0 | 0 | match |
+| probe sqlite storage classes | succeeded | succeeded | 20 | 20 | match |
+| probe sqlite division by zero | succeeded | succeeded | 1 | 1 | match |
+| probe sqlite empty result | succeeded | succeeded | 0 | 0 | match |
+| probe sqlite word-count aggregate | succeeded | succeeded | 1 | 1 | match |
+| probe sqlite declared DATE column | succeeded | succeeded | 30 | 30 | match |
+| probe sqlite declared TIMESTAMP column | succeeded | succeeded | 80 | 80 | match |
+| probe sqlite row cap (500) | succeeded | succeeded | 500 | 500 | match |
+| probe sqlite deadline (5 s) | failed | failed | 0 | 0 | match |

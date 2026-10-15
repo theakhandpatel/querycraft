@@ -59,10 +59,14 @@ func Start(t *testing.T) *Server {
 	root := t.TempDir()
 	binaries := CachedBinaries()
 
+	/* TempDir keeps the server's own postgres log under t.TempDir() too. Left
+	   empty the library files it in the machine-wide temp directory and never
+	   removes it, so every test run would leak a log file there. */
 	cfg := localdb.Config{
 		DataPath:     filepath.Join(root, "pg", "data"),
 		RuntimePath:  filepath.Join(root, "pg", "runtime"),
 		BinariesPath: binaries,
+		TempDir:      filepath.Join(root, "tmp"),
 		Port:         port,
 		User:         "querycraft",
 		Password:     Password,

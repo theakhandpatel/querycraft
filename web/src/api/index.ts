@@ -102,5 +102,6 @@ export {
   PGLITE_CONFIG,
   clearAuthToken,
   readAuthToken,
+  readAuthUser,
   writeAuthToken,
 } from './execution';

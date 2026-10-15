@@ -10,7 +10,19 @@
     "lesson_id": { "type": "string" },
     "type": { "enum": ["complete", "write", "modify", "predict", "fix", "combine", "solve"] },
     "prompt": { "type": "string" },
-    "setup": { "type": "object", "required": ["dataset", "schema_version", "seed_version"], "properties": { "dataset": { "type": "string" }, "schema_version": { "type": "integer" }, "seed_version": { "type": "integer" } } },
+    "setup": {
+      "type": "object",
+      "required": ["dataset", "schema_version", "seed_version", "dialect"],
+      "properties": {
+        "dataset": { "type": "string" },
+        "schema_version": { "type": "integer" },
+        "seed_version": { "type": "integer" },
+        "dialect": {
+          "enum": ["postgresql", "sqlite"],
+          "description": "The dialect this exercise's contract was written for. A graded answer whose dialect differs from the running engine is refused with DIALECT_MISMATCH: the values in a contract are engine-specific, so grading one engine's output against another's contract would be a silent wrong answer."
+        }
+      }
+    },
     "result_contract": {
       "type": "object",
       "required": ["columns", "column_order", "row_order", "duplicates", "numeric_tolerance"],

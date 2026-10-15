@@ -150,11 +150,11 @@
       }
     },
     "outcome": {
-      "description": "The POST /challenges/generate and POST /courses/generate response. `active` is the only status that puts the artifact in front of learners.",
+      "description": "The POST /challenges/generate and POST /courses/generate response. `active` is the only status that puts the artifact in front of learners. `awaiting_approval` is a course run that stopped after storing its outline, waiting for POST /courses/{id}/build.",
       "type": "object",
       "required": ["status", "stages", "attempts"],
       "properties": {
-        "status": { "enum": ["active", "rejected", "unavailable", "failed"] },
+        "status": { "enum": ["active", "rejected", "unavailable", "failed", "awaiting_approval"] },
         "kind": { "enum": ["challenge", "course"] },
         "artifact": { "oneOf": [{ "type": "null" }, { "$ref": "#/$defs/challengeArtifact" }] },
         "stages": { "type": "array", "items": { "$ref": "#/$defs/stage" } },
@@ -164,7 +164,7 @@
       }
     },
     "generationRequest": {
-      "description": "What the learner asks for. Every field is optional except a topic or a title; the service validates the rest.",
+      "description": "What the learner asks for. Every field is optional except a topic or a title; the service validates the rest. `require_approval` is course-only: it asks the run to stop after the outline so the learner can approve it before the chapters are written.",
       "type": "object",
       "properties": {
         "kind": { "enum": ["challenge", "course"] },
@@ -174,7 +174,8 @@
         "scenario": { "type": "string" },
         "constraints": { "type": "array", "items": { "type": "string" } },
         "exercise_count": { "type": "integer", "minimum": 1, "maximum": 40 },
-        "steps": { "type": "array", "items": { "type": "string" } }
+        "steps": { "type": "array", "items": { "type": "string" } },
+        "require_approval": { "type": "boolean" }
       }
     },
     "availability": {
@@ -187,7 +188,12 @@
         "provider": { "type": "string" },
         "model": { "type": "string" },
         "deterministic": { "type": "boolean" },
-        "reason": { "type": "string" }
+        "reason": { "type": "string" },
+        "timeout_ms": {
+          "description": "The run budget: how long a generation may take before the pipeline answers with its own failure. A client must not use a shorter deadline than this.",
+          "type": "integer",
+          "minimum": 1
+        }
       }
     },
     "tutorRequest": {

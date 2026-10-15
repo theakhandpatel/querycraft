@@ -36,12 +36,23 @@ export interface StoredContent {
   modules: string[];
 }
 
-/** A module id names its course by prefix; the ids are authored and stable. */
+/** A module id names its course by prefix; the ids are authored and stable.
+    Every built course needs a row here — a prefix with no entry falls through
+    to the default and the chapter's markdown is seeded onto the wrong course,
+    which is what happened when the `plans` course shipped without one. */
+const COURSE_BY_PREFIX: Record<string, string> = {
+  m: 'sql-analytics',
+  j: 'joins',
+  q: 'subqueries',
+  f: 'foundations',
+  p: 'plans',
+  s: 'sqlite-essentials',
+  r: 'sqlite-in-production',
+  x: 'postgres-to-sqlite',
+};
+
 export function courseForModule(moduleId: string): string {
-  if (moduleId.startsWith('j')) return 'joins';
-  if (moduleId.startsWith('q')) return 'subqueries';
-  if (moduleId.startsWith('f')) return 'foundations';
-  return 'sql-analytics';
+  return COURSE_BY_PREFIX[moduleId.slice(0, 1)] || 'sql-analytics';
 }
 
 /**

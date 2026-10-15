@@ -62,9 +62,12 @@ function evaluateFixture(fx) {
   return { passed: cmp.ok, codes: cmp.codes };
 }
 
+// perf-*.json is a different contract family (a PerfContract graded against a
+// PlanBundle); it is read by web/scripts/plan-conformance-audit.mjs and
+// backend/internal/perf, and it has no rows for this comparator to compare.
 const files = fs
   .readdirSync(fixturesDir)
-  .filter((name) => name.endsWith('.json'))
+  .filter((name) => name.endsWith('.json') && !name.startsWith('perf-'))
   .sort();
 
 if (files.length < 20) {

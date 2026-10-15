@@ -353,7 +353,7 @@ not change between dialects.
 
 **Files/areas.** `backend/internal/envdb/` (dialect backend), a
 `template_sqlite.go` beside `dataset/template.go`; ADR
-`docs/adr/0005-sqlite-learner-isolation.md` (new, records the measured spike and
+`docs/adr/0006-sqlite-learner-isolation.md` (new, records the measured spike and
 the D14 decision); `docs/technical-design.md` §15 D14 default → Decided.
 Nothing in `web/`.
 
@@ -376,7 +376,8 @@ step **settles D12** (currently *Undecided*).
    needs to). Record, measured: wasm bundle size, cold start, whether the engine
    persists to OPFS (and on which browsers), whether the host can terminate a
    statement mid-run, and the exact SQL surface for caps. Write the decision in
-   `docs/adr/0006-browser-sqlite-engine.md`, update §15 D12, and only then build.
+   `docs/adr/0007-browser-sqlite-engine.md` (0006 is the learner-isolation ADR),
+   update §15 D12, and only then build.
    If no candidate can be pre-empted, the adapter must report `hardTimeout:
    false` — the honest-reporting rule from `pglite.ts` applies unchanged.
 2. `web/src/api/sqlite.worker.ts` + `web/src/api/sqlite.ts`: the same lifecycle
@@ -407,7 +408,8 @@ step **settles D12** (currently *Undecided*).
 **Files/areas.** `web/src/api/sqlite.ts`, `sqlite.worker.ts`,
 `sqliteDataset.ts`, `sqliteProfile.ts` (new); `web/src/api/execution.ts`,
 `index.ts`, `web/src/types.ts` (dialect on capabilities/QueryResult);
-`web/package.json` (the chosen engine); `docs/adr/0006-…` (new). No backend
+`web/package.json` (the chosen engine); `docs/adr/0007-browser-sqlite-engine.md`
+(new). No backend
 files.
 
 **Verification.** `cd web && npx tsc --noEmit`; `npm run build` (the wasm asset
@@ -518,13 +520,13 @@ step 3; parity once per dialect → step 8; cgo-free, Docker-free → step 4.
 
 | # | Step | Track | State | Notes |
 | --- | --- | --- | --- | --- |
-| 1 | Dialect in the contracts | shared | todo | `dialect` on QueryResult/exercise/curriculum; `dialects` on `/capabilities`; `DIALECT_MISMATCH` added to the closed enum |
-| 2 | SQLite dataset + checked mapping | shared | todo | `schema.sqlite.sql`, `seed.sqlite.sql`, `mapping.json`; `make audit-dataset-map`; §7.1 edge cases on both dialects |
-| 3 | Dialect profile: errors + value encoding | shared | todo | `contracts/dialects/sqlite.json` read by both languages; one test per code per side; `docs/sqlite-dialect.md` |
-| 4 | Gateway SQLite adapter | backend | todo | `modernc.org/sqlite`, pure Go; reuses `engine.Execute` caps; `make check-cgo` |
-| 5 | Per-learner SQLite isolation (D14) | backend | todo | file-per-account, reset by copy, mapped onto ADR 0003; spike numbers in ADR 0005 |
-| 6 | Browser SQLite adapter (D12) | frontend | todo | wasm in a Worker; spike chooses the library; same caps, deadline kill, honest capabilities |
-| 7 | Dialect badge + actionable refusal | frontend | todo | badge from the chapter, truth from `capabilities()`, one-action switch, draft preserved |
+| 1 | Dialect in the contracts | shared | done | `dialect` on QueryResult/exercise/curriculum; `dialects` on `/capabilities`; `DIALECT_MISMATCH` in the closed enum; `web/src/lib/dialect.ts` is the only reader; `make audit-sqlite-errors` in `test` |
+| 2 | SQLite dataset + checked mapping | shared | done | `schema.sqlite.sql`, `seed.sqlite.sql`, `mapping.json` (22 rows, 5 named mismatches each with a reason); `make audit-dataset-map` green |
+| 3 | Dialect profile: errors + value encoding | shared | done | `contracts/dialects/sqlite.json` read by both languages (Go embeds a byte-identical mirror, the browser imports the contract itself); 30 ordered message rules, affinity, 28 capabilities; `docs/sqlite-dialect.md`. **Open defect**: the Go executor must strip the driver's `SQL logic error: … (N)` framing or the `equals`/`prefix` rules can never fire — measured, being fixed |
+| 4 | Gateway SQLite adapter | backend | done | `backend/internal/engine/sqlite.go` over `modernc.org/sqlite` (pure Go), 15 tests incl. a real 300 ms deadline stop; per-account files + a shared read-only `commerce.db`; optional `dialect` on `/query`/`/answers/evaluate`/`/explain`; `DIALECT_MISMATCH` names the served dialects; `make check-cgo` proves the binary stays cgo-free |
+| 5 | Per-learner SQLite isolation (D14) | backend | done | file-per-account, reset by re-copy; measured in ADR `0006` (copy-create ≈2 ms median vs PostgreSQL's 42–46 ms `CREATE DATABASE`; reset ≈2 ms vs 47–160 ms); D14 settled |
+| 6 | Browser SQLite adapter (D12) | frontend | wip | spike measured 4 candidates (`/tmp/sqlite-spike/RESULTS.json`); `web/src/api/sqliteDataset.ts` and `sqliteProfile.ts` (contract-read classifier, encoder, capabilities) have landed; the Worker + engine choice + ADR `0007` follow |
+| 7 | Dialect badge + actionable refusal | frontend | todo | badge from the chapter, truth from `capabilities()`, one-action switch, draft preserved; `dialectLabel`/`dialectSupported` already exist in `web/src/lib/dialect.ts` and nothing renders them yet |
 | 8 | Per-dialect parity audit | shared | todo | `make audit-parity` runs PostgreSQL and SQLite; `docs/adapter-parity.md` gains its SQLite section |
 | 9 | M6 release | shared | todo | `make verify` + all audits; tag only with the owner's go-ahead |
 

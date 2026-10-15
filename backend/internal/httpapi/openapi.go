@@ -98,8 +98,30 @@ const openAPISpec = `{
             "content": {"application/json": {"schema": {"$ref": "#/components/schemas/QueryResult"}}}
           },
           "400": {
-            "description": "Statement failed; the body is still a QueryResult whose error.code is a stable code (EMPTY_QUERY, QUERY_SYNTAX_ERROR, QUERY_RUNTIME_ERROR, QUERY_TIMEOUT, RESULT_LIMIT_EXCEEDED, ENVIRONMENT_UNAVAILABLE).",
+            "description": "Statement failed; the body is still a QueryResult whose error.code is a stable code (EMPTY_QUERY, QUERY_SYNTAX_ERROR, QUERY_RUNTIME_ERROR, QUERY_TIMEOUT, RESULT_LIMIT_EXCEEDED, ENVIRONMENT_UNAVAILABLE, DIALECT_MISMATCH).",
             "content": {"application/json": {"schema": {"$ref": "#/components/schemas/QueryResult"}}}
+          }
+        }
+      }
+    },
+    "/explain": {
+      "post": {
+        "operationId": "postExplain",
+        "tags": ["query"],
+        "summary": "Capture an EXPLAIN plan, optionally executing the statement with ANALYZE.",
+        "description": "The response is the PlanBundle described by contracts/plan.schema.json: 'summary' and 'environment' carry the deterministic, gradeable facts (node types, relations, indexes, the planner's own row estimates, engine version, row counts and planner settings) and 'plan' is the engine's own JSON plan, reported verbatim and never graded. 'timing_precision' names what the numbers beside it are worth. A graded assertion never reads a timing. EXPLAIN ANALYZE executes the statement, so it requires a signed-in learner's writable environment and is refused with ENVIRONMENT_UNAVAILABLE for an anonymous caller rather than silently downgraded to a plain EXPLAIN; with no database the route reports ENVIRONMENT_UNAVAILABLE and never invents a plan.",
+        "requestBody": {
+          "required": true,
+          "content": {"application/json": {"schema": {"$ref": "#/components/schemas/PlanRequest"}}}
+        },
+        "responses": {
+          "200": {
+            "description": "The plan was captured.",
+            "content": {"application/json": {"schema": {"$ref": "#/components/schemas/PlanBundle"}}}
+          },
+          "400": {
+            "description": "The plan could not be captured; the body is still a PlanBundle whose error.code is a stable code (EMPTY_QUERY, QUERY_SYNTAX_ERROR, QUERY_RUNTIME_ERROR, QUERY_TIMEOUT, RESULT_LIMIT_EXCEEDED, ENVIRONMENT_UNAVAILABLE, EVALUATION_ERROR).",
+            "content": {"application/json": {"schema": {"$ref": "#/components/schemas/PlanBundle"}}}
           }
         }
       }
@@ -148,14 +170,45 @@ const openAPISpec = `{
         "operationId": "postEnvironmentReset",
         "tags": ["environment"],
         "summary": "Restore the sealed dataset, discarding the learner's own changes.",
-        "description": "Drops the caller's environment database and copies the sealed template again. Destructive to the caller's own workspace only. Requires a signed-in account; an anonymous caller is refused with AUTH_REQUIRED.",
+        "description": "Drops the caller's environment database and copies the sealed template again. Destructive to the caller's own workspace only. Requires a signed-in account; an anonymous caller is refused with AUTH_REQUIRED. When the course parameter names a stored course, that course's own setup statements are applied to the restored workspace in order, so the learner's database is the one the course's exercises were verified against; setup_statements reports how many were applied. A course is resolved owner-scoped, and a course id that is not the caller's is refused with 404 NOT_FOUND so it cannot be probed for existence.",
+        "parameters": [
+          {
+            "name": "dataset",
+            "in": "query",
+            "required": false,
+            "schema": {"type": "string", "enum": ["commerce", "perf", ""]},
+            "description": "Which workspace to restore. Absent, \"\" and \"commerce\" all restore the caller's challenge workspace; \"perf\" restores the plan lab, which is a separate database so a re-indexed plan lesson cannot change the plan a challenge lesson is graded on. A name this gateway does not serve is refused with ENVIRONMENT_UNAVAILABLE naming the datasets it does."
+          },
+          {
+            "name": "course",
+            "in": "query",
+            "required": false,
+            "schema": {"type": "string"},
+            "description": "A stored course whose setup should be re-applied after the template is copied, so the learner's environment equals the one its exercises were verified in. Resolved owner-scoped; an id that is not the caller's, or does not exist, is refused with 404 NOT_FOUND and applies nothing. A course cannot be combined with the \"perf\" dataset: a course runs in its own workspace, so that request is refused with 400."
+          },
+          {
+            "name": "dialect",
+            "in": "query",
+            "required": false,
+            "schema": {"type": "string", "enum": ["postgresql", "sqlite"]},
+            "description": "Which engine's workspace to restore. Absent means postgresql, so a client that has never heard of the field keeps the behaviour it had. \"sqlite\" restores the learner's SQLite database file to the committed fixture; only a signed-in account has one. A dialect this gateway does not serve is refused with DIALECT_MISMATCH. The dialect matters because the two workspaces are different things — a database versus a file — so resetting one while the learner is looking at the other would report a restore that did not happen."
+          }
+        ],
         "responses": {
           "200": {
-            "description": "The workspace was restored; duration_ms is the measured end-to-end reset time in milliseconds.",
+            "description": "The workspace was restored; duration_ms is the measured end-to-end reset time in milliseconds and setup_statements is how many of the named course's setup statements were applied (0 when no course was named).",
             "content": {"application/json": {"schema": {"$ref": "#/components/schemas/EnvironmentResetResponse"}}}
+          },
+          "400": {
+            "description": "The request named a course together with the perf dataset, or a dataset this gateway does not serve.",
+            "content": {"application/json": {"schema": {"$ref": "#/components/schemas/ErrorEnvelope"}}}
           },
           "401": {
             "description": "No valid session (AUTH_REQUIRED).",
+            "content": {"application/json": {"schema": {"$ref": "#/components/schemas/ErrorEnvelope"}}}
+          },
+          "404": {
+            "description": "The request named a course that does not exist or is not the caller's; nothing was reset and nothing was applied.",
             "content": {"application/json": {"schema": {"$ref": "#/components/schemas/ErrorEnvelope"}}}
           },
           "503": {
@@ -286,15 +339,164 @@ const openAPISpec = `{
       "post": {
         "operationId": "postCourseGenerate",
         "tags": ["generation"],
-        "summary": "Request generation of a course from a title, exercise count and outline steps.",
+        "summary": "Generate a course, one chapter at a time, through the chapter agent.",
+        "description": "The model is an untrusted content generator; the gateway is the policy. The run asks for a small outline first, stores it as a 'building' course, and then holds one conversation in which the model hands in one chapter per save_chapter tool call. Each chapter is validated with the same gates a challenge is and run in the course's own scratch environment before it is appended to the stored plan, so GET /courses/{id} answers with the chapters that already verified while the rest are still being written. 'stages' reports what the pipeline did, and a course job's live progress is 'chapters_planned' / 'chapters_verified' / 'current_chapter'. 'status' is 'active' only for a course whose every stored exercise verified; a chapter the model cannot repair is dropped and reported; a run in which nothing verified is 'rejected' and stores nothing. Set 'require_approval' to have the run stop after the outline: the response status is then 'awaiting_approval', the stored 'building' course is the index to approve, and POST /courses/{id}/build continues it into the chapter phase. The pause is opt-in: without the flag the run is one request, outline into chapters. Requires a session. Answers 503 when AI is off or the gateway is at its concurrency limit, 400 for an invalid request. A generation takes minutes, so a client that cannot wait sends Prefer: respond-async (or async=1) and polls GET /generation/{id} instead of holding the request open; that path answers 202 with the job id.",
+        "parameters": [{"name": "Prefer", "in": "header", "required": false, "schema": {"type": "string"}, "description": "Send a Prefer header of 'respond-async' (or pass async=1) to get a 202 with a job id instead of waiting for the envelope. The blocking envelope is the default."}],
         "requestBody": {
           "required": true,
-          "content": {"application/json": {"schema": {"$ref": "#/components/schemas/CourseGenerateRequest"}}}
+          "content": {"application/json": {"schema": {"$ref": "#/components/schemas/AIGenerationRequest"}}}
         },
         "responses": {
+          "202": {
+            "description": "The run was accepted and continues in the background. Poll GET /generation/{id}.",
+            "content": {"application/json": {"schema": {"$ref": "#/components/schemas/AIJobSubmitted"}}}
+          },
           "201": {
-            "description": "Course draft created.",
-            "content": {"application/json": {"schema": {"$ref": "#/components/schemas/CourseGenerateResponse"}}}
+            "description": "A verified artifact was activated.",
+            "content": {"application/json": {"schema": {"$ref": "#/components/schemas/AIOutcome"}}}
+          },
+          "400": {
+            "description": "The request itself was invalid.",
+            "content": {"application/json": {"schema": {"$ref": "#/components/schemas/AIOutcome"}}}
+          },
+          "422": {
+            "description": "Generation ran and nothing was activated; the outcome names the stage that refused.",
+            "content": {"application/json": {"schema": {"$ref": "#/components/schemas/AIOutcome"}}}
+          },
+          "503": {
+            "description": "AI is off, the database cannot verify, or the gateway is at capacity.",
+            "content": {"application/json": {"schema": {"$ref": "#/components/schemas/AIOutcome"}}}
+          }
+        }
+      }
+    },
+    "/courses": {
+      "get": {
+        "operationId": "listCourses",
+        "tags": ["generation"],
+        "summary": "List the caller's stored generated courses, newest first.",
+        "description": "Only the session's own courses are returned; the depot is scoped on write, so the filter lives in the handler. With AI off the answer is 503 and 'courses' is an empty array, never an invented row.",
+        "responses": {
+          "200": {
+            "description": "Courses that survived activation, newest first.",
+            "content": {"application/json": {"schema": {"$ref": "#/components/schemas/AICourseList"}}}
+          },
+          "401": {
+            "description": "No session.",
+            "content": {"application/json": {"schema": {"$ref": "#/components/schemas/ErrorEnvelope"}}}
+          },
+          "503": {
+            "description": "AI is off; the body is an AICourseList with ok=false and an empty 'courses'.",
+            "content": {"application/json": {"schema": {"$ref": "#/components/schemas/AICourseList"}}}
+          }
+        }
+      }
+    },
+    "/courses/{id}": {
+      "get": {
+        "operationId": "getCourse",
+        "tags": ["generation"],
+        "summary": "Read one stored course with the evidence that admitted it.",
+        "description": "A course that belongs to another learner is reported as 404, never 403, so its existence cannot be confirmed.",
+        "parameters": [{"name": "id", "in": "path", "required": true, "schema": {"type": "string"}}],
+        "responses": {
+          "200": {
+            "description": "The stored record.",
+            "content": {"application/json": {"schema": {"$ref": "#/components/schemas/AICourseResponse"}}}
+          },
+          "404": {
+            "description": "No such course, or it belongs to another learner.",
+            "content": {"application/json": {"schema": {"$ref": "#/components/schemas/ErrorEnvelope"}}}
+          },
+          "503": {
+            "description": "AI is off.",
+            "content": {"application/json": {"schema": {"$ref": "#/components/schemas/ErrorEnvelope"}}}
+          }
+        }
+      },
+      "delete": {
+        "operationId": "deleteCourse",
+        "tags": ["generation"],
+        "summary": "Forget a generated course.",
+        "description": "Removes the generated plan only. Learner attempts and progress are the learner's data and are not touched. A course that belongs to another learner is reported as 404, never 403.",
+        "parameters": [{"name": "id", "in": "path", "required": true, "schema": {"type": "string"}}],
+        "responses": {
+          "200": {
+            "description": "Removed.",
+            "content": {"application/json": {"schema": {"$ref": "#/components/schemas/OkResponse"}}}
+          },
+          "404": {
+            "description": "No such course, or it belongs to another learner.",
+            "content": {"application/json": {"schema": {"$ref": "#/components/schemas/ErrorEnvelope"}}}
+          },
+          "503": {
+            "description": "AI is off.",
+            "content": {"application/json": {"schema": {"$ref": "#/components/schemas/ErrorEnvelope"}}}
+          }
+        }
+      }
+    },
+    "/courses/{id}/build": {
+      "post": {
+        "operationId": "postCourseBuild",
+        "tags": ["generation"],
+        "summary": "Approve a paused course and build its chapters.",
+        "description": "Continues a course that stopped at 'awaiting_approval': the stored outline is reloaded, the chapter conversation is rebuilt from the request stored beside it, and the chapter phase runs to completion, activating the course exactly as a default run would. A chapter that already verified is not re-written. The route is owner-scoped: a course that belongs to another learner is reported as 404, never 403. A course that is not still being built is refused with 409, because re-running a finished course is not what this route is for. A continuation takes minutes, so it accepts the same Prefer: respond-async (or async=1) ask as /courses/generate and answers 202 with the job id; the blocking envelope is the default.",
+        "parameters": [
+          {"name": "id", "in": "path", "required": true, "schema": {"type": "string"}},
+          {"name": "Prefer", "in": "header", "required": false, "schema": {"type": "string"}, "description": "Send a Prefer header of 'respond-async' (or pass async=1) to get a 202 with a job id instead of waiting for the envelope."}
+        ],
+        "responses": {
+          "202": {
+            "description": "The continuation was accepted and runs in the background. Poll GET /generation/{id}.",
+            "content": {"application/json": {"schema": {"$ref": "#/components/schemas/AIJobSubmitted"}}}
+          },
+          "201": {
+            "description": "The course was built and activated, exactly as a default run would.",
+            "content": {"application/json": {"schema": {"$ref": "#/components/schemas/AIOutcome"}}}
+          },
+          "404": {
+            "description": "No such course, or it belongs to another learner.",
+            "content": {"application/json": {"schema": {"$ref": "#/components/schemas/ErrorEnvelope"}}}
+          },
+          "409": {
+            "description": "The course is not awaiting approval: only a course that is still being built can be continued.",
+            "content": {"application/json": {"schema": {"$ref": "#/components/schemas/ErrorEnvelope"}}}
+          },
+          "422": {
+            "description": "The continuation ran and nothing was activated; the outcome names the stage that refused.",
+            "content": {"application/json": {"schema": {"$ref": "#/components/schemas/AIOutcome"}}}
+          },
+          "503": {
+            "description": "AI is off, the database cannot verify, or the gateway is at capacity.",
+            "content": {"application/json": {"schema": {"$ref": "#/components/schemas/AIOutcome"}}}
+          }
+        }
+      }
+    },
+    "/generation/{id}": {
+      "get": {
+        "operationId": "getGenerationJob",
+        "tags": ["generation"],
+        "summary": "Poll a generation that was submitted with Prefer: respond-async.",
+        "description": "The body is the job's own view: a live copy of the pipeline's stages while the run is going, and the pipeline's final report once it is over. A course job also carries its chapter progress ('chapters_planned', 'chapters_verified', 'current_chapter') and 'chapters', the per-chapter report in course order. A job that belongs to another learner is reported as 404, never 403, so an id cannot be probed for existence. The stored record, not the job, is the durable thing: a course job names its course_id as soon as the outline is stored — that course reads as 'building' from GET /courses/{id} and carries the chapters that already verified — and a challenge job names its challenge_id once the challenge was stored. A refused run names neither, because it stored nothing.",
+        "parameters": [{"name": "id", "in": "path", "required": true, "schema": {"type": "string"}}],
+        "responses": {
+          "200": {
+            "description": "The job view, whatever state the run is in.",
+            "content": {"application/json": {"schema": {"$ref": "#/components/schemas/AIJobResponse"}}}
+          },
+          "401": {
+            "description": "No session.",
+            "content": {"application/json": {"schema": {"$ref": "#/components/schemas/ErrorEnvelope"}}}
+          },
+          "404": {
+            "description": "No such job, or it belongs to another learner.",
+            "content": {"application/json": {"schema": {"$ref": "#/components/schemas/ErrorEnvelope"}}}
+          },
+          "503": {
+            "description": "AI is off; the body is an AIJobResponse with ok=false and job=null.",
+            "content": {"application/json": {"schema": {"$ref": "#/components/schemas/AIJobResponse"}}}
           }
         }
       }
@@ -303,15 +505,230 @@ const openAPISpec = `{
       "post": {
         "operationId": "postChallengeGenerate",
         "tags": ["generation"],
-        "summary": "Request generation of a standalone challenge.",
+        "summary": "Generate one challenge through the 11.1 pipeline.",
+        "description": "Same contract and same statuses as /courses/generate.",
+        "parameters": [{"name": "Prefer", "in": "header", "required": false, "schema": {"type": "string"}, "description": "Send a Prefer header of 'respond-async' (or pass async=1) to get a 202 with a job id instead of waiting for the envelope. The blocking envelope is the default."}],
         "requestBody": {
           "required": true,
-          "content": {"application/json": {"schema": {"$ref": "#/components/schemas/ChallengeGenerateRequest"}}}
+          "content": {"application/json": {"schema": {"$ref": "#/components/schemas/AIGenerationRequest"}}}
         },
         "responses": {
+          "202": {
+            "description": "The run was accepted and continues in the background. Poll GET /generation/{id}.",
+            "content": {"application/json": {"schema": {"$ref": "#/components/schemas/AIJobSubmitted"}}}
+          },
           "201": {
-            "description": "Challenge draft created.",
+            "description": "A verified artifact was activated.",
+            "content": {"application/json": {"schema": {"$ref": "#/components/schemas/AIOutcome"}}}
+          },
+          "400": {
+            "description": "The request itself was invalid.",
+            "content": {"application/json": {"schema": {"$ref": "#/components/schemas/AIOutcome"}}}
+          },
+          "422": {
+            "description": "Generation ran and nothing was activated.",
+            "content": {"application/json": {"schema": {"$ref": "#/components/schemas/AIOutcome"}}}
+          },
+          "503": {
+            "description": "AI is off, the database cannot verify, or the gateway is at capacity.",
+            "content": {"application/json": {"schema": {"$ref": "#/components/schemas/AIOutcome"}}}
+          }
+        }
+      }
+    },
+    "/challenges": {
+      "get": {
+        "operationId": "listChallenges",
+        "tags": ["generation"],
+        "summary": "List stored generated challenges, newest first.",
+        "responses": {
+          "200": {
+            "description": "Challenges that survived activation.",
+            "content": {"application/json": {"schema": {"$ref": "#/components/schemas/AIChallengeList"}}}
+          },
+          "401": {
+            "description": "No session.",
+            "content": {"application/json": {"schema": {"$ref": "#/components/schemas/ErrorEnvelope"}}}
+          }
+        }
+      }
+    },
+    "/challenges/{id}": {
+      "get": {
+        "operationId": "getChallenge",
+        "tags": ["generation"],
+        "summary": "Read one stored challenge with the evidence that admitted it.",
+        "parameters": [{"name": "id", "in": "path", "required": true, "schema": {"type": "string"}}],
+        "responses": {
+          "200": {
+            "description": "The stored record.",
+            "content": {"application/json": {"schema": {"$ref": "#/components/schemas/AIRecord"}}}
+          },
+          "404": {
+            "description": "No such challenge.",
+            "content": {"application/json": {"schema": {"$ref": "#/components/schemas/ErrorEnvelope"}}}
+          }
+        }
+      }
+    },
+    "/challenges/{id}/reset": {
+      "post": {
+        "operationId": "resetChallenge",
+        "tags": ["generation"],
+        "summary": "Forget a generated challenge.",
+        "description": "Removes the generated definition only. Learner attempts are the learner's data and are not touched.",
+        "parameters": [{"name": "id", "in": "path", "required": true, "schema": {"type": "string"}}],
+        "responses": {
+          "200": {
+            "description": "Removed.",
             "content": {"application/json": {"schema": {"$ref": "#/components/schemas/OkResponse"}}}
+          },
+          "404": {
+            "description": "No such challenge.",
+            "content": {"application/json": {"schema": {"$ref": "#/components/schemas/ErrorEnvelope"}}}
+          }
+        }
+      }
+    },
+    "/challenges/{id}/critique": {
+      "post": {
+        "operationId": "postCritique",
+        "tags": ["generation"],
+        "summary": "Review the learner's own query on demand.",
+        "description": "The critique never contains the reference solution.",
+        "parameters": [{"name": "id", "in": "path", "required": true, "schema": {"type": "string"}}],
+        "requestBody": {
+          "required": true,
+          "content": {"application/json": {"schema": {"$ref": "#/components/schemas/AICritiqueRequest"}}}
+        },
+        "responses": {
+          "200": {
+            "description": "A critique.",
+            "content": {"application/json": {"schema": {"$ref": "#/components/schemas/AICritiqueResponse"}}}
+          },
+          "503": {
+            "description": "AI is off.",
+            "content": {"application/json": {"schema": {"$ref": "#/components/schemas/ErrorEnvelope"}}}
+          }
+        }
+      }
+    },
+    "/challenges/{id}/report": {
+      "post": {
+        "operationId": "reportDefect",
+        "tags": ["generation"],
+        "summary": "Report a defect in a challenge.",
+        "description": "The claimed defect is reproduced by execution before any patch is proposed, and 'applied' stays false until the learner approves the patch.",
+        "parameters": [{"name": "id", "in": "path", "required": true, "schema": {"type": "string"}}],
+        "requestBody": {
+          "required": true,
+          "content": {"application/json": {"schema": {"$ref": "#/components/schemas/AIDefectReport"}}}
+        },
+        "responses": {
+          "200": {
+            "description": "A verdict, with evidence for either outcome.",
+            "content": {"application/json": {"schema": {"$ref": "#/components/schemas/AIDefectVerdict"}}}
+          }
+        }
+      }
+    },
+    "/challenges/{id}/patches/{patchID}": {
+      "post": {
+        "operationId": "decidePatch",
+        "tags": ["generation"],
+        "summary": "Approve or reject a proposed patch.",
+        "description": "The approver is taken from the session, never from the body. An unapproved patch is refused with 409.",
+        "parameters": [
+          {"name": "id", "in": "path", "required": true, "schema": {"type": "string"}},
+          {"name": "patchID", "in": "path", "required": true, "schema": {"type": "string"}}
+        ],
+        "requestBody": {
+          "required": true,
+          "content": {"application/json": {"schema": {"$ref": "#/components/schemas/AIPatchDecision"}}}
+        },
+        "responses": {
+          "200": {
+            "description": "The decision was applied.",
+            "content": {"application/json": {"schema": {"$ref": "#/components/schemas/AIPatchResult"}}}
+          },
+          "409": {
+            "description": "The patch was not approved.",
+            "content": {"application/json": {"schema": {"$ref": "#/components/schemas/ErrorEnvelope"}}}
+          }
+        }
+      }
+    },
+    "/tutor": {
+      "post": {
+        "operationId": "postTutor",
+        "tags": ["generation"],
+        "summary": "Ask for a hint about the learner's own query.",
+        "description": "Tutoring sees the learner's SQL, its real error or result summary, the objective and the hint level. It never sees the reference solution.",
+        "requestBody": {
+          "required": true,
+          "content": {"application/json": {"schema": {"$ref": "#/components/schemas/AITutorRequest"}}}
+        },
+        "responses": {
+          "200": {
+            "description": "A hint.",
+            "content": {"application/json": {"schema": {"$ref": "#/components/schemas/AITutorResponse"}}}
+          },
+          "503": {
+            "description": "AI is off.",
+            "content": {"application/json": {"schema": {"$ref": "#/components/schemas/ErrorEnvelope"}}}
+          }
+        }
+      }
+    },
+    "/runs": {
+      "get": {
+        "operationId": "listRuns",
+        "tags": ["generation"],
+        "summary": "List the caller's generation runs, newest first.",
+        "description": "Each generation run leaves a transcript: every provider message, tool call and tool result, in order, attributed to the run, the kind (challenge or course), the owner and the terminal outcome. The transcript is redacted before it is stored (a credential never reaches it) and bounded (a runaway run cannot bloat the database), so a stored run is a prefix of the conversation when the bound was hit — 'truncated' says so. This route returns summaries, newest first, capped at 100; another learner's runs are never listed.",
+        "security": [{"bearerAuth": []}],
+        "responses": {
+          "200": {
+            "description": "The caller's runs.",
+            "content": {"application/json": {"schema": {"$ref": "#/components/schemas/RunList"}}}
+          },
+          "401": {
+            "description": "No valid session (AUTH_REQUIRED).",
+            "content": {"application/json": {"schema": {"$ref": "#/components/schemas/ErrorEnvelope"}}}
+          },
+          "503": {
+            "description": "No generation service (and so no transcript store) is configured.",
+            "content": {"application/json": {"schema": {"$ref": "#/components/schemas/RunList"}}}
+          }
+        }
+      }
+    },
+    "/runs/{id}": {
+      "get": {
+        "operationId": "getRun",
+        "tags": ["generation"],
+        "summary": "Read one generation run's transcript.",
+        "description": "The whole stored conversation for one run: every message, tool call and tool result in order, with the run's kind, owner, status and error. The owner is the session's account and is not carried in the body. A run belonging to another account is reported 404, never 403, so an id cannot be probed for existence.",
+        "security": [{"bearerAuth": []}],
+        "parameters": [
+          {"name": "id", "in": "path", "required": true, "schema": {"type": "string"}, "description": "The run id: a job id from POST /courses/generate?async=1 or POST /challenges/generate?async=1, or the id minted for a blocking run."}
+        ],
+        "responses": {
+          "200": {
+            "description": "The run's transcript.",
+            "content": {"application/json": {"schema": {"$ref": "#/components/schemas/RunTranscript"}}}
+          },
+          "401": {
+            "description": "No valid session (AUTH_REQUIRED).",
+            "content": {"application/json": {"schema": {"$ref": "#/components/schemas/ErrorEnvelope"}}}
+          },
+          "404": {
+            "description": "No such run, or it belongs to another account.",
+            "content": {"application/json": {"schema": {"$ref": "#/components/schemas/ErrorEnvelope"}}}
+          },
+          "503": {
+            "description": "No generation service (and so no transcript store) is configured.",
+            "content": {"application/json": {"schema": {"$ref": "#/components/schemas/ErrorEnvelope"}}}
           }
         }
       }
@@ -504,6 +921,7 @@ const openAPISpec = `{
               "QUERY_TIMEOUT",
               "RESULT_LIMIT_EXCEEDED",
               "ENVIRONMENT_UNAVAILABLE",
+              "DIALECT_MISMATCH",
               "PERSISTENCE_FAILED",
               "EVALUATION_ERROR"
             ]
@@ -515,7 +933,7 @@ const openAPISpec = `{
       "QueryResult": {
         "type": "object",
         "description": "Matches contracts/query-result.schema.json exactly.",
-        "required": ["status", "columns", "rows", "row_count", "truncated", "duration_ms", "error", "engine"],
+        "required": ["status", "columns", "rows", "row_count", "truncated", "duration_ms", "error", "engine", "dialect"],
         "properties": {
           "status": {"type": "string", "enum": ["succeeded", "failed"]},
           "columns": {"type": "array", "items": {"$ref": "#/components/schemas/Column"}},
@@ -525,7 +943,12 @@ const openAPISpec = `{
           "duration_ms": {"type": "number"},
           "error": {"oneOf": [{"$ref": "#/components/schemas/QueryError"}, {"type": "null"}]},
           "request_id": {"type": ["string", "null"]},
-          "engine": {"type": "string"}
+          "engine": {"type": "string"},
+          "dialect": {
+            "type": "string",
+            "enum": ["postgresql", "sqlite"],
+            "description": "The machine-readable dialect of the engine that produced this result. A chapter declares one dialect; a result from the other is refused with DIALECT_MISMATCH rather than graded."
+          }
         }
       },
       "Limits": {
@@ -542,6 +965,8 @@ const openAPISpec = `{
         "required": ["sql"],
         "properties": {
           "sql": {"type": "string"},
+          "dialect": {"type": "string", "enum": ["postgresql", "sqlite"], "description": "The dialect to run the statement on. Absent means postgresql, the default dialect (ADR 0004), so an existing client is unchanged. A dialect this gateway does not serve is refused with DIALECT_MISMATCH naming the dialects it does serve."},
+          "dataset": {"type": "string", "description": "The fixture to run against: commerce (the shared read-only dataset, or the caller's own workspace when signed in) or perf (the larger plan fixture, always in the caller's own writable environment, so a CREATE INDEX cannot touch the challenge workspace). Absent, \"\", and \"commerce\" all mean commerce. A request that carries exercise.perf and names no dataset also routes to perf. The perf dataset is a PostgreSQL lab, so it is refused with DIALECT_MISMATCH for another dialect; an unknown dataset is refused with ENVIRONMENT_UNAVAILABLE naming the datasets this gateway serves."},
           "limits": {"$ref": "#/components/schemas/Limits"}
         }
       },
@@ -559,7 +984,8 @@ const openAPISpec = `{
             "properties": {
               "dataset": {"type": "string"},
               "schema_version": {"type": "integer"},
-              "seed_version": {"type": "integer"}
+              "seed_version": {"type": "integer"},
+              "dialect": {"type": "string", "enum": ["postgresql", "sqlite"], "description": "The dialect this exercise's contract was written for."}
             }
           },
           "result_contract": {"$ref": "#/components/schemas/ResultContract"},
@@ -596,6 +1022,8 @@ const openAPISpec = `{
         "required": ["sql", "exercise"],
         "properties": {
           "sql": {"type": "string"},
+          "dialect": {"type": "string", "enum": ["postgresql", "sqlite"], "description": "The dialect to run and grade the answer on. Absent means postgresql. Grading a SQLite answer against a PostgreSQL contract (or the reverse) is refused with DIALECT_MISMATCH rather than silently graded."},
+          "dataset": {"type": "string", "description": "The fixture the answer is graded against: commerce (the shared read-only dataset, or the caller's own workspace when signed in) or perf (the larger plan fixture, always in the caller's own writable environment). Absent, \"\", and \"commerce\" all mean commerce; exercise.perf with no dataset also routes to perf. This is what a plans-course exercise needs: its authored result was written against perf rows, so grading it on commerce would compare the answer to the wrong table."},
           "limits": {"$ref": "#/components/schemas/Limits"},
           "exercise": {"$ref": "#/components/schemas/Exercise"}
         }
@@ -646,10 +1074,11 @@ const openAPISpec = `{
       },
       "EnvironmentResetResponse": {
         "type": "object",
-        "required": ["ok", "duration_ms", "environment"],
+        "required": ["ok", "duration_ms", "setup_statements", "environment"],
         "properties": {
           "ok": {"type": "boolean"},
           "duration_ms": {"type": "number", "description": "Measured end-to-end reset time in milliseconds."},
+          "setup_statements": {"type": "integer", "description": "How many of the named course's setup statements were applied. 0 when the request named no course; the reset fails instead of reporting a partial application."},
           "environment": {"$ref": "#/components/schemas/Environment"}
         }
       },
@@ -657,8 +1086,10 @@ const openAPISpec = `{
         "type": "object",
         "properties": {
           "status": {"type": "string"},
-          "engine": {"type": "string"},
-          "version": {"type": "string"}
+          "engine": {"type": "string", "description": "The dialect of the executor that answers /query with no dialect field: the default dialect."},
+          "version": {"type": "string"},
+          "dialects": {"type": "array", "items": {"type": "string", "enum": ["postgresql", "sqlite"]}, "description": "Every dialect this gateway can route a statement to, in stable order. A probe reads this rather than assuming one engine."},
+          "admin_password_empty": {"type": "boolean", "description": "True only when the seeded default administrator can be signed in with an empty password (a loopback-only local-development install). The sign-in screen shows its local-admin hint for this boolean and no other reason. It is a boolean, never a password or a hash."}
         }
       },
       "CapabilitiesResponse": {
@@ -667,7 +1098,498 @@ const openAPISpec = `{
           "hard_timeout": {"type": "boolean"},
           "explain": {"type": "boolean"},
           "max_concurrent": {"type": "integer"},
-          "isolation": {"type": "string"}
+          "isolation": {"type": "string"},
+          "dialects": {
+            "type": "array",
+            "items": {"type": "string", "enum": ["postgresql", "sqlite"]},
+            "description": "The dialects this gateway can run, in stable order. PostgreSQL is always present and is the default. A client disables a chapter whose dialect is missing from this list and names the one action that fixes it."
+          },
+          "writable": {
+            "type": "boolean",
+            "description": "Whether this gateway can give a signed-in learner a writable workspace: a per-account PostgreSQL environment (ADR 0003) or a per-account SQLite file. It says nothing about the caller: a client combines it with whether it holds a session to decide if EXPLAIN ANALYZE and DDL are available."
+          },
+          "ai": {"$ref": "#/components/schemas/AIAvailability"},
+          "plan": {"$ref": "#/components/schemas/PlanCapability"}
+        }
+      },
+      "PlanCapability": {
+        "type": "object",
+        "description": "What the M5 plan lab offers, so a client can hide the Explain button instead of probing for a failure. 'available' is false when the gateway has no database; 'analyze_requires_auth' is true because EXPLAIN ANALYZE executes the statement (ADR 0003).",
+        "properties": {
+          "available": {"type": "boolean"},
+          "reason": {"type": "string"},
+          "datasets": {"type": "array", "items": {"type": "string"}},
+          "analyze_requires_auth": {"type": "boolean"},
+          "timing_precision": {"type": "array", "items": {"type": "string"}},
+          "node_cap": {"type": "integer"},
+          "seq_scan_large_rows": {"type": "number"}
+        }
+      },
+      "PlanRequest": {
+        "type": "object",
+        "description": "The POST /explain body. 'exercise.perf' is the PerfContract from contracts/perf-contract.schema.json; the gateway reads its 'engine' to refuse a chapter authored for another dialect, and the plan is graded against the rest of it in the browser and in backend/internal/perf.",
+        "required": ["sql"],
+        "properties": {
+          "sql": {"type": "string"},
+          "analyze": {"type": "boolean", "description": "False (the default) only plans. True runs EXPLAIN ANALYZE and requires a writable environment."},
+          "dialect": {"type": "string", "enum": ["postgresql", "sqlite"], "description": "The dialect the plan is for. Absent means postgresql. The plan lab captures PostgreSQL plans only (ADR 0004: SQLite has no EXPLAIN ANALYZE), so another dialect is refused with EVALUATION_ERROR and a sentence naming PostgreSQL."},
+          "dataset": {"type": "string", "description": "commerce (the shared read-only dataset, or the caller's own workspace when signed in) or perf (the larger plan fixture, always in the caller's own environment). Absent, \"\", and \"commerce\" all mean commerce; exercise.perf with no dataset also routes to perf."},
+          "exercise": {
+            "type": "object",
+            "properties": {
+              "perf": {"type": "object", "description": "A PerfContract (contracts/perf-contract.schema.json)."}
+            }
+          },
+          "limits": {"$ref": "#/components/schemas/Limits"}
+        }
+      },
+      "PlanBundle": {
+        "type": "object",
+        "description": "The plan result described by contracts/plan.schema.json, the single source of truth for this shape; the summary below names the fields a client keys off rather than restating the contract.",
+        "required": ["status", "analyze", "timing_precision", "engine", "plan", "summary", "environment", "warnings", "duration_ms", "error"],
+        "properties": {
+          "status": {"enum": ["succeeded", "failed"]},
+          "analyze": {"type": "boolean"},
+          "timing_precision": {"enum": ["analyze", "estimate", "none"]},
+          "engine": {"type": "string"},
+          "plan": {"type": ["object", "null"]},
+          "summary": {"type": "object"},
+          "environment": {"type": "object"},
+          "warnings": {"type": "array", "items": {"type": "object"}},
+          "duration_ms": {"type": "number"},
+          "statement": {"type": ["string", "null"]},
+          "request_id": {"type": ["string", "null"]},
+          "error": {"type": ["object", "null"]}
+        }
+      },
+      "AIAvailability": {
+        "type": "object",
+        "description": "Whether the AI lab can run, and why not when it cannot. Clients hide the lab when 'available' is false and show 'reason' instead.",
+        "properties": {
+          "configured": {"type": "boolean"},
+          "available": {"type": "boolean"},
+          "provider": {"type": "string"},
+          "model": {"type": "string"},
+          "deterministic": {"type": "boolean"},
+          "reason": {"type": "string"},
+          "timeout_ms": {"type": "integer", "minimum": 1}
+        }
+      },
+      "AIError": {
+        "type": "object",
+        "properties": {
+          "code": {"type": "string"},
+          "stage": {"type": "string"},
+          "message": {"type": "string"},
+          "detail": {"type": "string"}
+        }
+      },
+      "AIGenerationRequest": {
+        "type": "object",
+        "properties": {
+          "kind": {"enum": ["challenge", "course"]},
+          "title": {"type": "string"},
+          "topics": {"type": "array", "items": {"type": "string"}},
+          "difficulty": {"enum": ["beginner", "intermediate", "advanced"]},
+          "scenario": {"type": "string"},
+          "constraints": {"type": "array", "items": {"type": "string"}},
+          "exercise_count": {"type": "integer"},
+          "steps": {"type": "array", "items": {"type": "string"}},
+          "require_approval": {"type": "boolean", "description": "Course only. When true the run stops after the outline is validated and stored: the response status is 'awaiting_approval' and POST /courses/{id}/build continues it. Off (and absent) by default, which is a single request that runs outline into chapters."}
+        }
+      },
+      "AIStage": {
+        "type": "object",
+        "properties": {
+          "name": {"type": "string"},
+          "state": {"enum": ["done", "failed", "skipped"]},
+          "detail": {"type": "string"},
+          "ms": {"type": "number"}
+        }
+      },
+      "AIAttempt": {
+        "type": "object",
+        "properties": {"number": {"type": "integer"}, "stage": {"type": "string"}, "detail": {"type": "string"}}
+      },
+      "AIEvidence": {
+        "type": "object",
+        "description": "Measured facts from the run. Zero means the check did not run or found nothing.",
+        "properties": {
+          "reference_rows": {"type": "integer"},
+          "cross_check_rows": {"type": "integer"},
+          "fixtures_rejected": {"type": "integer"},
+          "fixtures_total": {"type": "integer"},
+          "repairs": {"type": "integer"},
+          "scratch_database": {"type": "string"}
+        }
+      },
+      "AIResultContract": {
+        "type": "object",
+        "properties": {
+          "columns": {"type": "array", "items": {"type": "string"}},
+          "column_order": {"enum": ["exact", "ignored"]},
+          "row_order": {"enum": ["exact", "ignored"]},
+          "duplicates": {"enum": ["preserved", "ignored"]},
+          "numeric_tolerance": {"type": "number"}
+        }
+      },
+      "AISetupPlan": {
+        "type": "object",
+        "properties": {
+          "dataset": {"type": "string"},
+          "schema_version": {"type": "integer"},
+          "seed_version": {"type": "integer"},
+          "statements": {"type": "array", "items": {"type": "string"}}
+        }
+      },
+      "AIProvenance": {
+        "type": "object",
+        "properties": {
+          "provider": {"type": "string"},
+          "model": {"type": "string"},
+          "provider_version": {"type": "string"},
+          "pipeline_version": {"type": "string"},
+          "evaluator_version": {"type": "string"},
+          "dataset_version": {"type": "integer"},
+          "created_at": {"type": "string"},
+          "repairs": {"type": "integer"}
+        }
+      },
+      "AIArtifact": {
+        "type": "object",
+        "description": "A challenge the service has verified. Only ever written to the active set after every pipeline stage passed.",
+        "properties": {
+          "id": {"type": "string"},
+          "version": {"type": "integer"},
+          "lesson_id": {"type": "string"},
+          "dialect": {"enum": ["postgresql"]},
+          "type": {"type": "string"},
+          "title": {"type": "string"},
+          "prompt": {"type": "string"},
+          "difficulty": {"enum": ["beginner", "intermediate", "advanced"]},
+          "objectives": {"type": "array", "items": {"type": "string"}},
+          "hints": {"type": "array", "items": {"type": "string"}},
+          "setup": {"$ref": "#/components/schemas/AISetupPlan"},
+          "reference_solution": {"type": "string"},
+          "cross_check_solution": {"type": "string"},
+          "result_contract": {"$ref": "#/components/schemas/AIResultContract"},
+          "checks": {"type": "array", "items": {"type": "object"}},
+          "provenance": {"$ref": "#/components/schemas/AIProvenance"}
+        }
+      },
+      "AIOutcome": {
+        "type": "object",
+        "description": "The generation envelope. 'active' is the only status that makes an artifact visible to learners. 'awaiting_approval' is a course run that stopped after storing its outline, waiting for POST /courses/{id}/build.",
+        "properties": {
+          "status": {"enum": ["active", "rejected", "unavailable", "failed", "awaiting_approval"]},
+          "kind": {"enum": ["challenge", "course"]},
+          "artifact": {"type": ["object", "null"]},
+          "plan": {"oneOf": [{"type": "null"}, {"$ref": "#/components/schemas/AICoursePlan"}], "description": "Set for an active course, and for one that stopped at awaiting_approval (the outline being approved). A rejected one returns the chapter report instead of a plan, because nothing that did not verify may be presented as something a learner can start."},
+          "chapters": {"type": "array", "items": {"type": "object"}, "description": "What verification measured for a course's exercises, reported for a rejection as well as an activation."},
+          "stages": {"type": "array", "items": {"$ref": "#/components/schemas/AIStage"}},
+          "attempts": {"type": "array", "items": {"$ref": "#/components/schemas/AIAttempt"}},
+          "evidence": {"$ref": "#/components/schemas/AIEvidence"},
+          "error": {"type": ["object", "null"]}
+        }
+      },
+      "RunEntry": {
+        "type": "object",
+        "description": "One ordered fact from a run. 'kind' names what it is: a provider message the model saw or produced, a function call the model asked for, the tool result the gateway answered it with, or a transport/policy error. 'truncated' and 'redacted' are honest flags: content the entry clipped to fit, or a credential a scrub removed.",
+        "required": ["seq", "kind", "at"],
+        "properties": {
+          "seq": {"type": "integer", "minimum": 0, "description": "Position in the run, starting at 0."},
+          "kind": {"enum": ["message", "tool_call", "tool_result", "error"]},
+          "role": {"enum": ["system", "user", "assistant", "tool"], "description": "Set for a message."},
+          "content": {"type": "string"},
+          "tool_call_id": {"type": "string"},
+          "tool_name": {"type": "string"},
+          "at": {"type": "string", "format": "date-time"},
+          "ms": {"type": "number", "minimum": 0, "description": "The provider latency for the turn this entry belongs to."},
+          "truncated": {"type": "boolean"},
+          "redacted": {"type": "boolean"}
+        }
+      },
+      "RunSummary": {
+        "type": "object",
+        "description": "A run without its entries. 'entry_count' is how many entries the run produced; a stored transcript is a prefix when 'truncated' is true.",
+        "required": ["id", "kind", "status", "entry_count", "started_at", "finished_at"],
+        "properties": {
+          "id": {"type": "string"},
+          "kind": {"enum": ["challenge", "course"]},
+          "owner_id": {"type": "string"},
+          "status": {"enum": ["active", "rejected", "failed", "unavailable"]},
+          "entry_count": {"type": "integer", "minimum": 0},
+          "bytes": {"type": "integer", "minimum": 0},
+          "truncated": {"type": "boolean"},
+          "error": {"oneOf": [{"type": "null"}, {"$ref": "#/components/schemas/AIError"}]},
+          "started_at": {"type": "string", "format": "date-time"},
+          "finished_at": {"type": "string", "format": "date-time"}
+        }
+      },
+      "RunTranscript": {
+        "type": "object",
+        "description": "One generation run's stored conversation, attributed to the run, its kind, its owner, when it ran and how it ended. The owner is the session's own account and does not travel in the body.",
+        "required": ["id", "kind", "status", "entries", "entry_count", "started_at", "finished_at"],
+        "properties": {
+          "id": {"type": "string"},
+          "kind": {"enum": ["challenge", "course"]},
+          "owner_id": {"type": "string"},
+          "status": {"enum": ["active", "rejected", "failed", "unavailable"]},
+          "entries": {"type": "array", "items": {"$ref": "#/components/schemas/RunEntry"}},
+          "entry_count": {"type": "integer", "minimum": 0},
+          "bytes": {"type": "integer", "minimum": 0},
+          "truncated": {"type": "boolean"},
+          "error": {"oneOf": [{"type": "null"}, {"$ref": "#/components/schemas/AIError"}]},
+          "started_at": {"type": "string", "format": "date-time"},
+          "finished_at": {"type": "string", "format": "date-time"}
+        }
+      },
+      "RunList": {
+        "type": "object",
+        "properties": {
+          "ok": {"type": "boolean"},
+          "runs": {"type": "array", "items": {"$ref": "#/components/schemas/RunSummary"}},
+          "error": {"$ref": "#/components/schemas/AIError"}
+        }
+      },
+      "RunResponse": {
+        "type": "object",
+        "properties": {
+          "ok": {"type": "boolean"},
+          "run": {"$ref": "#/components/schemas/RunTranscript"}
+        }
+      },
+      "AIRecord": {
+        "type": "object",
+        "properties": {
+          "artifact": {"$ref": "#/components/schemas/AIArtifact"},
+          "outcome": {"$ref": "#/components/schemas/AIOutcome"},
+          "status": {"enum": ["active", "rejected"]},
+          "owner_id": {"type": "string"},
+          "created_at": {"type": "string"}
+        }
+      },
+      "AIChallengeList": {
+        "type": "object",
+        "properties": {
+          "ok": {"type": "boolean"},
+          "challenges": {"type": "array", "items": {"$ref": "#/components/schemas/AIRecord"}}
+        }
+      },
+      "AICoursePlan": {
+        "type": "object",
+        "description": "A whole generated course: chapters of markdown teaching, each with verified exercises. Setup belongs to the plan, not to an exercise, because every exercise runs against the same environment.",
+        "properties": {
+          "id": {"type": "string"},
+          "version": {"type": "integer"},
+          "title": {"type": "string"},
+          "subtitle": {"type": "string"},
+          "level": {"type": "string"},
+          "dialect": {"type": "string"},
+          "objectives": {"type": "array", "items": {"type": "string"}},
+          "setup": {"$ref": "#/components/schemas/AISetupPlan"},
+          "chapters": {"type": "array", "items": {"$ref": "#/components/schemas/AICourseChapter"}},
+          "provenance": {"$ref": "#/components/schemas/AIProvenance"}
+        }
+      },
+      "AICourseChapter": {
+        "type": "object",
+        "properties": {
+          "id": {"type": "string"},
+          "n": {"type": "integer"},
+          "title": {"type": "string"},
+          "summary": {"type": "string"},
+          "kind": {"type": "string"},
+          "minutes": {"type": "integer"},
+          "objectives": {"type": "array", "items": {"type": "string"}},
+          "sections": {"type": "array", "items": {"$ref": "#/components/schemas/AICourseSection"}},
+          "exercises": {"type": "array", "items": {"$ref": "#/components/schemas/AICourseExercise"}}
+        }
+      },
+      "AICourseSection": {
+        "type": "object",
+        "description": "Authored prose. 'body' is markdown, rendered by the same renderer as the authored courses.",
+        "properties": {
+          "title": {"type": "string"},
+          "body": {"type": "string"}
+        }
+      },
+      "AICourseExercise": {
+        "type": "object",
+        "description": "One exercise of a chapter. It is verified as the challenge artifact the pipeline already understands, so the same rules apply. 'expected' is the engine's own answer, measured during verification and never read from the provider.",
+        "properties": {
+          "id": {"type": "string"},
+          "title": {"type": "string"},
+          "prompt": {"type": "string"},
+          "difficulty": {"enum": ["beginner", "intermediate", "advanced"]},
+          "type": {"type": "string"},
+          "objectives": {"type": "array", "items": {"type": "string"}},
+          "hints": {"type": "array", "items": {"type": "string"}},
+          "reference_solution": {"type": "string"},
+          "cross_check_solution": {"type": "string"},
+          "result_contract": {"$ref": "#/components/schemas/AIResultContract"},
+          "checks": {"type": "array", "items": {"type": "object"}},
+          "expected": {
+            "type": "object",
+            "properties": {
+              "columns": {"type": "array", "items": {"type": "string"}},
+              "rows": {"type": "array", "items": {"type": "array"}}
+            }
+          }
+        }
+      },
+      "AICourseRecord": {
+        "type": "object",
+        "description": "A stored course plus the outcome that admitted it. The owner is the session's account and is not carried in the body.",
+        "properties": {
+          "plan": {"$ref": "#/components/schemas/AICoursePlan"},
+          "outcome": {"$ref": "#/components/schemas/AIOutcome"},
+          "status": {"enum": ["active", "rejected"]},
+          "created_at": {"type": "string"}
+        }
+      },
+      "AICourseList": {
+        "type": "object",
+        "properties": {
+          "ok": {"type": "boolean"},
+          "courses": {"type": "array", "items": {"$ref": "#/components/schemas/AICourseRecord"}},
+          "error": {"$ref": "#/components/schemas/AIError"}
+        }
+      },
+      "AICourseResponse": {
+        "type": "object",
+        "properties": {
+          "ok": {"type": "boolean"},
+          "course": {"$ref": "#/components/schemas/AICourseRecord"}
+        }
+      },
+      "AIJobStage": {
+        "type": "object",
+        "description": "One stage of a run as a poller sees it. 'queued' and 'running' exist only in a live view: 'done', 'failed' and 'skipped' are final, and only those three ever appear in an outcome envelope.",
+        "properties": {
+          "name": {"type": "string"},
+          "state": {"enum": ["queued", "running", "done", "failed", "skipped"]},
+          "detail": {"type": "string"},
+          "ms": {"type": "number"}
+        }
+      },
+      "AIJob": {
+        "type": "object",
+        "description": "A generation job. While it runs, 'stages' is a live copy of the pipeline's progress; once it finishes, 'stages' is the pipeline's own final report, so a poller and a blocking caller can never be told different things about the same run.",
+        "properties": {
+          "id": {"type": "string"},
+          "kind": {"enum": ["challenge", "course"]},
+          "status": {"enum": ["running", "active", "rejected", "unavailable", "failed", "awaiting_approval", "discarded"]},
+          "stages": {"type": "array", "items": {"$ref": "#/components/schemas/AIJobStage"}},
+          "attempts": {"type": "array", "items": {"$ref": "#/components/schemas/AIAttempt"}},
+          "chapters": {"type": "array", "items": {"type": "object"}, "description": "The per-chapter verification report in outline order, one entry per planned chapter, in the same shape the outcome envelope carries it: 'verified', 'dropped', 'refused' or 'skipped', with the exercises the engine ran."},
+          "chapters_planned": {"type": "integer", "description": "How many chapters the outline planned. A course job only."},
+          "chapters_verified": {"type": "integer", "description": "How many chapters have passed the engine so far. A course job only."},
+          "current_chapter": {"type": "string", "description": "The chapter the gateway has most recently started verifying. It keeps that name until the next chapter is handed in, so it says which chapter the run is on rather than flickering. A course job only."},
+          "error": {"type": ["object", "null"]},
+          "course_id": {"type": "string", "description": "Present once a course was stored. While the run is still writing chapters it names a 'building' course, which GET /courses/{id} already answers with the chapters that verified; it names the same course once the run activates it. A run that stopped at 'awaiting_approval' names the same building course, which is the index to approve. Absent on a refused run, which stored nothing."},
+          "challenge_id": {"type": "string", "description": "Present once an active challenge was stored."},
+          "created_at": {"type": "string"},
+          "finished_at": {"type": "string"}
+        }
+      },
+      "AIJobHandle": {
+        "type": "object",
+        "description": "The job as it is handed back at submission: the id to poll, and what the run is.",
+        "properties": {
+          "id": {"type": "string"},
+          "kind": {"enum": ["challenge", "course"]},
+          "status": {"enum": ["running"]}
+        }
+      },
+      "AIJobSubmitted": {
+        "type": "object",
+        "properties": {
+          "ok": {"type": "boolean"},
+          "job": {"$ref": "#/components/schemas/AIJobHandle"}
+        }
+      },
+      "AIJobResponse": {
+        "type": "object",
+        "description": "The poll answer. 'job' is null only in the AI-off answer, where there is no job to describe.",
+        "properties": {
+          "ok": {"type": "boolean"},
+          "job": {"oneOf": [{"type": "null"}, {"$ref": "#/components/schemas/AIJob"}]},
+          "error": {"$ref": "#/components/schemas/AIError"}
+        }
+      },
+      "AITutorRequest": {
+        "type": "object",
+        "properties": {
+          "challenge_id": {"type": "string"},
+          "sql": {"type": "string"},
+          "objective": {"type": "string"},
+          "error_code": {"type": "string"},
+          "error_message": {"type": "string"},
+          "hint_level": {"type": "integer"},
+          "result_summary": {"type": "string"}
+        }
+      },
+      "AITutorResponse": {
+        "type": "object",
+        "properties": {
+          "message": {"type": "string"},
+          "hint_level": {"type": "integer"},
+          "reveals_solution": {"type": "boolean"},
+          "provenance": {"$ref": "#/components/schemas/AIProvenance"}
+        }
+      },
+      "AICritiqueRequest": {
+        "type": "object",
+        "properties": {"sql": {"type": "string"}, "objective": {"type": "string"}}
+      },
+      "AICritiqueResponse": {
+        "type": "object",
+        "properties": {
+          "message": {"type": "string"},
+          "notes": {"type": "array", "items": {"type": "string"}},
+          "provenance": {"$ref": "#/components/schemas/AIProvenance"}
+        }
+      },
+      "AIDefectReport": {
+        "type": "object",
+        "properties": {
+          "description": {"type": "string"},
+          "sql": {"type": "string"},
+          "expected": {"type": "string"},
+          "observed": {"type": "string"}
+        }
+      },
+      "AIPatchProposal": {
+        "type": "object",
+        "properties": {
+          "id": {"type": "string"},
+          "challenge_id": {"type": "string"},
+          "summary": {"type": "string"},
+          "changes": {"type": "array", "items": {"type": "object"}}
+        }
+      },
+      "AIDefectVerdict": {
+        "type": "object",
+        "properties": {
+          "verified": {"type": "boolean"},
+          "applied": {"type": "boolean"},
+          "summary": {"type": "string"},
+          "patch": {"type": ["object", "null"]},
+          "evidence": {"$ref": "#/components/schemas/AIEvidence"},
+          "error": {"type": ["object", "null"]}
+        }
+      },
+      "AIPatchDecision": {
+        "type": "object",
+        "properties": {"approved": {"type": "boolean"}, "approved_by": {"type": "string"}}
+      },
+      "AIPatchResult": {
+        "type": "object",
+        "properties": {
+          "applied": {"type": "boolean"},
+          "patch": {"type": ["object", "null"]},
+          "error": {"type": ["object", "null"]}
         }
       },
       "TablesResponse": {

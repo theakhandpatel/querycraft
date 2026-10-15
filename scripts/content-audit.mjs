@@ -24,7 +24,12 @@
  */
 import { createRequire } from 'node:module';
 import { readFileSync, readdirSync } from 'node:fs';
+import { assertFreshBundle } from './lib/bundle.mjs';
 const require = createRequire('/tmp/');
+assertFreshBundle('/tmp/content-seed.cjs', 'audit-content', ['web/src/lib/contentSeed.ts']);
+assertFreshBundle('/tmp/curriculum-for-content.cjs', 'audit-content', ['web/src/data/curriculum.ts']);
+assertFreshBundle('/tmp/dialect-for-content.cjs', 'audit-content', ['web/src/lib/dialect.ts']);
+assertFreshBundle('/tmp/dataset-for-content.cjs', 'audit-content', ['web/src/lib/dataset.ts']);
 const cs = require('/tmp/content-seed.cjs');
 
 let failed = 0;
@@ -71,10 +76,113 @@ const orphaned = modules.filter((id) => !published.some((p) => p.id === id));
 check('no content document belongs to no module', orphaned.length === 0, orphaned);
 
 console.log('course mapping');
-check('m-prefixed modules belong to sql-analytics', cs.courseForModule('m6') === 'sql-analytics');
-check('j-prefixed modules belong to joins', cs.courseForModule('j2') === 'joins');
-check('q-prefixed modules belong to subqueries', cs.courseForModule('q3') === 'subqueries');
-check('f-prefixed modules belong to foundations', cs.courseForModule('f4') === 'foundations');
+/* Checked against the catalog, not a hand-written list. The list is how a new
+   course shipped with its prefix mapped to the default course: the four
+   hard-coded assertions still passed because none of them mentioned the new
+   prefix. This one cannot pass unless every published module maps home. */
+const misprefixed = published
+  .filter((p) => cs.courseForModule(p.id) !== p.course)
+  .map((p) => `${p.course}/${p.id} maps to ${cs.courseForModule(p.id)}`);
+check('every published module maps back to its own course', misprefixed.length === 0, misprefixed);
+check('an unmapped prefix falls back to the default course', cs.courseForModule('zzz') === 'sql-analytics');
+
+/* ---------- dialect (M6 step 1, design 15 D15) ----------
+
+   Every chapter runs on exactly one dialect, and it is a dialect the app can
+   actually run. The value is data — a course can come from a bundle, a URL or
+   the database — so it is checked here rather than trusted. A chapter that
+   declares nothing inherits its course, and a course that declares nothing is
+   PostgreSQL: the order is asserted, not assumed, because "no dialect" silently
+   becoming SQLite would re-grade 40 chapters against the wrong engine. */
+const dialect = require('/tmp/dialect-for-content.cjs');
+console.log('dialect');
+check('the dialect set is closed and in contract order', dialect.DIALECTS.join(',') === 'postgresql,sqlite', dialect.DIALECTS);
+const badCourseDialect = curriculum.COURSES
+  .filter((c) => c.dialect !== undefined && !dialect.isDialect(c.dialect))
+  .map((c) => `${c.id}=${String(c.dialect)}`);
+check('every course dialect is one the app can run', badCourseDialect.length === 0, badCourseDialect);
+const badModuleDialect = published
+  .map((p) => ({ p, mod: (curriculum.COURSES.find((c) => c.id === p.course)?.modules || []).find((m) => m.id === p.id) }))
+  .filter(({ mod }) => mod?.dialect !== undefined && !dialect.isDialect(mod.dialect))
+  .map(({ p, mod }) => `${p.course}/${p.id}=${String(mod.dialect)}`);
+check('every chapter dialect is one the app can run', badModuleDialect.length === 0, badModuleDialect);
+const unresolved = published
+  .map(({ course, id }) => {
+    const c = curriculum.COURSES.find((x) => x.id === course);
+    const m = (c?.modules || []).find((x) => x.id === id);
+    return `${course}/${id}=${dialect.effectiveDialect(m, c)}`;
+  })
+  .filter((s) => !/=(postgresql|sqlite)$/.test(s));
+check('every chapter resolves to exactly one dialect', unresolved.length === 0, unresolved);
+check(
+  'a chapter with no dialect inherits its course',
+  dialect.effectiveDialect({}, { dialect: 'sqlite' }) === 'sqlite',
+  dialect.effectiveDialect({}, { dialect: 'sqlite' }),
+);
+check(
+  'a course with no dialect is PostgreSQL, not SQLite',
+  dialect.effectiveDialect({}, {}) === 'postgresql' && dialect.effectiveDialect(undefined, undefined) === 'postgresql',
+);
+check(
+  'a chapter overrides its course',
+  dialect.effectiveDialect({ dialect: 'sqlite' }, { dialect: 'postgresql' }) === 'sqlite',
+);
+check('an unknown dialect string is not accepted as one', dialect.isDialect('mysql') === false && dialect.asDialect('mysql') === undefined);
+check('the label is the words a learner reads', dialect.dialectLabel('sqlite') === 'SQLite' && dialect.dialectLabel('postgresql') === 'PostgreSQL');
+check('support is unknown until the engine answers', dialect.dialectSupported('sqlite', undefined) === null && dialect.dialectSupported('sqlite', ['postgresql']) === false && dialect.dialectSupported('postgresql', ['postgresql', 'sqlite']) === true);
+
+/* ---------- dataset (M5) ----------
+
+   `dataset` names the workspace a course's SQL runs against. It is the same
+   kind of fact as `dialect` and it is checked the same way, because getting it
+   wrong is silent: the `plans` course states that customer 7 has 184 orders and
+   that the fixture holds 10 000 orders and 20 000 order items, and every one of
+   those numbers is *false* in the commerce workspace — a learner ran the
+   course's own SQL and saw 80 orders next to prose claiming 10 000, and every
+   exercise in the course was graded against the wrong rows. So:
+
+     - the set is closed, and both a course and a block must name one the app
+       can serve;
+     - a course that names nothing runs on commerce (the default is asserted,
+       not assumed);
+     - and an exercise that carries a perf contract must live in a course that
+       runs on the perf fixture. That last one is the defect above, as a gate. */
+const dataset = require('/tmp/dataset-for-content.cjs');
+console.log('dataset');
+check('the dataset set is closed and in a stable order', dataset.DATASETS.join(',') === 'commerce,perf', dataset.DATASETS);
+const badCourseDataset = curriculum.COURSES
+  .filter((c) => c.dataset !== undefined && !dataset.isDataset(c.dataset))
+  .map((c) => `${c.id}=${String(c.dataset)}`);
+check('every course dataset is one the app can serve', badCourseDataset.length === 0, badCourseDataset);
+const badBlockDataset = curriculum.COURSES
+  .flatMap((c) => (c.modules || []).flatMap((m) => (m.blocks || []).map((b) => ({ c, m, b }))))
+  .filter(({ b }) => b?.dataset !== undefined && !dataset.isDataset(b.dataset))
+  .map(({ c, m, b }) => `${c.id}/${m.id}/${b.id}=${String(b.dataset)}`);
+check('every block dataset is one the app can serve', badBlockDataset.length === 0, badBlockDataset);
+const unresolvedDataset = curriculum.COURSES
+  .flatMap((c) => (c.modules || []).map((m) => `${c.id}/${m.id}=${dataset.datasetFor({ course: c, block: m })}`))
+  .filter((s) => !/=(commerce|perf)$/.test(s));
+check('every chapter resolves to exactly one dataset', unresolvedDataset.length === 0, unresolvedDataset);
+check('a course with no dataset runs on commerce', dataset.datasetFor({ course: {} }) === 'commerce' && dataset.datasetFor({}) === 'commerce');
+check('a block overrides its course', dataset.datasetFor({ course: { dataset: 'commerce' }, block: { dataset: 'perf' } }) === 'perf');
+check('an explicit dataset outranks both', dataset.datasetFor({ dataset: 'commerce', course: { dataset: 'perf' }, block: { dataset: 'perf' } }) === 'commerce');
+check('an unknown dataset string is not accepted as one', dataset.isDataset('mysql') === false && dataset.asDataset('mysql') === undefined);
+check('an unknown dataset degrades to the default, with a reason', dataset.datasetFor({ course: { dataset: 'mysql' } }) === 'commerce' && dataset.datasetReason({ course: { dataset: 'mysql' } }) === 'unknown-dataset');
+
+/* The gate for the defect this section documents: a perf contract is a claim
+   about the perf fixture, so it may only be authored in a course that runs
+   there. `perf` on the block and `dataset` on the course are two halves of one
+   fact, and they are checked to agree. */
+const orphanPerf = curriculum.COURSES
+  .flatMap((c) => (c.modules || []).flatMap((m) => (m.blocks || []).map((b) => ({ c, m, b }))))
+  .filter(({ c, b }) => b?.perf !== undefined && dataset.datasetFor({ course: c }) !== 'perf')
+  .map(({ c, m, b }) => `${c.id}/${m.id}/${b.id} carries a perf contract but runs on ${dataset.datasetFor({ course: c })}`);
+check('every exercise with a perf contract runs on the perf fixture', orphanPerf.length === 0, orphanPerf);
+const perfCoursesWithoutContracts = curriculum.COURSES
+  .filter((c) => dataset.datasetFor({ course: c }) === 'perf')
+  .filter((c) => !(c.modules || []).some((m) => (m.blocks || []).some((b) => b?.perf !== undefined)))
+  .map((c) => c.id);
+check('a course that runs on the perf fixture grades at least one contract there', perfCoursesWithoutContracts.length === 0, perfCoursesWithoutContracts);
 
 /* ---------- 2. the fingerprint ---------- */
 

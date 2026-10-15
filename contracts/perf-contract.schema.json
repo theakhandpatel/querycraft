@@ -1,0 +1,53 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://querycraft.app/contracts/perf-contract.schema.json",
+  "title": "PerfContract",
+  "description": "The M5 plan-based result contract: an exercise's structural expectations about the plan a learner's query produces. Every assertion is a structural fact read from PlanBundle.summary — there is deliberately no timing field, because a timing is not reproducible on a shared machine.",
+  "type": "object",
+  "additionalProperties": false,
+  "properties": {
+    "engine": {
+      "description": "The dialect this contract is written for. A plan captured on another dialect is a refusal, not a mismatch.",
+      "enum": ["postgresql"]
+    },
+    "require_nodes": {
+      "type": "array",
+      "description": "Node types the plan must contain.",
+      "items": {
+        "type": "object",
+        "required": ["node_type"],
+        "additionalProperties": false,
+        "properties": {
+          "node_type": { "type": "string" },
+          "relation": { "type": ["string", "null"] },
+          "index": { "type": ["string", "null"] },
+          "label": { "type": ["string", "null"] }
+        }
+      }
+    },
+    "forbid_nodes": {
+      "type": "array",
+      "description": "Node types that must not appear on a relation once the planner expects it to be large. A sequential scan over a twelve-row dimension table is the correct plan and stays legal, which is why the threshold is part of the rule.",
+      "items": {
+        "type": "object",
+        "required": ["node_type", "relation"],
+        "additionalProperties": false,
+        "properties": {
+          "node_type": { "type": "string" },
+          "relation": { "type": "string" },
+          "above_plan_rows": { "type": "number", "minimum": 0 },
+          "label": { "type": ["string", "null"] }
+        }
+      }
+    },
+    "require_indexes": {
+      "type": "array",
+      "items": { "type": "string" }
+    },
+    "max_plan_rows": {
+      "type": ["number", "null"],
+      "description": "A ceiling on the planner's own top-level row estimate, which is how the contract says 'touch less data' without naming a duration."
+    },
+    "min_index_scans": { "type": ["integer", "null"], "minimum": 0 }
+  }
+}

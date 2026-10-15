@@ -597,23 +597,719 @@ var FOUNDATIONS_MODULES: CourseModule[] = [
   ]}
 ];
 
-var COURSES: Course[] = [
-  { id:'sql-analytics', title:'SQL Analytics in the Real World', domain:'Commerce & retail', level:'Intermediate', minutes:120,
-    source:'created', enrolled:true, built:true, modules:MODULES,
-    blurb:'Go beyond basic aggregation: revenue reports, ranking, cohort retention and query reasoning on one realistic commerce dataset.' },
-  { id:'joins', title:'Joins without guesswork', domain:'Commerce & retail', level:'Beginner → intermediate', minutes:75,
-    source:'library', enrolled:true, built:true, modules:JOINS_MODULES,
-    blurb:'Understand join behaviour through data: unmatched rows, duplicate keys, NULLs and the grain trap that inflates every total.' },
-  { id:'plans', title:'PostgreSQL query plans', domain:'Query tuning', level:'Intermediate', minutes:90,
-    source:'library', enrolled:false, built:false, modules:null,
-    blurb:'Read EXPLAIN ANALYZE, understand index scans and selectivity, and reason about joins and row estimates.' },
-  { id:'subqueries', title:'Subqueries and set operations', domain:'Commerce & retail', level:'Intermediate', minutes:70,
-    source:'library', enrolled:true, built:true, modules:SUBQUERIES_MODULES,
-    blurb:'Use one query as the input to another: scalar and list subqueries, correlated EXISTS, the NOT IN NULL trap, and set operations that compare whole result sets.' },
-  { id:'foundations', title:'SQL Foundations', domain:'Commerce & retail', level:'Beginner', minutes:100,
-    source:'library', enrolled:true, built:true, modules:FOUNDATIONS_MODULES,
-    blurb:'The clauses underneath every query: projection and DISTINCT, WHERE and boolean precedence, ORDER BY with LIMIT and OFFSET, NULL, IN/BETWEEN/LIKE, CASE, and aggregation with HAVING.' }
+/* ---------- M5: the plan course (docs/m5-implementation-plan.md, step 7) ---------- */
+
+
+var PLANS_MODULES: CourseModule[] = [
+{ id:'p1', n:1, title:'The planner\u2019s job', kind:'Orientation', minutes:10,
+  summary:'What PostgreSQL decides when you write a query, what its cost units mean, and why plan lessons need a bigger dataset than 80 rows.',
+  objectives:['Describe the decisions the planner makes for a query','Read cost as pages and rows rather than milliseconds','Explain why the perf fixture holds 10 000 orders'],
+  blocks:[
+    intro('A <span class="kbd-inline">SELECT</span> says what you want; the planner decides how to get it \u2014 which relation to read first, whether to walk an index, which join algorithm to use, and whether to sort. <span class="kbd-inline">EXPLAIN</span> prints that decision, and this course is about reading it.'),
+    intro('The decision is arithmetic: the planner prices candidate plans in page reads and row touches, using statistics that <span class="kbd-inline">ANALYZE</span> keeps about the data. Nothing about it is hidden \u2014 <span class="kbd-inline">pg_stats</span> shows the same numbers the planner used.'),
+    intro('Plans only become interesting at scale. On the 80-row lesson dataset every plan is one page and every choice is the same; the perf fixture this course runs on holds 2 000 customers, 500 products, 10 000 orders and 20 000 order items, with a <span class="kbd-inline">status</span> column where one value is 90% of the table and another 0.5%.'),
+    {type:'syntax', sql:"SELECT (SELECT COUNT(*) FROM customers)   AS customers,\n       (SELECT COUNT(*) FROM products)    AS products,\n       (SELECT COUNT(*) FROM orders)      AS orders,\n       (SELECT COUNT(*) FROM order_items) AS order_items;", note:'The perf fixture in one row. These counts are what every later estimate is a fraction of.'},
+    {type:'example', id:'ex.p1.demo', sql:"SELECT (SELECT COUNT(*) FROM customers)   AS customers,\n       (SELECT COUNT(*) FROM products)    AS products,\n       (SELECT COUNT(*) FROM orders)      AS orders,\n       (SELECT COUNT(*) FROM order_items) AS order_items;", note:'Pinned by the fixture seed, so the same numbers come back on every machine.',
+      result:{columns:['customers','products','orders','order_items'], rows:[[2000,500,10000,20000]]}},
+    {type:'exercise', id:'ex.p1.1',
+      prompt:'Return one row per table with its row count: the table name in a column called relation and the count in a column called table_rows, largest table first.',
+      starter:"SELECT 'customers' AS relation, COUNT(*) AS table_rows FROM customers\n-- UNION ALL the other three tables\n-- order by table_rows descending",
+      solution:"SELECT 'customers' AS relation, COUNT(*) AS table_rows FROM customers\nUNION ALL SELECT 'products', COUNT(*) FROM products\nUNION ALL SELECT 'orders', COUNT(*) FROM orders\nUNION ALL SELECT 'order_items', COUNT(*) FROM order_items\nORDER BY table_rows DESC;",
+      hints:['Every branch of a <span class="kbd-inline">UNION ALL</span> projects the same two columns in the same order.','The names come from the first branch, so the trailing <span class="kbd-inline">ORDER BY table_rows DESC</span> can use the alias.'],
+      contract:{columns:['relation','table_rows'], column_order:'exact', row_order:'exact'},
+      checks:[
+        {label:'Counts all four tables', code:'AGGREGATION_MISSING', test:function(s){ return (s.match(/count\s*\(\s*\*\s*\)/gi) || []).length >= 4 && ['customers','products','orders','order_items'].every(function(t){ return new RegExp('from\\s+'+t+'\\b','i').test(s); }); }},
+        {label:'Stacks the four counts with UNION ALL', code:'COLUMN_MISMATCH', test:function(s){ return /union\s+all/i.test(s) && /\brelation\b/i.test(s) && /\btable_rows\b/i.test(s); }},
+        {label:'Largest table first', code:'ROW_ORDER_MISMATCH', test:function(s){ return /order\s+by[\s\S]*table_rows\s+desc/i.test(s); }}
+      ],
+      result:{columns:['relation','table_rows'], rows:[['order_items',20000],['orders',10000],['customers',2000],['products',500]]}}
+  ]},
+
+{ id:'p2', n:2, title:'Reading EXPLAIN', kind:'Core skill', minutes:12,
+  summary:'Read a plan as a tree: node types, depth, index conditions versus filters, estimates versus actual rows, and the numbers worth ignoring.',
+  objectives:['Read a plan tree from the leaves up','Tell an Index Cond from a Filter','Multiply rows by loops before comparing estimates','Name the plan facts a fixture can reproduce'],
+  blocks:[
+    intro('A plan is a tree printed inside out: leaves read relations, parents combine them, and the root is the answer. <span class="kbd-inline">EXPLAIN</span> draws it with indentation, where depth is nesting rather than execution order.'),
+    intro('The two lines that give a plan its character are <span class="kbd-inline">Index Cond</span>, which the index applied, and <span class="kbd-inline">Filter</span>, which discarded rows after they had been fetched. A large <span class="kbd-inline">Rows Removed by Filter</span> is work you paid for and did not want.'),
+    intro('<span class="kbd-inline">EXPLAIN</span> only plans; <span class="kbd-inline">EXPLAIN ANALYZE</span> runs the statement and reports actual rows per node. Actual rows are per loop, so multiply by <span class="kbd-inline">loops=</span> before comparing them with anything.'),
+    {type:'syntax', sql:"EXPLAIN (ANALYZE, BUFFERS)\nSELECT o.id, o.ordered_at, oi.product_id, oi.quantity\nFROM orders o\nJOIN order_items oi ON oi.order_id = o.id\nWHERE o.customer_id = 7;", note:'Plans only. Adding ANALYZE executes the statement and reports actual rows, buffers and timings per node.'},
+    {type:'example', id:'ex.p2.demo', sql:"SELECT id, ordered_at, status\nFROM orders\nWHERE customer_id = 7\nORDER BY ordered_at DESC\nLIMIT 5;", note:'The query whose plan this module reads: customer 7 has 184 orders, and the index on customer_id finds them.',
+      result:{columns:['id','ordered_at','status'], rows:[[9954,'2026-12-26 09:56','shipped'],[9899,'2026-12-24 10:16','shipped'],[9880,'2026-12-23 17:48','pending'],[9825,'2026-12-21 18:08','shipped'],[9751,'2026-12-19 02:00','shipped']]}},
+    {type:'exercise', id:'ex.p2.1',
+      prompt:'Return the five most recent orders for customer 1 as id, ordered_at and status, newest first.',
+      starter:"SELECT id, ordered_at, status\nFROM orders\n-- filter to customer 1\nORDER BY -- newest first\nLIMIT 5;",
+      solution:"SELECT id, ordered_at, status\nFROM orders\nWHERE customer_id = 1\nORDER BY ordered_at DESC\nLIMIT 5;",
+      hints:['Filter with <span class="kbd-inline">customer_id = 1</span>.','Newest first is <span class="kbd-inline">ORDER BY ordered_at DESC</span>, and the <span class="kbd-inline">LIMIT</span> turns the sort into a top-N heapsort.'],
+      contract:{columns:['id','ordered_at','status'], column_order:'exact', row_order:'exact'},
+      checks:[
+        {label:'Filters to customer 1', code:'FILTER_MISSING', test:function(s){ return /customer_id\s*=\s*1\b/i.test(s); }},
+        {label:'Newest first', code:'ROW_ORDER_MISMATCH', test:function(s){ return /order\s+by[\s\S]*ordered_at\s+desc/i.test(s); }},
+        {label:'Returns five rows', code:'ROW_COUNT_MISMATCH', test:function(s){ return /limit\s+5\b/i.test(s); }}
+      ],
+      result:{columns:['id','ordered_at','status'], rows:[[10000,'2026-12-28 01:48','shipped'],[9981,'2026-12-27 09:20','cancelled'],[9962,'2026-12-26 16:52','completed'],[9943,'2026-12-26 00:24','shipped'],[9926,'2026-12-25 09:40','shipped']]}}
+  ]},
+
+{ id:'p3', n:3, title:'Access paths', kind:'Core skill', minutes:12,
+  summary:'Seq Scan, Index Scan, Index Only Scan and bitmap scans: what each costs, what it needs, and when a sequential scan is the correct plan.',
+  objectives:['Name the four access paths and what each needs','Explain why an index pays off only when it lets you skip pages','Recognise the plan a 90% predicate should produce'],
+  blocks:[
+    intro('PostgreSQL has four ways to read a relation: <span class="kbd-inline">Seq Scan</span>, <span class="kbd-inline">Index Scan</span>, <span class="kbd-inline">Index Only Scan</span>, and <span class="kbd-inline">Bitmap Index Scan</span> plus <span class="kbd-inline">Bitmap Heap Scan</span>. Each trades pages for rows differently.'),
+    intro('An index earns its keep by letting you skip pages. When a predicate matches most of the relation, the matching rows live on most of the pages anyway, and one sequential read is cheaper than a random walk over the same data \u2014 which is why the 90% <span class="kbd-inline">status</span> value wants a <span class="kbd-inline">Seq Scan</span> and the 0.5% value wants the index.'),
+    intro('Correlation decides between the two index paths: near 1 (the column is stored in index order) favours <span class="kbd-inline">Index Scan</span>, near 0 favours <span class="kbd-inline">Bitmap Heap Scan</span>, which reads each heap page once, in page order.'),
+    {type:'syntax', sql:"SELECT id, status\nFROM orders\nWHERE customer_id = 7\nORDER BY id\nLIMIT 5;", note:'A selective predicate on an indexed column: orders_customer_id_idx supplies 184 of the 10 000 rows.'},
+    {type:'example', id:'ex.p3.demo', sql:"SELECT id, status\nFROM orders\nWHERE customer_id = 7\nORDER BY id\nLIMIT 5;", note:'The 184 rows for one customer are 1.8% of the table, which is where the index beats reading every page.',
+      result:{columns:['id','status'], rows:[[28,'shipped'],[83,'shipped'],[102,'shipped'],[157,'shipped'],[231,'completed']]}},
+    {type:'exercise', id:'ex.p3.1',
+      prompt:'Return the five newest shipped orders as id, ordered_at and status, newest first. 90% of the table is shipped, so here the correct plan is a sequential scan rather than an index \u2014 the exercise asserts exactly that.',
+      starter:"SELECT id, ordered_at, status\nFROM orders\nWHERE -- the shipped ones\nORDER BY -- newest first\nLIMIT 5;",
+      solution:"SELECT id, ordered_at, status\nFROM orders\nWHERE status = 'shipped'\nORDER BY ordered_at DESC\nLIMIT 5;",
+      hints:['The predicate is <span class="kbd-inline">status = \'shipped\'</span>, on the bare column so the statistics apply.','Newest first is <span class="kbd-inline">ORDER BY ordered_at DESC</span>. With nine thousand matching rows, reading the relation once beats visiting nine thousand heap pages through the index.'],
+      contract:{columns:['id','ordered_at','status'], column_order:'exact', row_order:'exact'},
+      checks:[
+        {label:'Filters to shipped orders', code:'FILTER_MISSING', test:function(s){ return /status\s*=\s*'shipped'/i.test(s); }},
+        {label:'Newest first', code:'ROW_ORDER_MISMATCH', test:function(s){ return /order\s+by[\s\S]*ordered_at\s+desc/i.test(s); }},
+        {label:'Returns five rows', code:'ROW_COUNT_MISMATCH', test:function(s){ return /limit\s+5\b/i.test(s); }}
+      ],
+      perf:{engine:'postgresql',
+        require_nodes:[{node_type:'Seq Scan', relation:'orders', label:'90% of the relation is cheaper to read once, in order, than to revisit page by page'}],
+        forbid_nodes:[{node_type:'Index Scan', relation:'orders'},{node_type:'Bitmap Heap Scan', relation:'orders'}],
+        min_index_scans:0},
+      result:{columns:['id','ordered_at','status'], rows:[[10000,'2026-12-28 01:48','shipped'],[9999,'2026-12-28 00:56','shipped'],[9998,'2026-12-28 00:04','shipped'],[9997,'2026-12-27 23:12','shipped'],[9996,'2026-12-27 22:20','shipped']]}}
+  ]},
+
+{ id:'p4', n:4, title:'Selectivity, statistics and ANALYZE', kind:'Core skill', minutes:11,
+  summary:'Where the rows= estimate comes from, the ways it goes wrong, how to tell, and what refreshing statistics changes.',
+  objectives:['Read selectivity as a fraction of the relation','Use the MCV list and the histogram to explain an estimate','Spot an estimate that is wrong by comparing it with actual rows','Refresh statistics with ANALYZE after a bulk load'],
+  blocks:[
+    intro('Every estimate is a fraction of a relation: the fraction is <span class="kbd-inline">selectivity</span>, the row count comes from <span class="kbd-inline">reltuples</span>. Values that occur often are known exactly from the most-common-value list; the rest come from a histogram that assumes values are spread evenly inside each bucket, which is the assumption that breaks.'),
+    intro('The estimate that misleads most is not a small error but a default. A predicate wrapped in a function or a cast has no statistic at all, so the planner assumes 0.5% of the relation \u2014 which is how a query matching 9 000 rows gets planned for 50 (module 7).'),
+    intro('Estimates are falsifiable: <span class="kbd-inline">EXPLAIN ANALYZE</span> prints the claim next to the outcome on every node. A gap of an order of magnitude explains most bad plan choices, including a join algorithm chosen for rows that never existed (module 5).'),
+    {type:'syntax', sql:"SELECT status, COUNT(*) AS orders\nFROM orders\nGROUP BY status\nORDER BY orders DESC;", note:'The skew that makes the perf fixture usable: one value covers 90% of the table, another 0.5%.'},
+    {type:'example', id:'ex.p4.demo', sql:"SELECT status, COUNT(*) AS orders\nFROM orders\nGROUP BY status\nORDER BY orders DESC;", note:'Five distinct values, so every one of them sits in the MCV list and the planner estimates them exactly.',
+      result:{columns:['status','orders'], rows:[['shipped',9000],['completed',400],['cancelled',300],['pending',250],['refunded',50]]}},
+    {type:'exercise', id:'ex.p4.1',
+      prompt:'Count the refunded orders. The value is 0.5% of the table, so the plan must go through orders_status_idx and the planner\'s estimate for the statement must stay under 100 rows.',
+      starter:"SELECT COUNT(*) AS refunded\nFROM orders\nWHERE -- the rare status value",
+      solution:"SELECT COUNT(*) AS refunded\nFROM orders\nWHERE status = 'refunded';",
+      hints:['The predicate is <span class="kbd-inline">status = \'refunded\'</span>, on the bare column so the index and the statistics both apply.','One half of one percent of the table does not need a sequential read: the plan should touch orders_status_idx.'],
+      contract:{columns:['refunded'], column_order:'exact', row_order:'ignored'},
+      checks:[
+        {label:'Counts the rows', code:'AGGREGATION_MISSING', test:function(s){ return /count\s*\(\s*\*\s*\)/i.test(s); }},
+        {label:'Filters to the rare status', code:'FILTER_MISSING', test:function(s){ return /status\s*=\s*'refunded'/i.test(s); }}
+      ],
+      perf:{engine:'postgresql',
+        require_indexes:['orders_status_idx'],
+        min_index_scans:1,
+        max_plan_rows:100,
+        forbid_nodes:[{node_type:'Seq Scan', relation:'orders', above_plan_rows:1000, label:'a 50-row predicate is not a sequential scan on a 10 000-row relation'}]},
+      result:{columns:['refunded'], rows:[[50]]}}
+  ]},
+
+{ id:'p5', n:5, title:'Join strategies', kind:'Core skill', minutes:11,
+  summary:'Nested loop, hash join and merge join: what each needs, what each costs, and how a wrong row estimate switches the choice.',
+  objectives:['State the precondition of each join algorithm','Read loops= on the inner side of a nested loop','Explain why a row estimate changes the join strategy'],
+  blocks:[
+    intro('A join is a matching problem with three solutions: <span class="kbd-inline">Nested Loop</span>, cheap when the outer side is small and the inner side is indexed; <span class="kbd-inline">Hash Join</span>, for two large unordered inputs and equality only; and <span class="kbd-inline">Merge Join</span>, for two inputs already sorted on the key.'),
+    intro('The outer side\u2019s estimate picks the strategy. A nested loop is the only join that costs what the answer costs; a hash join pays one pass over each side however few rows come back. When the estimate is wrong (module 4), the planner picks the strategy its belief justified.'),
+    intro('<span class="kbd-inline">EXISTS</span> and <span class="kbd-inline">IN</span> become semi joins that stop at the first match, and <span class="kbd-inline">NOT EXISTS</span> becomes an anti join. That early exit is part of the plan, and it is why they beat joining and then de-duplicating.'),
+    {type:'syntax', sql:"SELECT c.name, COUNT(*) AS orders\nFROM customers c\nJOIN orders o ON o.customer_id = c.id\nGROUP BY c.id, c.name\nORDER BY orders DESC, c.name\nLIMIT 5;", note:'Both sides are large and unordered, so the planner hashes one side and streams the other; the aggregate hashes as well.'},
+    {type:'example', id:'ex.p5.demo', sql:"SELECT c.name, COUNT(*) AS orders\nFROM customers c\nJOIN orders o ON o.customer_id = c.id\nGROUP BY c.id, c.name\nORDER BY orders DESC, c.name\nLIMIT 5;", note:'A skewed customer_id leaves a handful of customers with hundreds of orders; one hash join over 10 000 orders finds them in a single pass.',
+      result:{columns:['name','orders'], rows:[['Ada Whitfield',490],['Bruno Sala',430],['Chidi Okafor',400],['Dara Novak',360],['Emi Tanaka',340]]}},
+    {type:'exercise', id:'ex.p5.1',
+      prompt:'Return every product category with the number of order lines that reference a product in it, most lines first. A category with no lines must still appear, with a count of zero.',
+      starter:"SELECT p.category, COUNT(oi.id) AS lines\nFROM products p\n-- keep every category\nJOIN order_items oi ON -- the product link\nGROUP BY p.category\nORDER BY -- most lines first",
+      solution:"SELECT p.category, COUNT(oi.id) AS lines\nFROM products p\nLEFT JOIN order_items oi ON oi.product_id = p.id\nGROUP BY p.category\nORDER BY lines DESC, p.category;",
+      hints:['A <span class="kbd-inline">LEFT JOIN</span> keeps a category that has no lines, and <span class="kbd-inline">COUNT(oi.id)</span> then counts zero for it instead of one.','Order by the aggregate, with a tie-break so the output is stable: <span class="kbd-inline">ORDER BY lines DESC, p.category</span>.'],
+      contract:{columns:['category','lines'], column_order:'ignored', row_order:'exact'},
+      checks:[
+        {label:'Keeps every category with a LEFT JOIN', code:'COLUMN_MISMATCH', test:function(s){ return /left\s+(outer\s+)?join/i.test(s); }},
+        {label:'Joins lines to products on the product key', code:'COLUMN_MISMATCH', test:function(s){ return /product_id\s*=\s*p\.id|p\.id\s*=\s*oi\.product_id/i.test(s); }},
+        {label:'Groups by category', code:'GROUPING_MISSING', test:function(s){ return /group\s+by[\s\S]*category/i.test(s); }},
+        {label:'Most lines first', code:'ROW_ORDER_MISMATCH', test:function(s){ return /order\s+by[\s\S]*desc/i.test(s); }}
+      ],
+      result:{columns:['category','lines'], rows:[['Electronics',5705],['Home',4923],['Outdoor',4831],['Kitchen',4541]]}}
+  ]},
+
+{ id:'p6', n:6, title:'Sorts, hashes and work_mem', kind:'Core skill', minutes:11,
+  summary:'Sort and hash nodes, what work_mem bounds, how to read a spill, and the order of fixes that avoids one.',
+  objectives:['Read Sort Method and Disk: on a Sort node','Tell a hashed aggregate from a sorted one','Reduce rows, width or the number of sorts before raising work_mem'],
+  blocks:[
+    intro('A <span class="kbd-inline">Sort</span> emits nothing until it has read everything, so its startup cost is its total cost. A <span class="kbd-inline">LIMIT</span> rescues it: a bounded sort becomes a top-N heapsort that keeps N rows instead of all of them.'),
+    intro('<span class="kbd-inline">work_mem</span> bounds one sort or one hash at a time, per session. When the input does not fit, a sort becomes an <span class="kbd-inline">external merge</span> with a <span class="kbd-inline">Disk:</span> figure, and a hash join or hashed aggregate spills in batches \u2014 both of them visible in the plan.'),
+    intro('The fixes, in the order that usually works: sort fewer rows (a sargable predicate), sort narrower rows (project the columns you need), sort less often (<span class="kbd-inline">UNION ALL</span> instead of <span class="kbd-inline">UNION</span>, <span class="kbd-inline">EXISTS</span> instead of a join plus <span class="kbd-inline">DISTINCT</span>), and only then raise <span class="kbd-inline">work_mem</span>.'),
+    {type:'syntax', sql:"SELECT id, ordered_at, status\nFROM orders\nORDER BY ordered_at DESC\nLIMIT 5;", note:'Nothing indexes ordered_at, so the plan is a sequential scan under a Sort \u2014 reduced to a top-N heapsort by the LIMIT.'},
+    {type:'example', id:'ex.p6.demo', sql:"SELECT id, ordered_at, status\nFROM orders\nORDER BY ordered_at DESC\nLIMIT 5;", note:'The five newest orders of any status. The Sort Method line reads top-N heapsort: only five rows are ever held in memory.',
+      result:{columns:['id','ordered_at','status'], rows:[[10000,'2026-12-28 01:48','shipped'],[9999,'2026-12-28 00:56','shipped'],[9998,'2026-12-28 00:04','shipped'],[9997,'2026-12-27 23:12','shipped'],[9996,'2026-12-27 22:20','shipped']]}},
+    {type:'exercise', id:'ex.p6.1',
+      prompt:'Return the three products that appear in the most order lines, with their id, name and line count; break ties by id ascending.',
+      starter:"SELECT p.id, p.name, COUNT(*) AS lines\nFROM order_items oi\nJOIN products p ON -- the product link\nGROUP BY -- one row per product\nORDER BY -- most lines first, then id\nLIMIT 3;",
+      solution:"SELECT p.id, p.name, COUNT(*) AS lines\nFROM order_items oi\nJOIN products p ON p.id = oi.product_id\nGROUP BY p.id, p.name\nORDER BY lines DESC, p.id\nLIMIT 3;",
+      hints:['Group by <span class="kbd-inline">p.id, p.name</span> so one row per product keeps the name available.','The grouping is a hash and the ranking is a sort on top of it: <span class="kbd-inline">ORDER BY lines DESC, p.id</span>.'],
+      contract:{columns:['id','name','lines'], column_order:'exact', row_order:'exact'},
+      checks:[
+        {label:'Joins lines to products', code:'COLUMN_MISMATCH', test:function(s){ return /p\.id\s*=\s*oi\.product_id|oi\.product_id\s*=\s*p\.id/i.test(s); }},
+        {label:'Counts the lines per product', code:'AGGREGATION_MISSING', test:function(s){ return /count\s*\(/i.test(s) && /group\s+by/i.test(s); }},
+        {label:'Most lines first, ties by id', code:'ROW_ORDER_MISMATCH', test:function(s){ return /order\s+by[\s\S]*lines\s+desc/i.test(s) && /lines\s+desc\s*,\s*(p\.)?id\b/i.test(s); }},
+        {label:'Returns three rows', code:'ROW_COUNT_MISMATCH', test:function(s){ return /limit\s+3\b/i.test(s); }}
+      ],
+      result:{columns:['id','name','lines'], rows:[[1,'Aurora Wireless Earbuds',895],[2,'Nimbus Headphones',370],[3,'Linen Duvet Cover',285]]}}
+  ]},
+
+{ id:'p7', n:7, title:'Making a predicate sargable', kind:'Core skill', minutes:12,
+  summary:'Functions, casts, OR, LIKE prefixes and IN versus EXISTS: the rewrites that let an index seek, and the ones that do nothing.',
+  objectives:['Recognise a predicate an index can seek with','Rewrite a wrapped column into a comparison on the bare column','Tell the IN and EXISTS plans apart, and the NOT IN trap'],
+  blocks:[
+    intro('An index can seek only when one side of the comparison is the bare column. Any function or cast around that column hides it: the index is still there, the predicate is still correct, and the plan becomes a <span class="kbd-inline">Seq Scan</span> with a <span class="kbd-inline">Filter</span>.'),
+    intro('The damage is doubled, because a wrapped column also has no statistic: the estimate falls back to 0.5% of the relation (module 4). One cast buys the wrong access path and the wrong row count. <span class="kbd-inline">DATE(ordered_at) = ...</span> becomes a half-open range, and <span class="kbd-inline">customer_id::text = \'7\'</span> becomes <span class="kbd-inline">customer_id = 7</span>.'),
+    intro('<span class="kbd-inline">OR</span> and <span class="kbd-inline">IN</span> are fine while every branch is indexable, because the planner can build a <span class="kbd-inline">BitmapOr</span>, and expensive when one branch is not. <span class="kbd-inline">LIKE \'Aurora%\'</span> needs the right operator class before it is a range; a leading wildcard has no bound at all.'),
+    {type:'syntax', sql:"SELECT id, name\nFROM products\nWHERE name LIKE 'Aurora%';", note:'An anchored pattern, and still a sequential scan: a plain B-tree index on name cannot serve LIKE unless the index uses text_pattern_ops or the C collation.'},
+    {type:'example', id:'ex.p7.demo', sql:"SELECT id, name\nFROM products\nWHERE name LIKE 'Aurora%';", note:'One row out of 500, found by reading all 500 \u2014 the concrete case that needs an index built for the pattern, not a bigger index on the column.',
+      result:{columns:['id','name'], rows:[[1,'Aurora Wireless Earbuds']]}},
+    {type:'exercise', id:'ex.p7.1',
+      prompt:'The support console receives the customer id as text, and the starter casts the column to compare it. Rewrite the predicate so the plan can use orders_customer_id_idx, and return the customer\'s five oldest orders as id, ordered_at and status.',
+      starter:"SELECT id, ordered_at, status\nFROM orders\nWHERE customer_id::text = '7'\nORDER BY ordered_at\nLIMIT 5;",
+      solution:"SELECT id, ordered_at, status\nFROM orders\nWHERE customer_id = 7\nORDER BY ordered_at\nLIMIT 5;",
+      hints:['Compare the bare column with a typed literal: <span class="kbd-inline">customer_id = 7</span>. A cast on the constant is free; a cast on the column is not.','Nothing indexes <span class="kbd-inline">ordered_at</span>, so the planner cannot stream the answer in order \u2014 it has to collect every row the predicate matched before it can sort them. Reading 184 rows out of 10 000 is what orders_customer_id_idx is for, and the cast takes it away: the wrapped column has no statistic either, so the estimate falls back to 50 rows and the plan reads the whole relation twice over.'],
+      contract:{columns:['id','ordered_at','status'], column_order:'exact', row_order:'exact'},
+      checks:[
+        {label:'Compares the bare customer_id column', code:'FILTER_MISSING', test:function(s){ return /customer_id\s*=\s*7\b/i.test(s); }},
+        {label:'Does not cast the column to text', code:'VALUE_MISMATCH', test:function(s){ return !/::\s*text/i.test(s); }},
+        {label:'Returns five rows', code:'ROW_COUNT_MISMATCH', test:function(s){ return /limit\s+5\b/i.test(s); }}
+      ],
+      perf:{engine:'postgresql',
+        require_indexes:['orders_customer_id_idx'],
+        min_index_scans:1,
+        forbid_nodes:[{node_type:'Seq Scan', relation:'orders', above_plan_rows:1000, label:'the set is 1.8% of the relation, so the index has to be the way in'}]},
+      result:{columns:['id','ordered_at','status'], rows:[[28,'2026-01-01 23:24','shipped'],[83,'2026-01-03 23:04','shipped'],[102,'2026-01-04 15:32','shipped'],[157,'2026-01-06 15:12','shipped'],[231,'2026-01-09 07:20','completed']]}}
+  ]},
+
+{ id:'p8', n:8, title:'Capstone: a slow query, read end to end', kind:'Advanced', minutes:11,
+  summary:'Read a slow order-detail query, name the flaw, rewrite the predicate, and prove the fix with plan structure instead of a stopwatch.',
+  objectives:['Diagnose a plan by its Filter and its Rows Removed','Rewrite a key predicate so the primary key can seek','Assert a plan structurally rather than by timing'],
+  blocks:[
+    intro('The report is an order detail page: one order and its lines, with the order id arriving from the web layer as text. The starter compares that text against <span class="kbd-inline">id::text</span>, which hides the primary key, so the plan reads all 10 000 orders, discards 9 999 of them with a <span class="kbd-inline">Filter</span>, and reads the 20 000 order lines to find two.'),
+    intro('The fix is two predicate edits: compare the bare <span class="kbd-inline">o.id</span> with a typed literal so <span class="kbd-inline">orders_pkey</span> can seek, and filter <span class="kbd-inline">oi.order_id</span> by the same value so the inner side of the join is an index lookup rather than a full read. The same rows come back, a handful of rows are touched.'),
+    intro('The exercise is graded on structure \u2014 the indexes used, the absence of a sequential scan above a row threshold, the planner\u2019s own estimate \u2014 because those facts are identical on every machine, while a duration is not.'),
+    {type:'syntax', sql:"EXPLAIN (ANALYZE, BUFFERS)\nSELECT o.id AS order_id, o.ordered_at, oi.product_id, oi.quantity\nFROM orders o\nJOIN order_items oi ON oi.order_id = o.id\nWHERE o.id = 1050\n  AND oi.order_id = 1050\nORDER BY oi.product_id;", note:'The capstone query: two index seeks feed a nested loop, and the estimate is a handful of rows rather than ten thousand.'},
+    {type:'example', id:'ex.p8.demo', sql:"SELECT (SELECT COUNT(*) FROM orders WHERE id = 1050) AS orders_matched,\n       (SELECT COUNT(*) FROM order_items WHERE order_id = 1050) AS lines_matched;", note:'How much of the fixture the report actually needs: one order and its two lines, out of 10 000 and 20 000.',
+      result:{columns:['orders_matched','lines_matched'], rows:[[1,2]]}},
+    {type:'exercise', id:'ex.p8.1',
+      prompt:'Rewrite the starter so the plan finds the order by primary key and its lines by index. Return order_id, ordered_at, product_id and quantity for order 1050, ordered by product_id. Both sequential scans must be gone, the estimate must stay at a handful of rows, and at least two index scans must appear.',
+      starter:"SELECT o.id AS order_id, o.ordered_at, oi.product_id, oi.quantity\nFROM orders o\nJOIN order_items oi ON oi.order_id = o.id\nWHERE o.id::text = '1050'\nORDER BY oi.product_id;",
+      solution:"SELECT o.id AS order_id, o.ordered_at, oi.product_id, oi.quantity\nFROM orders o\nJOIN order_items oi ON oi.order_id = o.id\nWHERE o.id = 1050\n  AND oi.order_id = 1050\nORDER BY oi.product_id;",
+      hints:['Compare <span class="kbd-inline">o.id</span> with the number 1050, not with text cast through the column.','Add <span class="kbd-inline">AND oi.order_id = 1050</span> so the join\u2019s inner side is a seek on order_items_order_id_idx instead of a sequential read of all 20 000 lines.'],
+      contract:{columns:['order_id','ordered_at','product_id','quantity'], column_order:'exact', row_order:'exact'},
+      checks:[
+        {label:'Compares the primary key without a cast', code:'FILTER_MISSING', test:function(s){ return /o\.id\s*=\s*1050\b/i.test(s); }},
+        {label:'Filters the child rows on the same key', code:'FILTER_MISSING', test:function(s){ return /oi\.order_id\s*=\s*1050\b/i.test(s); }},
+        {label:'Orders by product_id', code:'ROW_ORDER_MISMATCH', test:function(s){ return /order\s+by[\s\S]*product_id/i.test(s); }}
+      ],
+      perf:{engine:'postgresql',
+        require_nodes:[{node_type:'Index Scan', relation:'orders', index:'orders_pkey', label:'the order is found by its primary key'}],
+        forbid_nodes:[{node_type:'Seq Scan', relation:'orders', above_plan_rows:100},{node_type:'Seq Scan', relation:'order_items', above_plan_rows:100}],
+        require_indexes:['orders_pkey','order_items_order_id_idx'],
+        max_plan_rows:20,
+        min_index_scans:2},
+      result:{columns:['order_id','ordered_at','product_id','quantity'], rows:[[1050,'2026-02-07 21:08',5,3],[1050,'2026-02-07 21:08',123,1]]}}
+  ]}
 ];
 
 
-export { TABLES, MODULES, JOINS_MODULES, SUBQUERIES_MODULES, FOUNDATIONS_MODULES, COURSES };
+/* M6: the SQLite track. Three courses the app ships that teach SQLite on its
+   own terms; every chapter carries `dialect: 'sqlite'` (D15: a chapter teaches
+   exactly one dialect, and a cross-dialect comparison is its own chapter).
+   These chapters run on the SQLite dataset, a row-for-row mirror of the
+   commerce schema in `backend/internal/dataset/schema.sqlite.sql`. */
+
+var SQLITE_ESSENTIALS_MODULES: CourseModule[] = [
+{ id:'s1', n:1, title:'A database in a file', kind:'Orientation', minutes:12, dialect:'sqlite',
+  summary:'The file is the database: no server, no roles, no search_path, and a catalog you query like any other table.',
+  objectives:['Explain what a SQLite database actually is on disk','Read the schema from sqlite_master','Say where the security boundary sits when there is no server'],
+  blocks:[
+    {type:'syntax', sql:"SELECT type, name\nFROM sqlite_master\nWHERE type IN ('table', 'index')\nORDER BY type DESC, name;", note:'The whole schema, read with ordinary SELECT: rows for tables and indexes, and the CREATE statement that made each one in the sql column.'},
+    {type:'example', id:'ex.s1.demo', sql:"SELECT type, name\nFROM sqlite_master\nWHERE type IN ('table', 'index')\nORDER BY type DESC, name;", note:'Five tables, five indexes, one file. There is no server to ask and no \u201cdatabase\u201d argument in the query \u2014 the connection already is the database.',
+      result:{columns:['type','name'], rows:[['table','customers'],['table','dataset_meta'],['table','order_items'],['table','orders'],['table','products'],['index','order_items_order_id_idx'],['index','order_items_product_id_idx'],['index','orders_customer_id_idx'],['index','orders_status_idx'],['index','sqlite_autoindex_dataset_meta_1']]}},
+    {type:'exercise', id:'ex.s1.1',
+      prompt:'Return every index stored in this file as a single column named name, alphabetically. (The engine creates some of them without being asked \u2014 include those.)',
+      starter:"SELECT -- one column, named name\nFROM sqlite_master\nWHERE -- only indexes\nORDER BY -- alphabetically",
+      solution:"SELECT name\nFROM sqlite_master\nWHERE type = 'index'\nORDER BY name;",
+      hints:['Indexes are rows in <span class="kbd-inline">sqlite_master</span> with <span class="kbd-inline">type = \'index\'</span>.','One of the five comes from the <span class="kbd-inline">dataset_meta</span> primary key \u2014 SQLite named it <span class="kbd-inline">sqlite_autoindex_...</span> for you.'],
+      contract:{columns:['name'], column_order:'exact', row_order:'exact'},
+      checks:[
+        {label:'Reads the catalog', code:'TABLE_MISSING', test:function(s){ return /sqlite_master|sqlite_schema/i.test(s); }},
+        {label:'Filters to indexes', code:'FILTER_MISSING', test:function(s){ return /type\s*=\s*'index'/i.test(s); }},
+        {label:'Alphabetical by name', code:'ROW_ORDER_MISMATCH', test:function(s){ return /order\s+by[\s\S]*name/i.test(s); }}
+      ],
+      result:{columns:['name'], rows:[['order_items_order_id_idx'],['order_items_product_id_idx'],['orders_customer_id_idx'],['orders_status_idx'],['sqlite_autoindex_dataset_meta_1']]}}
+  ]},
+
+{ id:'s2', n:2, title:'Storage classes and type affinity', kind:'Core skill', minutes:16, dialect:'sqlite',
+  summary:'A declared type picks an affinity, not a constraint; typeof() reads the storage class a value actually has.',
+  objectives:['Name the five storage classes and the five affinity rules','Explain why a NUMERIC column can store an INTEGER','Measure what is stored with typeof()','Cast with CAST, since there is no ::'],
+  blocks:[
+    {type:'syntax', sql:"SELECT id, name, price, typeof(price) AS stored\nFROM products\nORDER BY id\nLIMIT 5;", note:'The declared type is NUMERIC; the stored class is whatever the value turned out to be. typeof() is how you read it.'},
+    {type:'example', id:'ex.s2.demo', sql:"SELECT typeof(price) AS stored, COUNT(*) AS products\nFROM products\nGROUP BY stored\nORDER BY stored;", note:'One declared type, two storage classes: NUMERIC affinity turned \u201859.00\u2019 into the integer 59 and \u201842.50\u2019 into the real 42.5. PostgreSQL would report numeric for all twenty.',
+      result:{columns:['stored','products'], rows:[['integer',10],['real',10]]}},
+    {type:'exercise', id:'ex.s2.1',
+      prompt:'Return the id, name and storage class of every product whose price is stored as a REAL, ordered by id. Call the class column stored.',
+      starter:"SELECT id, name,\n       -- storage class of price\nFROM products\nWHERE -- only the reals\nORDER BY id;",
+      solution:"SELECT id, name,\n       typeof(price) AS stored\nFROM products\nWHERE typeof(price) = 'real'\nORDER BY id;",
+      hints:['<span class="kbd-inline">typeof(price)</span> returns the storage class as text: \'integer\', \'real\', \'text\', \'blob\' or \'null\'.','A two-decimal seed value keeps its fraction only when the fraction is non-zero, so filter on the class rather than on the declared type.'],
+      contract:{columns:['id','name','stored'], column_order:'exact', row_order:'exact'},
+      checks:[
+        {label:'Reads the storage class', code:'VALUE_MISMATCH', test:function(s){ return /typeof\s*\(/i.test(s); }},
+        {label:'Filters to REAL values', code:'FILTER_MISSING', test:function(s){ return /typeof\s*\([^)]*\)\s*=\s*'real'/i.test(s); }},
+        {label:'Orders by id', code:'ROW_ORDER_MISMATCH', test:function(s){ return /order\s+by[\s\S]*\bid\b/i.test(s); }}
+      ],
+      result:{columns:['id','name','stored'], rows:[[4,'Cedar Desk Lamp','real'],[6,'Pulse Fitness Tracker','real'],[7,'Vertex Mechanical Keyboard','real'],[10,'Copper Kettle','real'],[13,'Summit Hiking Poles','real'],[14,'Ceramic Vase','real'],[15,'Espresso Tamper','real'],[17,'Bamboo Shelf','real'],[18,'Noise-Cancel Earmuffs','real'],[19,'Rope Dog Leash','real']]}}
+  ]},
+
+{ id:'s3', n:3, title:'rowid, INTEGER PRIMARY KEY and AUTOINCREMENT', kind:'Core skill', minutes:14, dialect:'sqlite',
+  summary:'Every ordinary row has an address; INTEGER PRIMARY KEY is that address, and AUTOINCREMENT is a promise about reuse.',
+  objectives:['Select the rowid and know its aliases','Explain why INTEGER PRIMARY KEY is the rowid, not a copy of it','Choose between INTEGER PRIMARY KEY and AUTOINCREMENT'],
+  blocks:[
+    {type:'syntax', sql:"SELECT rowid AS rid, id, name\nFROM products\nORDER BY id\nLIMIT 3;", note:'id INTEGER PRIMARY KEY is an alias for the rowid, so rid and id are the same number read two ways.'},
+    {type:'example', id:'ex.s3.demo', sql:"SELECT MAX(id) AS max_id, MAX(rowid) AS max_rowid, COUNT(*) AS rows\nFROM products;", note:'Twenty products, ids 1..20, and the rowid agrees: the ids are dense because the id is the key. A table with a gap-free id space is evidence of an INTEGER PRIMARY KEY alias.',
+      result:{columns:['max_id','max_rowid','rows'], rows:[[20,20,20]]}},
+    {type:'exercise', id:'ex.s3.1',
+      prompt:'Return the rowid, the id and the order_id of the three highest-id order_items, highest id first. Call the rowid column rid.',
+      starter:"SELECT rowid AS rid, id, order_id\nFROM order_items\nORDER BY -- highest first\nLIMIT 3;",
+      solution:"SELECT rowid AS rid, id, order_id\nFROM order_items\nORDER BY id DESC\nLIMIT 3;",
+      hints:['Say <span class="kbd-inline">rowid AS rid</span> so the two address columns have distinct names.','<span class="kbd-inline">MAX(rowid)</span> is 160, so <span class="kbd-inline">ORDER BY id DESC</span> starts there.'],
+      contract:{columns:['rid','id','order_id'], column_order:'exact', row_order:'exact'},
+      checks:[
+        {label:'Selects the rowid', code:'COLUMN_MISMATCH', test:function(s){ return /\browid\b/i.test(s); }},
+        {label:'Highest id first', code:'ROW_ORDER_MISMATCH', test:function(s){ return /order\s+by[\s\S]*\bid\b[\s\S]*desc/i.test(s); }},
+        {label:'Returns three rows', code:'ROW_COUNT_MISMATCH', test:function(s){ return /limit\s+3\b/i.test(s); }}
+      ],
+      result:{columns:['rid','id','order_id'], rows:[[160,160,1080],[159,159,1080],[158,158,1079]]}}
+  ]},
+
+{ id:'s4', n:4, title:'Dates are not a type', kind:'Core skill', minutes:16, dialect:'sqlite',
+  summary:'ISO-8601 text is the storage format; date(), datetime(), strftime(), julianday() and unixepoch() are the calendar.',
+  objectives:['Store and read an ISO-8601 date as TEXT','Truncate a timestamp with strftime instead of DATE_TRUNC','Do date arithmetic with modifier strings'],
+  blocks:[
+    {type:'syntax', sql:"SELECT strftime('%Y-%m', signup_date) AS month,\n       COUNT(*) AS signups\nFROM customers\nGROUP BY month\nORDER BY month;", note:'DATE_TRUNC(\u2019month\u2019, signup_date) in PostgreSQL; a format string in SQLite. Same truncation, different mechanism.'},
+    {type:'example', id:'ex.s4.demo', sql:"SELECT strftime('%Y-%m-01', ordered_at) AS month,\n       COUNT(*) AS orders\nFROM orders\nGROUP BY month\nORDER BY month;", note:'The first of each month, as text. Because the text is ISO-8601 it also sorts chronologically, so GROUP BY and ORDER BY on it behave like a date column would.',
+      result:{columns:['month','orders'], rows:[['2026-01-01',16],['2026-02-01',19],['2026-03-01',18],['2026-04-01',18],['2026-05-01',9]]}},
+    {type:'exercise', id:'ex.s4.1',
+      prompt:'Return the number of customers who signed up in each month of 2026 as month (YYYY-MM) and signups, months ascending.',
+      starter:"SELECT strftime('%Y-%m', signup_date) AS month,\n       COUNT(*) AS signups\nFROM customers\nWHERE -- 2026 signups only\nGROUP BY month\nORDER BY month;",
+      solution:"SELECT strftime('%Y-%m', signup_date) AS month,\n       COUNT(*) AS signups\nFROM customers\nWHERE signup_date >= '2026-01-01'\nGROUP BY month\nORDER BY month;",
+      hints:['A date stored as text compares as text: <span class="kbd-inline">signup_date &gt;= \'2026-01-01\'</span> works because the format is fixed.','<span class="kbd-inline">strftime(\'%Y-%m\', ...)</span> gives the year and month; group by the alias.'],
+      contract:{columns:['month','signups'], column_order:'exact', row_order:'exact'},
+      checks:[
+        {label:'Truncates with strftime', code:'VALUE_MISMATCH', test:function(s){ return /strftime\s*\(\s*'%Y-%m'/i.test(s); }},
+        {label:'Filters to 2026', code:'FILTER_MISSING', test:function(s){ return /signup_date\s*>=\s*'2026-01-01'/i.test(s); }},
+        {label:'Groups by month', code:'GROUPING_MISSING', test:function(s){ return /group\s+by[\s\S]*month|\bgroup\s+by\s+1\b/i.test(s); }},
+        {label:'Months ascending', code:'ROW_ORDER_MISMATCH', test:function(s){ return /order\s+by[\s\S]*month|\border\s+by\s+1\b/i.test(s); }}
+      ],
+      result:{columns:['month','signups'], rows:[['2026-01',2],['2026-02',3],['2026-03',3],['2026-04',2],['2026-05',3],['2026-06',3],['2026-07',3]]}}
+  ]},
+
+{ id:'s5', n:5, title:'LIKE, GLOB and collations', kind:'Core skill', minutes:14, dialect:'sqlite',
+  summary:'LIKE folds ASCII case by default, GLOB never does, and there is no ILIKE because LIKE already is one.',
+  objectives:['Predict which rows LIKE matches, including its case folding','Use GLOB and its wildcard syntax','Explain what COLLATE NOCASE changes and its ASCII limit'],
+  blocks:[
+    {type:'syntax', sql:"SELECT 'Ada' LIKE 'a%' AS like_ci,\n       'Ada' GLOB 'a*' AS glob_cs;", note:'LIKE folds case, GLOB does not. Both answer 1/0 because there is no boolean type.'},
+    {type:'example', id:'ex.s5.demo', sql:"SELECT name\nFROM products\nWHERE name GLOB '*Jacket*'\nORDER BY name;", note:'GLOB is case-sensitive and its wildcard is *; a product whose name spells Jacket with a capital J is the only match.',
+      result:{columns:['name'], rows:[['Trail Runner Jacket']]}},
+    {type:'exercise', id:'ex.s5.1',
+      prompt:'Compare the two operators on the same pattern: count the products whose name matches \'%AN%\' with LIKE as like_an and with GLOB as glob_an, in that order.',
+      starter:"SELECT (SELECT COUNT(*) FROM products WHERE name LIKE '%AN%') AS like_an,\n       (SELECT COUNT(*) FROM products WHERE name GLOB '*AN*') AS glob_an;",
+      solution:"SELECT (SELECT COUNT(*) FROM products WHERE name LIKE '%AN%') AS like_an,\n       (SELECT COUNT(*) FROM products WHERE name GLOB '*AN*') AS glob_an;",
+      hints:['LIKE folds ASCII case, so <span class="kbd-inline">\'%AN%\'</span> finds names spelled with lower-case <span class="kbd-inline">an</span>.','GLOB is exact-case and uses <span class="kbd-inline">*</span>, not <span class="kbd-inline">%</span>, for a run of characters.'],
+      contract:{columns:['like_an','glob_an'], column_order:'exact', row_order:'ignored'},
+      checks:[
+        {label:'Uses LIKE for the first count', code:'VALUE_MISMATCH', test:function(s){ return /like\s+'%AN%'/i.test(s); }},
+        {label:'Uses GLOB for the second count', code:'VALUE_MISMATCH', test:function(s){ return /glob\s+'\*AN\*'/i.test(s); }}
+      ],
+      result:{columns:['like_an','glob_an'], rows:[[5,0]]}}
+  ]},
+
+{ id:'s6', n:6, title:'Reading a query plan without EXPLAIN ANALYZE', kind:'Core skill', minutes:15, dialect:'sqlite',
+  summary:'EXPLAIN QUERY PLAN prints loops and index use; ANALYZE writes statistics; nothing measures a running query.',
+  objectives:['Tell EXPLAIN from EXPLAIN QUERY PLAN from ANALYZE','Read SCAN and SEARCH lines and the index they name','Spot a predicate that hides an index from the planner'],
+  blocks:[
+    {type:'syntax', sql:"EXPLAIN QUERY PLAN\nSELECT id FROM orders WHERE status = 'refunded';", note:'A plan is rows, not prose: SEARCH means an index seek, SCAN a full pass. There is no EXPLAIN ANALYZE in SQLite.'},
+    {type:'example', id:'ex.s6.demo', sql:"SELECT id, status, customer_id\nFROM orders\nWHERE customer_id = 1\nORDER BY id;", note:'The query whose plan the chapter reads: an equality on customer_id becomes SEARCH o USING COVERING INDEX orders_customer_id_idx (customer_id=?), and a covering index means the table is never visited.',
+      result:{columns:['id','status','customer_id'], rows:[[1001,'completed',1],[1002,'completed',1],[1005,'completed',1],[1006,'shipped',1],[1007,'refunded',1]]}},
+    {type:'exercise', id:'ex.s6.1',
+      prompt:'Return the id, status and customer_id of every order placed by customer 3, lowest id first. Then run EXPLAIN QUERY PLAN on your statement and find the index it searches.',
+      starter:"SELECT id, status, customer_id\nFROM orders\nWHERE -- customer 3\nORDER BY -- lowest id first;",
+      solution:"SELECT id, status, customer_id\nFROM orders\nWHERE customer_id = 3\nORDER BY id;",
+      hints:['The predicate is <span class="kbd-inline">customer_id = 3</span>, on the bare column, so <span class="kbd-inline">orders_customer_id_idx</span> can serve it.','Lowest id first is <span class="kbd-inline">ORDER BY id</span> with no DESC.'],
+      contract:{columns:['id','status','customer_id'], column_order:'exact', row_order:'exact'},
+      checks:[
+        {label:'Filters to customer 3', code:'FILTER_MISSING', test:function(s){ return /customer_id\s*=\s*3\b/i.test(s); }},
+        {label:'Lowest id first', code:'ROW_ORDER_MISMATCH', test:function(s){ return /order\s+by[\s\S]*\bid\b/i.test(s) && !/\bid\s+desc/i.test(s); }}
+      ],
+      result:{columns:['id','status','customer_id'], rows:[[1004,'completed',3],[1009,'completed',3],[1010,'completed',3],[1011,'pending',3]]}}
+  ]},
+
+{ id:'s7', n:7, title:'When SQLite is the right choice \u2014 and what it cannot do', kind:'Orientation', minutes:12, dialect:'sqlite',
+  summary:'One file, one writer, no roles and no schemas: where that fits, where it does not, and what you give up.',
+  objectives:['Recognise the workloads SQLite is the right store for','Name the five features it genuinely lacks','Read the whole store in one query'],
+  blocks:[
+    {type:'syntax', sql:"SELECT (SELECT COUNT(*) FROM customers)   AS customers,\n       (SELECT COUNT(*) FROM products)    AS products,\n       (SELECT COUNT(*) FROM orders)      AS orders,\n       (SELECT COUNT(*) FROM order_items) AS order_items;", note:'Four relations, one row, one file. Copy the file and you have copied all of it.'},
+    {type:'example', id:'ex.s7.demo', sql:"SELECT (SELECT COUNT(*) FROM customers)   AS customers,\n       (SELECT COUNT(*) FROM products)    AS products,\n       (SELECT COUNT(*) FROM orders)      AS orders,\n       (SELECT COUNT(*) FROM order_items) AS order_items;", note:'The whole commerce store in a single row \u2014 the positive case for a database that is a file.',
+      result:{columns:['customers','products','orders','order_items'], rows:[[30,20,80,160]]}},
+    {type:'exercise', id:'ex.s7.1',
+      prompt:'Return one row per commerce table with the table name as relation and its row count as table_rows, largest table first.',
+      starter:"SELECT 'customers' AS relation, COUNT(*) AS table_rows FROM customers\n-- UNION ALL the other three\n-- order by table_rows descending",
+      solution:"SELECT 'customers' AS relation, COUNT(*) AS table_rows FROM customers\nUNION ALL SELECT 'products', COUNT(*) FROM products\nUNION ALL SELECT 'orders', COUNT(*) FROM orders\nUNION ALL SELECT 'order_items', COUNT(*) FROM order_items\nORDER BY table_rows DESC;",
+      hints:['Every branch of a <span class="kbd-inline">UNION ALL</span> projects the same two columns in the same order.','The names come from the first branch, so the trailing <span class="kbd-inline">ORDER BY table_rows DESC</span> can use the alias.'],
+      contract:{columns:['relation','table_rows'], column_order:'exact', row_order:'exact'},
+      checks:[
+        {label:'Counts all four tables', code:'AGGREGATION_MISSING', test:function(s){ return (s.match(/count\s*\(\s*\*\s*\)/gi) || []).length >= 4 && ['customers','products','orders','order_items'].every(function(t){ return new RegExp('from\\s+'+t+'\\b','i').test(s); }); }},
+        {label:'Stacks the counts with UNION ALL', code:'COLUMN_MISMATCH', test:function(s){ return /union\s+all/i.test(s) && /\brelation\b/i.test(s) && /\btable_rows\b/i.test(s); }},
+        {label:'Largest table first', code:'ROW_ORDER_MISMATCH', test:function(s){ return /order\s+by[\s\S]*table_rows\s+desc/i.test(s); }}
+      ],
+      result:{columns:['relation','table_rows'], rows:[['order_items',160],['orders',80],['customers',30],['products',20]]}}
+  ]}
+];
+
+
+var SQLITE_IN_PRODUCTION_MODULES: CourseModule[] = [
+{ id:'r1', n:1, title:'One writer at a time: concurrency and WAL', kind:'Orientation', minutes:16, dialect:'sqlite',
+  summary:'WAL lets readers share the file with one writer; SQLITE_BUSY is what the second writer meets, and busy_timeout is the retry.',
+  objectives:['Explain why SQLite serialises writers and what WAL changes','Read the journal mode and the busy timeout from the file and the connection','Say what a retry after SQLITE_BUSY has to re-run'],
+  blocks:[
+    {type:'syntax', sql:'PRAGMA journal_mode;', note:'A statement that returns rows. delete is the default and it lives in the file header; wal is the mode a read-heavy application wants.'},
+    {type:'example', id:'ex.r1.demo', sql:'PRAGMA journal_mode;', note:'This fixture is a read-only copy, so it reports delete: switching to WAL rewrites the header and has to create a -wal file beside the database.',
+      result:{columns:['journal_mode'], rows:[['delete']]}},
+    {type:'exercise', id:'ex.r1.1',
+      prompt:'Return the two concurrency settings in one row: the file\u2019s journal_mode and the connection\u2019s busy_timeout in milliseconds. Use the table-valued pragmas, not the bare PRAGMA statements.',
+      starter:"SELECT (SELECT -- the journal mode\n       ) AS journal_mode,\n       (SELECT -- the busy timeout\n       ) AS busy_timeout;",
+      solution:"SELECT (SELECT journal_mode FROM pragma_journal_mode()) AS journal_mode,\n       (SELECT timeout FROM pragma_busy_timeout()) AS busy_timeout;",
+      hints:['<span class="kbd-inline">pragma_journal_mode()</span> and <span class="kbd-inline">pragma_busy_timeout()</span> are tables, so each can be a scalar subquery.','The busy-timeout column is called <span class="kbd-inline">timeout</span>, not <span class="kbd-inline">busy_timeout</span>.'],
+      contract:{columns:['journal_mode','busy_timeout'], column_order:'exact', row_order:'ignored'},
+      checks:[
+        {label:'Reads the journal mode from the file', code:'VALUE_MISMATCH', test:function(s){ return /pragma_journal_mode|PRAGMA\s+journal_mode/i.test(s); }},
+        {label:'Reads the busy timeout from the connection', code:'VALUE_MISMATCH', test:function(s){ return /pragma_busy_timeout/i.test(s); }}
+      ],
+      result:{columns:['journal_mode','busy_timeout'], rows:[['delete',2000]]}}
+  ]},
+
+{ id:'r2', n:2, title:'PRAGMA vs SET', kind:'Core skill', minutes:14, dialect:'sqlite',
+  summary:'A pragma is SQL that returns rows; the read-only pragmas are also tables you can join, and half of them are per-connection.',
+  objectives:['Read a schema through pragma_table_info','Tell a file-level pragma from a connection-level one','Say why the executor sets its pragmas where it opens the connection'],
+  blocks:[
+    {type:'syntax', sql:'PRAGMA table_info(products);', note:'Not shell output: a result set with the columns cid, name, type, notnull, dflt_value and pk, one row per column of the table.'},
+    {type:'example', id:'ex.r2.demo', sql:"SELECT cid, name, type, \"notnull\", dflt_value, pk\nFROM pragma_table_info('products')\nORDER BY cid;", note:'The table-valued spelling is ordinary SQL, so it can be filtered, joined and ordered like any other table. The same read through the shell would have been a one-off print.',
+      result:{columns:['cid','name','type','notnull','dflt_value','pk'], rows:[[0,'id','INTEGER',0,null,1],[1,'name','TEXT',1,null,0],[2,'category','TEXT',1,null,0],[3,'price','NUMERIC',1,null,0],[4,'stock','INTEGER',1,'0',0],[5,'active','BOOLEAN',1,'1',0]]}},
+    {type:'exercise', id:'ex.r2.1',
+      prompt:'For every table in the file, return its name as table_name and how many columns it holds as columns, alphabetically.',
+      starter:"SELECT m.name AS table_name,\n       (SELECT -- count the columns\n       ) AS columns\nFROM sqlite_master m\nWHERE m.type = 'table'\nORDER BY m.name;",
+      solution:"SELECT m.name AS table_name,\n       (SELECT COUNT(*) FROM pragma_table_info(m.name)) AS columns\nFROM sqlite_master m\nWHERE m.type = 'table'\nORDER BY m.name;",
+      hints:['<span class="kbd-inline">pragma_table_info()</span> takes the table name as an argument, and an outer column is a fine argument.','<span class="kbd-inline">COUNT(*)</span> over that pragma counts the columns of the table it was handed.'],
+      contract:{columns:['table_name','columns'], column_order:'exact', row_order:'exact'},
+      checks:[
+        {label:'Queries the column list as a table', code:'VALUE_MISMATCH', test:function(s){ return /pragma_table_info\s*\(/i.test(s); }},
+        {label:'One row per table with a count', code:'AGGREGATION_MISSING', test:function(s){ return /sqlite_master|pragma_table_list/i.test(s) && /count\s*\(/i.test(s); }},
+        {label:'Alphabetical by table name', code:'ROW_ORDER_MISMATCH', test:function(s){ return /order\s+by[\s\S]*name/i.test(s); }}
+      ],
+      result:{columns:['table_name','columns'], rows:[['customers',5],['dataset_meta',2],['order_items',5],['orders',4],['products',6]]}}
+  ]},
+
+{ id:'r3', n:3, title:'Types that do not lie: STRICT tables', kind:'Core skill', minutes:14, dialect:'sqlite',
+  summary:'STRICT turns the declared type into a rule; the rule accepts six type names, and NUMERIC, DATE and BOOLEAN are not among them.',
+  objectives:['Name the six types a STRICT table accepts','Find every column a STRICT table would reject','Say what STRICT still does not enforce'],
+  blocks:[
+    {type:'syntax', sql:"CREATE TABLE products_strict (\n    id       INTEGER PRIMARY KEY,\n    name     TEXT    NOT NULL,\n    category TEXT    NOT NULL,\n    price    REAL    NOT NULL,\n    stock    INTEGER NOT NULL DEFAULT 0,\n    active   INTEGER NOT NULL DEFAULT 1\n) STRICT;", note:'The rewrite the affinity chapter implies: one storage type per column, chosen from the fixed list, and STRICT on the table. price becomes REAL and active becomes INTEGER because NUMERIC and BOOLEAN are not on it.'},
+    {type:'example', id:'ex.r3.demo', sql:"SELECT name, type\nFROM pragma_table_info('products')\nWHERE type NOT IN ('INT', 'INTEGER', 'REAL', 'TEXT', 'BLOB', 'ANY')\nORDER BY cid;", note:'Which of this table\u2019s columns a STRICT declaration would reject: two, and the money column is one of them. Run against a real schema the list is usually longer than anyone expected.',
+      result:{columns:['name','type'], rows:[['price','NUMERIC'],['active','BOOLEAN']]}},
+    {type:'exercise', id:'ex.r3.1',
+      prompt:'Find the whole port: list every column in the file whose declared type is not on the STRICT list, as table_name, column_name and declared_type, ordered by table name and then by column position.',
+      starter:"SELECT m.name AS table_name, p.name AS column_name, p.type AS declared_type\nFROM sqlite_master m\nJOIN -- the column list of each table\nWHERE m.type = 'table'\n  AND -- p.type is not on the STRICT list\nORDER BY m.name, p.cid;",
+      solution:"SELECT m.name AS table_name, p.name AS column_name, p.type AS declared_type\nFROM sqlite_master m\nJOIN pragma_table_info(m.name) p\nWHERE m.type = 'table'\n  AND p.type NOT IN ('INT', 'INTEGER', 'REAL', 'TEXT', 'BLOB', 'ANY')\nORDER BY m.name, p.cid;",
+      hints:['<span class="kbd-inline">JOIN pragma_table_info(m.name) p</span> is a correlated table-valued function: one call per row of <span class="kbd-inline">sqlite_master</span>.','The STRICT list is the literal <span class="kbd-inline">IN</span> list from the chapter, and <span class="kbd-inline">p.cid</span> is the column position.'],
+      contract:{columns:['table_name','column_name','declared_type'], column_order:'exact', row_order:'exact'},
+      checks:[
+        {label:'Joins the column list per table', code:'JOIN_MISSING', test:function(s){ return /pragma_table_info\s*\(/i.test(s) && /join/i.test(s); }},
+        {label:'Excludes the STRICT type list', code:'FILTER_MISSING', test:function(s){ return /not\s+in\s*\(/i.test(s) && /'TEXT'/i.test(s) && /'BLOB'/i.test(s); }},
+        {label:'Ordered by table, then column position', code:'ROW_ORDER_MISMATCH', test:function(s){ return /order\s+by[\s\S]*cid/i.test(s); }}
+      ],
+      result:{columns:['table_name','column_name','declared_type'], rows:[['customers','signup_date','DATE'],['order_items','unit_price','NUMERIC'],['orders','ordered_at','TIMESTAMP'],['products','price','NUMERIC'],['products','active','BOOLEAN']]}}
+  ]},
+
+{ id:'r4', n:4, title:'Constraints, foreign keys and ON CONFLICT', kind:'Core skill', minutes:15, dialect:'sqlite',
+  summary:'A foreign key is declared, queryable and off by default; ON CONFLICT makes an upsert one statement instead of a race.',
+  objectives:['Say when a declared foreign key is actually enforced','Read the declared keys with pragma_foreign_key_list','Write an upsert with ON CONFLICT DO UPDATE'],
+  blocks:[
+    {type:'syntax', sql:"INSERT INTO dataset_meta (dataset, version)\nVALUES ('commerce', 2)\nON CONFLICT (dataset) DO UPDATE SET version = excluded.version;", note:'One statement where the alternative is a select-then-insert-or-update with a race between the halves. The conflict target names the unique index that decides.'},
+    {type:'example', id:'ex.r4.demo', sql:"SELECT \"table\", \"from\", \"to\"\nFROM pragma_foreign_key_list('order_items')\nORDER BY id;", note:'The two keys the schema declares on order_items, read as rows. ORDER BY id because the engine\u2019s own order is not something to rely on.',
+      result:{columns:['table','from','to'], rows:[['products','product_id','id'],['orders','order_id','id']]}},
+    {type:'exercise', id:'ex.r4.1',
+      prompt:'Audit the whole schema: return one row per declared foreign key as child, parent, child_column and parent_column, ordered by child table and then by the key\u2019s position.',
+      starter:"SELECT m.name AS child, f.\"table\" AS parent,\n       f.\"from\" AS child_column, f.\"to\" AS parent_column\nFROM sqlite_master m\nJOIN -- the key list of each table\nWHERE m.type = 'table'\nORDER BY m.name, f.id;",
+      solution:"SELECT m.name AS child, f.\"table\" AS parent,\n       f.\"from\" AS child_column, f.\"to\" AS parent_column\nFROM sqlite_master m\nJOIN pragma_foreign_key_list(m.name) f\nWHERE m.type = 'table'\nORDER BY m.name, f.id;",
+      hints:['<span class="kbd-inline">pragma_foreign_key_list()</span> is table-valued, exactly like <span class="kbd-inline">pragma_table_info()</span>.','<span class="kbd-inline">"table"</span>, <span class="kbd-inline">"from"</span> and <span class="kbd-inline">"to"</span> are reserved words, so the pragma\u2019s columns are quoted wherever they appear.'],
+      contract:{columns:['child','parent','child_column','parent_column'], column_order:'exact', row_order:'exact'},
+      checks:[
+        {label:'Reads the declared keys as a table', code:'VALUE_MISMATCH', test:function(s){ return /pragma_foreign_key_list\s*\(/i.test(s); }},
+        {label:'Names both sides of each key', code:'COLUMN_MISMATCH', test:function(s){ return /child_column|"from"/i.test(s) && /parent_column|"to"/i.test(s); }},
+        {label:'Ordered by child table', code:'ROW_ORDER_MISMATCH', test:function(s){ return /order\s+by[\s\S]*m\.name|order\s+by[\s\S]*child/i.test(s); }}
+      ],
+      result:{columns:['child','parent','child_column','parent_column'], rows:[['order_items','products','product_id','id'],['order_items','orders','order_id','id'],['orders','customers','customer_id','id']]}}
+  ]},
+
+{ id:'r5', n:5, title:'JSON, generated columns and expression indexes', kind:'Core skill', minutes:15, dialect:'sqlite',
+  summary:'json1 is compiled in, -> keeps JSON while ->> unwraps it, and a generated column can fix the money scale the affinity system will not.',
+  objectives:['Build a JSON array from a result set deterministically','Choose between -> and ->> for a comparison','Say when a STORED generated column can be indexed'],
+  blocks:[
+    {type:'syntax', sql:"SELECT json_extract('{\"sku\": \"QC-1\", \"qty\": 3}', '$.qty') AS qty,\n       '{\"sku\": \"QC-1\"}' ->> '$.sku' AS sku;", note:'No CREATE EXTENSION and no jsonb: a document is TEXT and every function parses it on call. -> returns a JSON value, ->> returns the SQL scalar a WHERE clause wants.'},
+    {type:'example', id:'ex.r5.demo', sql:"SELECT category,\n       json_group_array(name) AS products\nFROM (SELECT category, name FROM products ORDER BY category, name)\nGROUP BY category\nORDER BY category;", note:'The inner ORDER BY is load-bearing: the aggregate collects rows in scan order, so ordering the subquery is what makes the array deterministic.',
+      result:{columns:['category','products'], rows:[['Electronics','["Aurora Wireless Earbuds","Nimbus Headphones","Noise-Cancel Earmuffs","Pulse Fitness Tracker","Vertex Mechanical Keyboard"]'],['Home','["Bamboo Shelf","Cedar Desk Lamp","Ceramic Vase","Linen Duvet Cover","Wool Throw Blanket"]'],['Kitchen','["Copper Kettle","Espresso Tamper","Granite Cookware Set","Maple Cutting Board"]'],['Outdoor','["Discontinued Camp Stove","Harbor Rain Shell","Rope Dog Leash","Solar Camp Lantern","Summit Hiking Poles","Trail Runner Jacket"]']]}},
+    {type:'exercise', id:'ex.r5.1',
+      prompt:'For each category, build the JSON array of its product names as products and pull the first element back out as a SQL value with ->>, calling it first_product, ordered by category.',
+      starter:"SELECT category,\n       json_group_array(name) AS products,\n       -- the first element, as SQL text\nFROM (SELECT category, name FROM products ORDER BY category, name)\nGROUP BY category\nORDER BY category;",
+      solution:"SELECT category,\n       json_group_array(name) AS products,\n       json_group_array(name) ->> '$[0]' AS first_product\nFROM (SELECT category, name FROM products ORDER BY category, name)\nGROUP BY category\nORDER BY category;",
+      hints:['The path for the first element of an array is <span class="kbd-inline">\'$[0]\'</span>.','Use <span class="kbd-inline">->></span> (two characters), not <span class="kbd-inline">-></span>: the second returns the element as JSON, the first as a SQL value.'],
+      contract:{columns:['category','products','first_product'], column_order:'exact', row_order:'exact'},
+      checks:[
+        {label:'Builds the array with json_group_array', code:'AGGREGATION_MISSING', test:function(s){ return /json_group_array\s*\(/i.test(s); }},
+        {label:'Unwraps the first element with ->>', code:'VALUE_MISMATCH', test:function(s){ return /->>\s*'\$\[0\]'/i.test(s); }},
+        {label:'Orders the subquery so the array is deterministic', code:'ROW_ORDER_MISMATCH', test:function(s){ return /order\s+by[\s\S]*category\s*,\s*name/i.test(s); }}
+      ],
+      result:{columns:['category','products','first_product'], rows:[['Electronics','["Aurora Wireless Earbuds","Nimbus Headphones","Noise-Cancel Earmuffs","Pulse Fitness Tracker","Vertex Mechanical Keyboard"]','Aurora Wireless Earbuds'],['Home','["Bamboo Shelf","Cedar Desk Lamp","Ceramic Vase","Linen Duvet Cover","Wool Throw Blanket"]','Bamboo Shelf'],['Kitchen','["Copper Kettle","Espresso Tamper","Granite Cookware Set","Maple Cutting Board"]','Copper Kettle'],['Outdoor','["Discontinued Camp Stove","Harbor Rain Shell","Rope Dog Leash","Solar Camp Lantern","Summit Hiking Poles","Trail Runner Jacket"]','Discontinued Camp Stove']]}}
+  ]},
+
+{ id:'r6', n:6, title:'Changing a schema with user_version', kind:'Core skill', minutes:14, dialect:'sqlite',
+  summary:'Four ALTER TABLE verbs, a documented twelve-step rebuild for everything else, and a version counter the engine stores but never interprets.',
+  objectives:['List the ALTER TABLE operations SQLite supports directly','Explain why PRAGMA foreign_keys has to change outside the transaction','Read user_version and say who interprets it'],
+  blocks:[
+    {type:'syntax', sql:'PRAGMA user_version;', note:'A four-byte integer in the file header, written atomically with the rest of the transaction. The engine stores it and stops there: the application decides what the numbers mean.'},
+    {type:'example', id:'ex.r6.demo', sql:"SELECT (SELECT user_version FROM pragma_user_version())      AS user_version,\n       (SELECT application_id FROM pragma_application_id())   AS application_id;", note:'The two header fields in one row. Zero and zero: this fixture has never been migrated and does not claim a file format of its own.',
+      result:{columns:['user_version','application_id'], rows:[[0,0]]}},
+    {type:'exercise', id:'ex.r6.1',
+      prompt:'Compare the header counter with the dataset\u2019s own metadata: return the file\u2019s user_version as app_user_version and the version stored in dataset_meta for the \'commerce\' dataset as dataset_version.',
+      starter:"SELECT (SELECT -- the header counter\n       ) AS app_user_version,\n       (SELECT -- the dataset\u2019s own version\n       ) AS dataset_version;",
+      solution:"SELECT (SELECT user_version FROM pragma_user_version()) AS app_user_version,\n       (SELECT version FROM dataset_meta WHERE dataset = 'commerce') AS dataset_version;",
+      hints:['Both are scalar subqueries: one against a table-valued pragma, one against a real table.','<span class="kbd-inline">dataset_meta</span> has one row per dataset, keyed by <span class="kbd-inline">dataset</span>.'],
+      contract:{columns:['app_user_version','dataset_version'], column_order:'exact', row_order:'ignored'},
+      checks:[
+        {label:'Reads the header counter', code:'VALUE_MISMATCH', test:function(s){ return /pragma_user_version|PRAGMA\s+user_version/i.test(s); }},
+        {label:'Reads the dataset row', code:'VALUE_MISMATCH', test:function(s){ return /dataset_meta/i.test(s) && /version/i.test(s); }}
+      ],
+      result:{columns:['app_user_version','dataset_version'], rows:[[0,1]]}}
+  ]},
+
+{ id:'r7', n:7, title:'Backup, ATTACH and shipping the file', kind:'Orientation', minutes:12, dialect:'sqlite',
+  summary:'VACUUM INTO and the backup API copy a consistent file, integrity_check proves it, and ATTACH is a second database rather than a schema.',
+  objectives:['Say why cp is not a backup while a writer runs','Verify a file with integrity_check and size it in pages','Explain what ATTACH adds and what it does not'],
+  blocks:[
+    {type:'syntax', sql:'PRAGMA integrity_check;', note:'The verification step for a shipped file: pages, B-tree invariants and the freelist all agree. A backup you cannot integrity-check is a backup you have not tested.'},
+    {type:'example', id:'ex.r7.demo', sql:"SELECT (SELECT integrity_check FROM pragma_integrity_check()) AS integrity,\n       (SELECT page_size  FROM pragma_page_size())             AS page_size,\n       (SELECT page_count FROM pragma_page_count())            AS pages;", note:'The whole commerce dataset in eleven 4 KiB pages, and the file checks out.',
+      result:{columns:['integrity','page_size','pages'], rows:[['ok',4096,11]]}},
+    {type:'exercise', id:'ex.r7.1',
+      prompt:'Size the file the way a copy operation would: return page_size, pages and the total size in kibibytes as kib, in one row.',
+      starter:"SELECT (SELECT page_size FROM pragma_page_size()) AS page_size,\n       -- how many pages\n       -- total size in kibibytes\n;",
+      solution:"SELECT (SELECT page_size FROM pragma_page_size()) AS page_size,\n       (SELECT page_count FROM pragma_page_count()) AS pages,\n       (SELECT page_size FROM pragma_page_size()) * (SELECT page_count FROM pragma_page_count()) / 1024 AS kib;",
+      hints:['Bytes are <span class="kbd-inline">page_size * page_count</span>; divide by 1024 for KiB.','Integer division is exact here: the product is a whole multiple of 1024.'],
+      contract:{columns:['page_size','pages','kib'], column_order:'exact', row_order:'ignored'},
+      checks:[
+        {label:'Sizes the file from page_size and page_count', code:'VALUE_MISMATCH', test:function(s){ return /pragma_page_size/i.test(s) && /pragma_page_count/i.test(s); }},
+        {label:'Converts bytes to kibibytes', code:'VALUE_MISMATCH', test:function(s){ return /\/\s*1024/i.test(s); }}
+      ],
+      result:{columns:['page_size','pages','kib'], rows:[[4096,11,44]]}}
+  ]}
+];
+
+
+var POSTGRES_TO_SQLITE_MODULES: CourseModule[] = [
+{ id:'x1', n:1, title:'Casts are gone: :: \u2192 CAST', kind:'Core skill', minutes:14, dialect:'sqlite',
+  summary:'There is no ::, CAST applies an affinity instead of checking a type, and DATE_TRUNC becomes a format string over ISO-8601 text.',
+  objectives:['Port a :: cast to CAST','Explain why CAST(x AS DATE) is not the fix','Port DATE_TRUNC(\'month\', d)::date to strftime'],
+  blocks:[
+    {type:'syntax', sql:"SELECT strftime('%Y-%m-01', ordered_at) AS month,\n       CAST(unit_price AS REAL)        AS unit_price_real\nFROM order_items\nORDER BY id\nLIMIT 3;", note:'The port of DATE_TRUNC(\'month\', o.ordered_at)::date is strftime(\'%Y-%m-01\', o.ordered_at): the truncation is a format string, because there is no date type for CAST to aim at.'},
+    {type:'example', id:'ex.x1.demo', sql:"SELECT CAST('2026-05-01' AS TEXT) AS text_cast,\n       CAST('7' AS INTEGER)        AS int_cast,\n       CAST(7 AS TEXT)             AS text_from_int,\n       CAST('abc' AS INTEGER)      AS bad_text;", note:'A cast converts, it does not validate. PostgreSQL rejects \'abc\'::integer with 22P02; here it is 0, and a bad value has quietly become a plausible number.',
+      result:{columns:['text_cast','int_cast','text_from_int','bad_text'], rows:[['2026-05-01',7,'7',0]]}},
+    {type:'exercise', id:'ex.x1.1',
+      prompt:'Port the PostgreSQL projection ordered_at::date. Return id, the order\u2019s date as ordered_on and its status for the three earliest orders, oldest first and ties by id.',
+      starter:"SELECT id,\n       -- the date part of ordered_at\n       AS ordered_on,\n       status\nFROM orders\n-- oldest first, ties by id\nLIMIT 3;",
+      solution:"SELECT id,\n       date(ordered_at) AS ordered_on,\n       status\nFROM orders\nORDER BY ordered_at, id\nLIMIT 3;",
+      hints:['<span class="kbd-inline">date(ordered_at)</span> is the port of <span class="kbd-inline">ordered_at::date</span>; there is nothing to cast to.','Add <span class="kbd-inline">id</span> as a second sort key so two orders at the same timestamp have a fixed order.'],
+      contract:{columns:['id','ordered_on','status'], column_order:'exact', row_order:'exact'},
+      checks:[
+        {label:'Takes the date part with date()', code:'VALUE_MISMATCH', test:function(s){ return /date\s*\(\s*ordered_at\s*\)/i.test(s); }},
+        {label:'Earliest orders first', code:'ROW_ORDER_MISMATCH', test:function(s){ return /order\s+by[\s\S]*ordered_at/i.test(s) && !/ordered_at\s+desc/i.test(s); }},
+        {label:'Returns three rows', code:'ROW_COUNT_MISMATCH', test:function(s){ return /limit\s+3\b/i.test(s); }}
+      ],
+      result:{columns:['id','ordered_on','status'], rows:[[1001,'2026-01-04','completed'],[1006,'2026-01-09','shipped'],[1007,'2026-01-11','refunded']]}}
+  ]},
+
+{ id:'x2', n:2, title:'Conditional aggregation without FILTER assumptions', kind:'Core skill', minutes:15, dialect:'sqlite',
+  summary:'FILTER arrived in 3.30 and DISTINCT ON never will; the portable spellings are a CASE sum and a partitioned row number.',
+  objectives:['Place the FILTER version gate correctly','Write the CASE-sum spelling that runs on any build','Port DISTINCT ON with a window function'],
+  blocks:[
+    {type:'syntax', sql:"SELECT COUNT(*) FILTER (WHERE status = 'completed') AS completed\nFROM orders;", note:'Real SQLite since 3.30 (2019), so this is a version floor rather than a missing feature. Below that floor the CASE sum is the same query.'},
+    {type:'example', id:'ex.x2.demo', sql:"SELECT SUM(CASE WHEN status = 'completed' THEN 1 ELSE 0 END) AS completed,\n       SUM(CASE WHEN status = 'cancelled' THEN 1 ELSE 0 END) AS cancelled,\n       SUM(CASE WHEN status = 'refunded'  THEN 1 ELSE 0 END) AS refunded,\n       SUM(CASE WHEN status = 'shipped'   THEN 1 ELSE 0 END) AS shipped,\n       SUM(CASE WHEN status = 'pending'   THEN 1 ELSE 0 END) AS pending\nFROM orders;", note:'Five statuses, one pass, one row: a comparison inside CASE, summed. The ELSE 0 is not decoration \u2014 without it an empty slice sums to NULL.',
+      result:{columns:['completed','cancelled','refunded','shipped','pending'], rows:[[37,11,11,11,10]]}},
+    {type:'exercise', id:'ex.x2.1',
+      prompt:'PostgreSQL\u2019s SELECT DISTINCT ON (customer_id) customer_id, id, ordered_at::date FROM orders ORDER BY customer_id, ordered_at DESC, id DESC has no SQLite spelling. Port it for customers 1 to 5: return customer_id, order_id and ordered_on, one row per customer who has ordered, customers ascending.',
+      starter:"WITH ranked AS (\n  SELECT customer_id, id,\n         date(ordered_at) AS ordered_on,\n         -- number this customer\u2019s orders\n         AS rn\n  FROM orders\n  WHERE customer_id <= 5\n)\nSELECT customer_id, id AS order_id, ordered_on\nFROM ranked\nWHERE rn = 1\nORDER BY customer_id;",
+      solution:"WITH ranked AS (\n  SELECT customer_id, id,\n         date(ordered_at) AS ordered_on,\n         ROW_NUMBER() OVER (PARTITION BY customer_id ORDER BY ordered_at DESC, id DESC) AS rn\n  FROM orders\n  WHERE customer_id <= 5\n)\nSELECT customer_id, id AS order_id, ordered_on\nFROM ranked\nWHERE rn = 1\nORDER BY customer_id;",
+      hints:['<span class="kbd-inline">DISTINCT ON</span> is a PostgreSQL extension and does not parse here at all.','<span class="kbd-inline">ROW_NUMBER() OVER (PARTITION BY customer_id ORDER BY ...)</span> is the replacement, keeping the same tie-break the PostgreSQL ORDER BY carried.','<span class="kbd-inline">RANK()</span> would let a tie through as two rows; <span class="kbd-inline">ROW_NUMBER()</span> keeps exactly one.'],
+      contract:{columns:['customer_id','order_id','ordered_on'], column_order:'exact', row_order:'exact'},
+      checks:[
+        {label:'A window function numbers the orders', code:'WINDOW_MISSING', test:function(s){ return /row_number\s*\(\s*\)\s*over\s*\(/i.test(s); }},
+        {label:'Partitioned by customer', code:'PARTITION_MISSING', test:function(s){ return /partition\s+by\s+customer_id/i.test(s); }},
+        {label:'Newest order first inside the partition', code:'WINDOW_ORDER_MISSING', test:function(s){ return /order\s+by[\s\S]*ordered_at\s+desc/i.test(s); }},
+        {label:'Keeps one row per customer', code:'GROUPING_MISSING', test:function(s){ return /rn\s*=\s*1/i.test(s); }},
+        {label:'Customers ascending', code:'ROW_ORDER_MISMATCH', test:function(s){ return /order\s+by\s+customer_id/i.test(s); }}
+      ],
+      result:{columns:['customer_id','order_id','ordered_on'], rows:[[1,1005,'2026-02-11'],[2,1003,'2026-01-22'],[3,1004,'2026-02-02'],[5,1072,'2026-05-02']]}}
+  ]},
+
+{ id:'x3', n:3, title:'Windows and ordering semantics', kind:'Core skill', minutes:14, dialect:'sqlite',
+  summary:'The window syntax ports unchanged since 3.25, but NULL ordering defaults are the opposite of PostgreSQL\u2019s and the default frame is a RANGE.',
+  objectives:['Say where NULLs sort by default in each engine','Pin the order with NULLS FIRST / NULLS LAST','Tell a RANGE frame from a ROWS frame and choose deliberately'],
+  blocks:[
+    {type:'syntax', sql:"SELECT category, name, price,\n       RANK() OVER (PARTITION BY category ORDER BY price DESC) AS rk\nFROM products\nORDER BY category, price DESC;", note:'The same OVER shape PostgreSQL uses, available since 3.25. What needs porting is not the syntax but the ordering defaults underneath it.'},
+    {type:'example', id:'ex.x3.demo', sql:"SELECT (SELECT city FROM customers ORDER BY city ASC LIMIT 1)               AS first_asc,\n       (SELECT city FROM customers ORDER BY city ASC NULLS LAST LIMIT 1)    AS first_asc_nulls_last,\n       (SELECT city FROM customers ORDER BY city DESC LIMIT 1)              AS first_desc;", note:'The trap in one row: SQLite sorts NULLs first ascending and last descending \u2014 the opposite of PostgreSQL, where the same three subqueries answer Austin, Austin, NULL.',
+      result:{columns:['first_asc','first_asc_nulls_last','first_desc'], rows:[[null,'Austin','Toronto']]}},
+    {type:'exercise', id:'ex.x3.1',
+      prompt:'Port a running total. For each month of completed revenue, return month (the first of the month), the month\u2019s revenue rounded to two decimals, and running_revenue \u2014 the sum of revenue so far including this month. Months ascending.',
+      starter:"WITH monthly AS (\n  SELECT strftime('%Y-%m-01', o.ordered_at) AS month,\n         ROUND(SUM(oi.quantity * oi.unit_price), 2) AS revenue\n  FROM orders o\n  JOIN order_items oi ON oi.order_id = o.id\n  WHERE o.status = 'completed'\n  GROUP BY month\n)\nSELECT month, revenue,\n       -- the running sum over the ordered months\n       AS running_revenue\nFROM monthly\nORDER BY month;",
+      solution:"WITH monthly AS (\n  SELECT strftime('%Y-%m-01', o.ordered_at) AS month,\n         ROUND(SUM(oi.quantity * oi.unit_price), 2) AS revenue\n  FROM orders o\n  JOIN order_items oi ON oi.order_id = o.id\n  WHERE o.status = 'completed'\n  GROUP BY month\n)\nSELECT month, revenue,\n       ROUND(SUM(revenue) OVER (ORDER BY month), 2) AS running_revenue\nFROM monthly\nORDER BY month;",
+      hints:['The window runs over the already-grouped month list, so one row per month is still the grain.','<span class="kbd-inline">SUM(revenue) OVER (ORDER BY month)</span> is the running total; the outer <span class="kbd-inline">ROUND(..., 2)</span> is what keeps float noise out of the result.','If the months could repeat, the default <span class="kbd-inline">RANGE</span> frame would include every peer of the current row \u2014 an explicit <span class="kbd-inline">ROWS BETWEEN UNBOUNDED PRECEDING AND CURRENT ROW</span> says which one you mean.'],
+      contract:{columns:['month','revenue','running_revenue'], column_order:'exact', row_order:'exact'},
+      checks:[
+        {label:'Groups revenue by month first', code:'GROUPING_MISSING', test:function(s){ return /group\s+by[\s\S]*month/i.test(s); }},
+        {label:'Sums over the ordered months', code:'WINDOW_MISSING', test:function(s){ return /sum\s*\(\s*revenue\s*\)\s*over\s*\(\s*order\s+by/i.test(s); }},
+        {label:'Months ascending', code:'ROW_ORDER_MISMATCH', test:function(s){ return /order\s+by[\s\S]*month/i.test(s); }}
+      ],
+      result:{columns:['month','revenue','running_revenue'], rows:[['2026-01-01',2132.55,2132.55],['2026-02-01',2311.07,4443.62],['2026-03-01',2456.4,6900.02],['2026-04-01',1803.62,8703.64],['2026-05-01',1537.95,10241.59]]}}
+  ]},
+
+{ id:'x4', n:4, title:'Dates and intervals without types', kind:'Core skill', minutes:15, dialect:'sqlite',
+  summary:'DATE literals and INTERVAL arithmetic do not exist, months normalise instead of clamping, and generate_series is not in the engine.',
+  objectives:['Do date arithmetic with modifier strings','Explain why the 31st plus a month is not the 28th','Replace generate_series with a recursive CTE'],
+  blocks:[
+    {type:'syntax', sql:"SELECT date('2026-01-31', '+1 month')                     AS naive,\n       date('2026-01-31', '+1 month', 'start of month') AS normalised;", note:'The port bug in two values: interval arithmetic is string normalisation, so a month end rolls over rather than clamping. PostgreSQL returns 2026-02-28 for both.'},
+    {type:'example', id:'ex.x4.demo', sql:"SELECT date('2026-01-31', '+1 month')                                     AS naive,\n       date('2026-01-31', '+1 month', 'start of month')                   AS normalised,\n       CAST(julianday('2026-02-01') - julianday('2026-01-01') AS INTEGER) AS jan_days;", note:'Thirty-one days between January and February, and the month roll normalised back to the first. julianday() is the dialect\u2019s day arithmetic: a difference of two Julian day numbers.',
+      result:{columns:['naive','normalised','jan_days'], rows:[['2026-03-03','2026-03-01',31]]}},
+    {type:'exercise', id:'ex.x4.1',
+      prompt:'generate_series does not exist, so build the month spine with a recursive CTE: return every month from January to June 2026 as month and how many orders were placed in it as orders, keeping the month that has none. Months ascending.',
+      starter:"WITH RECURSIVE months(m) AS (\n  SELECT '2026-01-01'\n  UNION ALL\n  SELECT date(m, '+1 month') FROM months WHERE m < '2026-06-01'\n)\nSELECT months.m AS month,\n       -- count the orders in this month, keeping empty months\n       AS orders\nFROM months\nLEFT JOIN orders ON -- the same month\nGROUP BY months.m\nORDER BY months.m;",
+      solution:"WITH RECURSIVE months(m) AS (\n  SELECT '2026-01-01'\n  UNION ALL\n  SELECT date(m, '+1 month') FROM months WHERE m < '2026-06-01'\n)\nSELECT months.m AS month,\n       COUNT(orders.id) AS orders\nFROM months\nLEFT JOIN orders\n  ON strftime('%Y-%m', orders.ordered_at) = strftime('%Y-%m', months.m)\nGROUP BY months.m\nORDER BY months.m;",
+      hints:['<span class="kbd-inline">LEFT JOIN</span> is what keeps the spine month that has no orders.','Match the months with <span class="kbd-inline">strftime(\'%Y-%m\', ...)</span> on both sides.','Count <span class="kbd-inline">orders.id</span>, not <span class="kbd-inline">*</span>, so a month with no orders counts zero rather than one.'],
+      contract:{columns:['month','orders'], column_order:'exact', row_order:'exact'},
+      checks:[
+        {label:'Builds the spine recursively', code:'CTE_MISSING', test:function(s){ return /with\s+recursive/i.test(s) && /union\s+all/i.test(s); }},
+        {label:'Steps a month at a time', code:'VALUE_MISMATCH', test:function(s){ return /date\s*\([^)]*\+\s*1\s+month/i.test(s); }},
+        {label:'Keeps the month with no orders', code:'JOIN_MISSING', test:function(s){ return /left\s+join/i.test(s); }},
+        {label:'Months ascending', code:'ROW_ORDER_MISMATCH', test:function(s){ return /order\s+by[\s\S]*month/i.test(s); }}
+      ],
+      result:{columns:['month','orders'], rows:[['2026-01-01',16],['2026-02-01',19],['2026-03-01',18],['2026-04-01',18],['2026-05-01',9],['2026-06-01',0]]}}
+  ]},
+
+{ id:'x5', n:5, title:'Booleans, numerics and the value contract', kind:'Core skill', minutes:13, dialect:'sqlite',
+  summary:'TRUE is the integer 1, a NUMERIC column has no fixed scale, REAL arithmetic puts float noise in a result, and serial becomes the rowid.',
+  objectives:['Say what TRUE, FALSE and typeof(TRUE) are','Explain why a money column has no fixed scale','Round a floating sum before it becomes a contract','Port serial to INTEGER PRIMARY KEY and say what AUTOINCREMENT adds'],
+  blocks:[
+    {type:'syntax', sql:'SELECT TRUE AS t, FALSE AS f, typeof(TRUE) AS t_stored;', note:'Both literals parse and neither is a boolean. PostgreSQL returns t/f and calls the column boolean; here TRUE is the integer 1, and a STRICT table will not let you call the column BOOLEAN either.'},
+    {type:'example', id:'ex.x5.demo', sql:"SELECT SUM(1.0 * oi.quantity * oi.unit_price)          AS raw_revenue,\n       ROUND(SUM(1.0 * oi.quantity * oi.unit_price), 2) AS rounded_revenue\nFROM orders o\nJOIN order_items oi ON oi.order_id = o.id\nWHERE o.status = 'completed'\n  AND strftime('%Y-%m', o.ordered_at) = '2026-04';", note:'The same April revenue as a PostgreSQL numeric and as a SQLite REAL: the exact decimal, and the binary float a JSON number cannot shorten. Rounding at the edge is what makes the value a contract instead of an artifact.',
+      result:{columns:['raw_revenue','rounded_revenue'], rows:[[1803.6200000000001,1803.62]]}},
+    {type:'exercise', id:'ex.x5.1',
+      prompt:'Count the products by active flag and price the stock in one row: active_products, inactive_products and stock_value \u2014 SUM(price * stock) rounded to two decimals.',
+      starter:"SELECT SUM(CASE WHEN active     THEN 1 ELSE 0 END) AS active_products,\n       -- the inactive products\n       AS inactive_products,\n       -- the stock value, rounded\n       AS stock_value\nFROM products;",
+      solution:"SELECT SUM(CASE WHEN active     THEN 1 ELSE 0 END) AS active_products,\n       SUM(CASE WHEN NOT active THEN 1 ELSE 0 END) AS inactive_products,\n       ROUND(SUM(price * stock), 2) AS stock_value\nFROM products;",
+      hints:['<span class="kbd-inline">active</span> holds 1 or 0, so it is already a truth value to <span class="kbd-inline">CASE WHEN</span>.','<span class="kbd-inline">ROUND(SUM(price * stock), 2)</span> keeps a floating sum from arriving with more digits than a money column would have.'],
+      contract:{columns:['active_products','inactive_products','stock_value'], column_order:'exact', row_order:'ignored'},
+      checks:[
+        {label:'Counts both flags in one pass', code:'AGGREGATION_MISSING', test:function(s){ return (s.match(/sum\s*\(\s*case/gi) || []).length >= 2; }},
+        {label:'Averages nothing and rounds the money', code:'VALUE_MISMATCH', test:function(s){ return /round\s*\(\s*sum\s*\(\s*price\s*\*\s*stock/i.test(s); }}
+      ],
+      result:{columns:['active_products','inactive_products','stock_value'], rows:[[19,1,24949.6]]}}
+  ]},
+
+{ id:'x6', n:6, title:'Users, schemas and permissions do not exist', kind:'Orientation', minutes:12, dialect:'sqlite',
+  summary:'No roles, no GRANT, no search_path and no second namespace: one file, one catalog, and access decided by the host.',
+  objectives:['Name the PostgreSQL identity objects SQLite lacks','Read the whole catalog from pragma_table_list','Say who enforces read-only when there is no privilege model','List the constructs with no SQLite port at all'],
+  blocks:[
+    {type:'syntax', sql:"SELECT name, type, ncol, wr, strict\nFROM pragma_table_list\nWHERE schema = 'main'\nORDER BY name;", note:'information_schema.tables, pg_class and the shell\u2019s \\dt collapse into one table-valued pragma whose schema column only ever answers main. wr and strict are the WITHOUT ROWID and STRICT flags, per table.'},
+    {type:'example', id:'ex.x6.demo', sql:"SELECT name, type, ncol, wr, strict\nFROM pragma_table_list\nWHERE schema = 'main'\nORDER BY name;", note:'Six rows: the five dataset tables plus sqlite_schema itself, which the catalog lists like any other table. Nothing is qualified by a schema name, because there is only one namespace.',
+      result:{columns:['name','type','ncol','wr','strict'], rows:[['customers','table',5,0,0],['dataset_meta','table',2,0,0],['order_items','table',5,0,0],['orders','table',4,0,0],['products','table',6,0,0],['sqlite_schema','table',5,0,0]]}},
+    {type:'exercise', id:'ex.x6.1',
+      prompt:'Count the file\u2019s user objects: the number of dataset tables as tables and the number of indexes as indexes, leaving out SQLite\u2019s own catalog table.',
+      starter:"SELECT (SELECT COUNT(*) FROM sqlite_master\n        WHERE type = 'table' AND -- not the catalog itself\n       ) AS tables,\n       (SELECT COUNT(*) FROM sqlite_master\n        WHERE -- indexes only\n       ) AS indexes;",
+      solution:"SELECT (SELECT COUNT(*) FROM sqlite_master\n        WHERE type = 'table' AND name NOT LIKE 'sqlite_%') AS tables,\n       (SELECT COUNT(*) FROM sqlite_master\n        WHERE type = 'index') AS indexes;",
+      hints:['<span class="kbd-inline">sqlite_master</span> holds tables, indexes and views in one namespace; <span class="kbd-inline">type</span> tells them apart.','The catalog table is named <span class="kbd-inline">sqlite_schema</span>, so the <span class="kbd-inline">sqlite_%</span> pattern leaves it out.'],
+      contract:{columns:['tables','indexes'], column_order:'exact', row_order:'ignored'},
+      checks:[
+        {label:'Counts the tables', code:'VALUE_MISMATCH', test:function(s){ return /type\s*=\s*'table'/i.test(s); }},
+        {label:'Counts the indexes', code:'VALUE_MISMATCH', test:function(s){ return /type\s*=\s*'index'/i.test(s); }},
+        {label:'Leaves out the catalog itself', code:'FILTER_MISSING', test:function(s){ return /name\s+not\s+like\s+'sqlite_%'|name\s*<>\s*'sqlite_schema'/i.test(s); }}
+      ],
+      result:{columns:['tables','indexes'], rows:[[5,5]]}}
+  ]},
+
+{ id:'x7', n:7, title:'Porting the capstone', kind:'Core skill', minutes:17, dialect:'sqlite',
+  summary:'The m8 capstone rebuilt in SQLite: DATE_TRUNC becomes strftime, the CTE chain survives intact, and the result keeps its shape with SQLite values.',
+  objectives:['Translate a four-stage CTE chain from PostgreSQL to SQLite','Keep the grain check and the tie-break while porting','Re-check the values, not just the syntax, after the port'],
+  blocks:[
+    {type:'syntax', sql:"WITH ranked AS (\n    SELECT month, category, net_revenue, buyers,\n           ROW_NUMBER() OVER (PARTITION BY month ORDER BY net_revenue DESC, category) AS rn\n    FROM by_cat\n)\nSELECT month, category, net_revenue, buyers\nFROM ranked\nWHERE rn = 1\nORDER BY month;", note:'The final stage of the capstone, unchanged: the window is identical. Only the things that name a type or a date moved \u2014 DATE_TRUNC to strftime, and ::date to nothing at all.'},
+    {type:'example', id:'ex.x7.demo', sql:"WITH lines AS (\n    SELECT strftime('%Y-%m-01', o.ordered_at) AS month,\n           p.category,\n           o.customer_id,\n           oi.quantity * oi.unit_price AS revenue\n    FROM orders o\n    JOIN order_items oi ON oi.order_id = o.id\n    JOIN products p ON p.id = oi.product_id\n    WHERE o.status = 'completed'\n)\nSELECT month, category,\n       ROUND(SUM(revenue), 2) AS net_revenue,\n       COUNT(DISTINCT customer_id) AS buyers\nFROM lines\nWHERE month = '2026-01-01'\nGROUP BY month, category\nORDER BY net_revenue DESC;", note:'The aggregation stage for January: the same four categories and buyers as the PostgreSQL capstone, with revenue arriving as a REAL to be rounded at the edge.',
+      result:{columns:['month','category','net_revenue','buyers'], rows:[['2026-01-01','Outdoor',824.4,4],['2026-01-01','Electronics',717.55,3],['2026-01-01','Home',518.6,5],['2026-01-01','Kitchen',72,2]]}},
+    {type:'exercise', id:'ex.x7.1',
+      prompt:'Port the capstone end to end: for each month, the top category by net revenue from completed orders, with its revenue rounded to two decimals and the number of distinct customers who bought in it. Return month, category, net_revenue and buyers, one row per month, months ascending.',
+      starter:"WITH lines AS (\n    SELECT strftime('%Y-%m-01', o.ordered_at) AS month,\n           p.category,\n           o.customer_id,\n           oi.quantity * oi.unit_price AS revenue\n    FROM orders o\n    JOIN order_items oi ON oi.order_id = o.id\n    JOIN products p ON p.id = oi.product_id\n    WHERE o.status = 'completed'\n),\nby_cat AS (\n    SELECT month, category,\n           ROUND(SUM(revenue), 2) AS net_revenue,\n           COUNT(DISTINCT customer_id) AS buyers\n    FROM lines\n    GROUP BY month, category\n)\nSELECT month, category, net_revenue, buyers\nFROM by_cat\n-- one row per month: rank within the month and keep the best\nORDER BY month;",
+      solution:"WITH lines AS (\n    SELECT strftime('%Y-%m-01', o.ordered_at) AS month,\n           p.category,\n           o.customer_id,\n           oi.quantity * oi.unit_price AS revenue\n    FROM orders o\n    JOIN order_items oi ON oi.order_id = o.id\n    JOIN products p ON p.id = oi.product_id\n    WHERE o.status = 'completed'\n),\nby_cat AS (\n    SELECT month, category,\n           ROUND(SUM(revenue), 2) AS net_revenue,\n           COUNT(DISTINCT customer_id) AS buyers\n    FROM lines\n    GROUP BY month, category\n),\nranked AS (\n    SELECT month, category, net_revenue, buyers,\n           ROW_NUMBER() OVER (PARTITION BY month ORDER BY net_revenue DESC, category) AS rn\n    FROM by_cat\n)\nSELECT month, category, net_revenue, buyers\nFROM ranked\nWHERE rn = 1\nORDER BY month;",
+      hints:['Keep the filter in <span class="kbd-inline">lines</span>, the earliest stage, so the business rule lives in one place.','<span class="kbd-inline">ROW_NUMBER()</span> over the month partition, then <span class="kbd-inline">WHERE rn = 1</span> in the next stage \u2014 a window function cannot be filtered in the SELECT that defines it.','<span class="kbd-inline">ORDER BY net_revenue DESC, category</span> is the tie-break: revenue alone would leave a tie to chance, so two runs could disagree.'],
+      contract:{columns:['month','category','net_revenue','buyers'], column_order:'exact', row_order:'exact'},
+      checks:[
+        {label:'Filters to completed orders in the first stage', code:'FILTER_MISSING', test:function(s){ return /status\s*=\s*'completed'/i.test(s); }},
+        {label:'Groups to one row per month and category', code:'GROUPING_MISSING', test:function(s){ return /group\s+by[\s\S]*month\s*,\s*category/i.test(s); }},
+        {label:'Counts distinct buyers', code:'AGGREGATION_MISSING', test:function(s){ return /count\s*\(\s*distinct\s+customer_id\s*\)/i.test(s); }},
+        {label:'Ranks within each month and keeps one row', code:'WINDOW_MISSING', test:function(s){ return /row_number\s*\(\s*\)\s*over\s*\(\s*partition\s+by\s+month/i.test(s) && /rn\s*=\s*1/i.test(s); }},
+        {label:'Ties broken by category', code:'WINDOW_ORDER_MISSING', test:function(s){ return /order\s+by[\s\S]*net_revenue\s+desc\s*,\s*category/i.test(s); }}
+      ],
+      result:{columns:['month','category','net_revenue','buyers'], rows:[['2026-01-01','Outdoor',824.4,4],['2026-02-01','Electronics',891.5,4],['2026-03-01','Electronics',868.05,5],['2026-04-01','Electronics',708.55,4],['2026-05-01','Outdoor',589,3]]}}
+  ]}
+];
+
+/* `dataset` names the workspace a course's SQL runs against, the same way
+   `dialect` names the engine, and for the same reason: the perf course states
+   numbers ("customer 7 has 184 orders", "10 000 orders, 20 000 order items")
+   that only exist in the perf fixture, so every cell in the course has to run
+   there. It defaults to `commerce`; `web/src/lib/dataset.ts` is the only
+   reader, and scripts/content-audit.mjs fails if a course names a dataset the
+   app cannot serve or an exercise carries a perf contract outside one. */
+/* Every course authored before M6 teaches PostgreSQL, and each says so once
+   here rather than on each of its chapters (design §15 D15): a chapter that
+   teaches another engine overrides it. The value is machine-checked against the
+   closed dialect set — `web/src/lib/dialect.ts` is the only reader, and
+   `scripts/content-audit.mjs` fails if a course or chapter ever carries a
+   dialect the app cannot run. */
+var COURSES: Course[] = [
+  { id:'sql-analytics', title:'SQL Analytics in the Real World', domain:'Commerce & retail', level:'Intermediate', minutes:120,
+    source:'created', enrolled:true, built:true, dialect:'postgresql', modules:MODULES,
+    blurb:'Go beyond basic aggregation: revenue reports, ranking, cohort retention and query reasoning on one realistic commerce dataset.' },
+  { id:'joins', title:'Joins without guesswork', domain:'Commerce & retail', level:'Beginner → intermediate', minutes:75,
+    source:'library', enrolled:true, built:true, dialect:'postgresql', modules:JOINS_MODULES,
+    blurb:'Understand join behaviour through data: unmatched rows, duplicate keys, NULLs and the grain trap that inflates every total.' },
+  { id:'plans', title:'PostgreSQL query plans', domain:'Query tuning', level:'Intermediate', minutes:90,
+    source:'library', enrolled:true, built:true, dialect:'postgresql', dataset:'perf', modules:PLANS_MODULES,
+    blurb:'Read EXPLAIN ANALYZE, understand index scans and selectivity, and reason about joins and row estimates.' },
+  { id:'subqueries', title:'Subqueries and set operations', domain:'Commerce & retail', level:'Intermediate', minutes:70,
+    source:'library', enrolled:true, built:true, dialect:'postgresql', modules:SUBQUERIES_MODULES,
+    blurb:'Use one query as the input to another: scalar and list subqueries, correlated EXISTS, the NOT IN NULL trap, and set operations that compare whole result sets.' },
+  { id:'foundations', title:'SQL Foundations', domain:'Commerce & retail', level:'Beginner', minutes:100,
+    source:'library', enrolled:true, built:true, dialect:'postgresql', modules:FOUNDATIONS_MODULES,
+    blurb:'The clauses underneath every query: projection and DISTINCT, WHERE and boolean precedence, ORDER BY with LIMIT and OFFSET, NULL, IN/BETWEEN/LIKE, CASE, and aggregation with HAVING.' },
+  { id:'sqlite-essentials', title:'SQLite Essentials', domain:'SQLite', level:'Beginner \u2192 intermediate', minutes:99,
+    source:'library', enrolled:true, built:true, dialect:'sqlite', modules:SQLITE_ESSENTIALS_MODULES,
+    blurb:'The engine on its own terms: a database that is a file, storage classes and type affinity, the rowid, dates as ISO-8601 text, LIKE and GLOB, reading EXPLAIN QUERY PLAN, and an honest account of what SQLite cannot do.' },
+  { id:'sqlite-in-production', title:'SQLite in Production', domain:'SQLite', level:'Intermediate \u2192 advanced', minutes:100,
+    source:'library', enrolled:true, built:true, dialect:'sqlite', modules:SQLITE_IN_PRODUCTION_MODULES,
+    blurb:'The parts of SQLite that surprise application developers: one writer and WAL, the pragmas that are per-connection, STRICT tables, foreign keys that do not fire by default, JSON and generated columns, schema changes with user_version, and shipping the file.' },
+  { id:'postgres-to-sqlite', title:'Postgres to SQLite', domain:'SQLite', level:'Intermediate \u2192 advanced', minutes:100,
+    source:'library', enrolled:true, built:true, dialect:'sqlite', modules:POSTGRES_TO_SQLITE_MODULES,
+    blurb:'A translation course: :: becomes CAST, DATE_TRUNC becomes strftime, DISTINCT ON becomes a window, INTERVAL becomes date modifiers, numeric becomes REAL, serial becomes the rowid — plus the short honest list of PostgreSQL constructs that have no SQLite port at all.' }
+];
+
+
+export { TABLES, MODULES, JOINS_MODULES, SUBQUERIES_MODULES, FOUNDATIONS_MODULES, PLANS_MODULES, COURSES };
+export { SQLITE_ESSENTIALS_MODULES, SQLITE_IN_PRODUCTION_MODULES, POSTGRES_TO_SQLITE_MODULES };

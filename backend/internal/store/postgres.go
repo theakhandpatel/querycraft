@@ -66,6 +66,69 @@ CREATE TABLE IF NOT EXISTS app.events (
     created_at timestamptz NOT NULL DEFAULT now(),
     PRIMARY KEY (user_id, id)
 );
+
+/* Generated challenges (M4). The status column is 'active' only for a challenge that
+ * passed every pipeline stage; the outcome column is the evidence captured at
+ * activation, kept beside the artifact so the two cannot drift. There is no
+ * foreign key to app.users: a challenge generated before sign-in is still a
+ * valid artifact, and owner_id records who asked for it when there was one. */
+CREATE TABLE IF NOT EXISTS app.challenges (
+    id         text PRIMARY KEY,
+    owner_id   text NOT NULL DEFAULT '',
+    status     text NOT NULL DEFAULT 'active',
+    artifact   jsonb NOT NULL,
+    outcome    jsonb NOT NULL,
+    created_at timestamptz NOT NULL DEFAULT now()
+);
+CREATE INDEX IF NOT EXISTS challenges_created_key ON app.challenges (created_at DESC, id DESC);
+
+/* Generated courses (M7), the multi-chapter counterpart of app.challenges. The
+ * plan is stored whole: the chapters, the markdown and every exercise's
+ * expected rows are one artifact, and the outcome that admitted it sits beside
+ * it so a later reader can see what was measured before the course existed. */
+CREATE TABLE IF NOT EXISTS app.courses (
+    id         text PRIMARY KEY,
+    owner_id   text NOT NULL DEFAULT '',
+    status     text NOT NULL DEFAULT 'active',
+    plan       jsonb NOT NULL,
+    outcome    jsonb NOT NULL,
+    created_at timestamptz NOT NULL DEFAULT now()
+);
+CREATE INDEX IF NOT EXISTS courses_created_key ON app.courses (created_at DESC, id DESC);
+
+/* Patch proposals (M4). approved_at is null until a learner approves, so a
+ * proposal can never be mistaken for something that was applied. */
+CREATE TABLE IF NOT EXISTS app.patches (
+    id           text PRIMARY KEY,
+    challenge_id text NOT NULL DEFAULT '',
+    proposal     jsonb NOT NULL,
+    approved_at  timestamptz,
+    approved_by  text NOT NULL DEFAULT '',
+    created_at   timestamptz NOT NULL DEFAULT now()
+);
+
+/* Agent-run transcripts (the audit trail). One row per generation run: the
+ * conversation the model had, stored as one JSONB array with the run's
+ * attribution beside it. The entries are bounded before they arrive here
+ * (ai.MaxTranscriptBytes / ai.MaxTranscriptEntries), so a runaway run cannot
+ * grow the row without limit, and the whole record is redacted at the seam, so
+ * a credential never reaches this table. owner_id records who asked for the
+ * run; there is no foreign key, for the same reason app.challenges has none: a
+ * run made before sign-in is still a real record. */
+CREATE TABLE IF NOT EXISTS app.runs (
+    id          text PRIMARY KEY,
+    kind        text NOT NULL DEFAULT 'challenge',
+    owner_id    text NOT NULL DEFAULT '',
+    status      text NOT NULL DEFAULT 'failed',
+    entries     jsonb NOT NULL,
+    entry_count integer NOT NULL DEFAULT 0,
+    bytes       integer NOT NULL DEFAULT 0,
+    truncated   boolean NOT NULL DEFAULT false,
+    error       jsonb,
+    started_at  timestamptz NOT NULL DEFAULT now(),
+    finished_at timestamptz NOT NULL DEFAULT now()
+);
+CREATE INDEX IF NOT EXISTS runs_owner_started_key ON app.runs (owner_id, started_at DESC, id DESC);
 `
 
 // ErrStaleSchema is returned when the metadata database predates the

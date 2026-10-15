@@ -153,6 +153,33 @@ func TestHealth(t *testing.T) {
 	if out["status"] != "ok" {
 		t.Fatalf("status field = %v", out["status"])
 	}
+	// The sign-in hint keys off this boolean, and a gateway that has not been
+	// told otherwise must answer false: the default is "no blank-password
+	// admin is advertised", not "assume one".
+	if out["admin_password_empty"] != false {
+		t.Fatalf("admin_password_empty = %v, want false by default", out["admin_password_empty"])
+	}
+}
+
+// AdminPasswordEmpty is a capability a client reads instead of guessing whether
+// the local-admin hint may be shown. It must be exactly the boolean the gateway
+// was told, and the payload must never carry a password or a hash.
+func TestHealthAdvertisesEmptyAdminPassword(t *testing.T) {
+	s := newTestServer(&fakeExecutor{})
+	s.UseAdminPasswordEmpty(true)
+
+	w := do(t, s, http.MethodGet, "/health", "")
+	var out map[string]any
+	mustDecode(t, w, &out)
+	if out["admin_password_empty"] != true {
+		t.Fatalf("admin_password_empty = %v, want true", out["admin_password_empty"])
+	}
+	body := strings.ToLower(w.Body.String())
+	for _, secret := range []string{"password_hash", "passwordhash", "$2a$", "$2b$", "$2y$"} {
+		if strings.Contains(body, secret) {
+			t.Fatalf("/health body carries a credential-shaped value %q: %s", secret, w.Body.String())
+		}
+	}
 }
 
 func TestCapabilities(t *testing.T) {
@@ -473,15 +500,12 @@ func TestQueryCannotRaiseServerCap(t *testing.T) {
 	}
 }
 
-func TestGenerateCourse(t *testing.T) {
-	w := do(t, newTestServer(&fakeExecutor{}), http.MethodPost, "/courses/generate", `{"title":"SQL Joins","exercises":9,"steps":["a","b","c"]}`)
-	if w.Code != http.StatusCreated {
-		t.Fatalf("status=%d", w.Code)
-	}
-	var out map[string]any
-	mustDecode(t, w, &out)
-	if out["chapters"].(float64) != 3 || out["datasetVersion"].(float64) != 1 {
-		t.Fatalf("unexpected: %v", out)
+func TestGenerateCourseRequiresASession(t *testing.T) {
+	// Generation is owner-scoped like every other write, so an anonymous caller
+	// is refused before any work starts.
+	w := do(t, newTestServer(&fakeExecutor{}), http.MethodPost, "/courses/generate", `{"title":"SQL Joins"}`)
+	if w.Code != http.StatusUnauthorized {
+		t.Fatalf("status=%d, want 401", w.Code)
 	}
 }
 

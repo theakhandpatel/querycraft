@@ -3,8 +3,10 @@ import Icon from '../ui/Icon';
 import SqlCell from '../SqlCell';
 import Markdown from '../ui/Markdown';
 import { useStore } from '../../state/store';
+import DialectBadge, { useChapterDialect } from '../ui/DialectBadge';
 import { chapterOutline, lessonPercent, activeModules } from '../../lib/model';
 import { accrueStudyTime } from '../../lib/progress';
+import { scrollToNode } from '../../lib/scroll';
 import type { Block, ModalName } from '../../types';
 
 type OutlineBlock = Block | { type: 'list'; items: string[] };
@@ -16,6 +18,10 @@ export default function LessonScreen() {
   const m = mods[activeLesson] || mods[0];
   const mainRef = useRef(null);
   const pct = lessonPercent(course, progress);
+  /* M6 step 7: the dialect this chapter runs on, as the header badge. The
+     choice store is subscribed inside the hook, so a switch in any cell is
+     reflected here without a remount. */
+  const dialect = useChapterDialect(m, course);
 
   useEffect(() => {
     const ws = document.querySelector('.workspace');
@@ -78,8 +84,7 @@ export default function LessonScreen() {
   const outline = chapterOutline({ ...m, blocks });
 
   function jumpToSection(gi: number) {
-    const el = document.getElementById(`sec-${m.id}-${gi}`);
-    if (el) el.scrollIntoView({ behavior: 'smooth', block: 'start' });
+    scrollToNode(document.getElementById(`sec-${m.id}-${gi}`));
   }
 
   function addSection() {
@@ -132,7 +137,12 @@ export default function LessonScreen() {
         <div className="lessonheading">
           <div>
             <div className="eyebrow">Chapter {m.n} · {m.kind}</div>
-            <h1>{m.title}</h1>
+            {/* The dialect sits beside the chapter title, one word, in the same
+                pill language as every other metadata chip. */}
+            <div className="chaptertitle">
+              <h1>{m.title}</h1>
+              <DialectBadge dialect={dialect} />
+            </div>
             <p>{m.summary}</p>
             <ul className="objectives">
               {(m.objectives || []).map((o, i) => (
@@ -215,7 +225,15 @@ export default function LessonScreen() {
                         {b.note ? <div className="blocknote">{b.note}</div> : null}
                       </React.Fragment>
                     );
-                  if (b.type === 'example' || b.type === 'exercise') return <SqlCell key={bi} block={b} module={m} course={course} />;
+                  /* Keyed by the block's own id, never by its position. A cell
+                     holds editable state (the draft, the result, the plan), and
+                     a positional key made React reuse the chapter 1 cell when
+                     chapter 3 has a cell in the same slot: the editor then
+                     showed the previous chapter's SQL under this exercise's id,
+                     so a learner could run and be graded on a query they never
+                     wrote. Block ids carry their module prefix and are unique
+                     across the curriculum. */
+                  if (b.type === 'example' || b.type === 'exercise') return <SqlCell key={b.id ?? bi} block={b} module={m} course={course} />;
                   return null;
                 })}
               </React.Fragment>

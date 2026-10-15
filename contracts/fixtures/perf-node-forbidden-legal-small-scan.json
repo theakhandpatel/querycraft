@@ -1,0 +1,105 @@
+{
+  "note": "The same rule as the forbidden case, but the relation the planner expects to read is 12 rows: a sequential scan of a 12-row dimension table is the correct plan and stays legal.",
+  "contract": {
+    "engine": "postgresql",
+    "forbid_nodes": [
+      {
+        "node_type": "Seq Scan",
+        "relation": "currencies",
+        "above_plan_rows": 1000
+      }
+    ]
+  },
+  "bundle": {
+    "status": "succeeded",
+    "analyze": false,
+    "timing_precision": "estimate",
+    "engine": "postgresql",
+    "plan": {
+      "Node Type": "Seq Scan",
+      "Plan Rows": 12,
+      "Total Cost": 1.09,
+      "Relation Name": "currencies",
+      "Alias": "currencies"
+    },
+    "summary": {
+      "node_count": 1,
+      "node_types": [
+        "Seq Scan"
+      ],
+      "relations": [
+        "currencies"
+      ],
+      "indexes_used": [],
+      "seq_scans": [
+        {
+          "relation": "currencies",
+          "plan_rows": 12
+        }
+      ],
+      "index_scans": [],
+      "max_estimated_rows": 12,
+      "plan_rows": 12,
+      "total_cost": 1.09,
+      "nodes": [
+        {
+          "depth": 0,
+          "node_type": "Seq Scan",
+          "relation": "currencies",
+          "alias": "currencies",
+          "index": null,
+          "join_type": null,
+          "parent_relationship": null,
+          "estimated_rows": 12,
+          "estimated_cost": 1.09,
+          "actual_rows": null,
+          "actual_time_ms": null,
+          "loops": null,
+          "buffers_read": null,
+          "filter": null,
+          "index_condition": null,
+          "sort_key": null,
+          "warnings": []
+        }
+      ]
+    },
+    "environment": {
+      "engine": "postgresql",
+      "engine_version": "18.3",
+      "scale_factor": 1,
+      "dataset": "perf",
+      "row_counts": {
+        "currencies": 12
+      },
+      "indexes": [
+        {
+          "relation": "orders",
+          "name": "orders_customer_id_idx",
+          "definition": "CREATE INDEX orders_customer_id_idx ON dataset.orders USING btree (customer_id)"
+        },
+        {
+          "relation": "orders",
+          "name": "orders_status_idx",
+          "definition": "CREATE INDEX orders_status_idx ON dataset.orders USING btree (status)"
+        }
+      ],
+      "settings": {
+        "random_page_cost": "4",
+        "seq_page_cost": "1",
+        "effective_cache_size": "4GB",
+        "work_mem": "16MB",
+        "enable_seqscan": "on",
+        "enable_indexscan": "on"
+      }
+    },
+    "warnings": [],
+    "duration_ms": 1.2,
+    "statement": null,
+    "request_id": null,
+    "error": null
+  },
+  "expected_outcome": {
+    "passed": true,
+    "failures": []
+  }
+}

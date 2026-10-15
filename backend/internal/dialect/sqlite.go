@@ -1,0 +1,220 @@
+package dialect
+
+import (
+	_ "embed"
+	"encoding/hex"
+	"fmt"
+	"math"
+	"strconv"
+	"strings"
+	"time"
+)
+
+// sqliteProfileJSON is the SQLite dialect profile.
+//
+// contracts/dialects/sqlite.json is the source of truth. A go:embed pattern
+// cannot contain "..", so the Go side embeds a byte-identical mirror and
+// TestEmbeddedProfileMatchesContract fails if the two ever differ. The same
+// arrangement keeps web/src/api/dataset.ts honest for the dataset SQL.
+//
+//go:embed sqlite.json
+var sqliteProfileJSON []byte
+
+// sqliteProfile is the decoded embedded profile. A profile that does not decode
+// is a build-time bug, not a runtime condition, so this panics rather than
+// handing every caller an error it cannot act on.
+var sqliteProfile = mustDecode(sqliteProfileJSON)
+
+func mustDecode(raw []byte) Profile {
+	p, err := Decode(raw)
+	if err != nil {
+		panic("dialect: embedded SQLite profile is invalid: " + err.Error())
+	}
+	return p
+}
+
+// SQLite returns the embedded SQLite profile.
+func SQLite() Profile { return sqliteProfile }
+
+// ClassifyError classifies err with the SQLite profile. It is a package
+// function as well as a method because SQLite is the only engine-error profile
+// this milestone ships; a later adapter that already holds a Profile should call
+// Profile.ClassifyError.
+//
+// The message it reads must be SQLite's own sentence — what sqlite3_errmsg
+// returns — because that is what every pattern in the profile was written
+// against. A driver renders that sentence with framing of its own (modernc's
+// "SQL logic error: incomplete input (1)", the wasm builds' own wrapper), and the
+// framing is removed by the adapter that knows its driver, one layer down:
+// engine/sqlite.go (sqliteErrorOf) on the Go side, and
+// web/src/api/sqliteProfile.ts (sqliteEngineMessage) in the browser. Unwrapping it
+// here would put a driver's format into a language-neutral profile.
+func ClassifyError(err error) string { return sqliteProfile.ClassifyError(err) }
+
+// ClassifyError returns the closed QueryResult error code for err by matching
+// the profile's message rules in order (first match wins; the profile's last
+// rule is the catch-all).
+//
+// SQLite has no SQLSTATE. The engine reports a primary result code such as
+// SQLITE_CONSTRAINT(19) plus a message, and the message is what distinguishes a
+// syntax error from a missing table, so classification is by message pattern and
+// every pattern has a case in dialect_test.go. A nil error has no code: it
+// returns "".
+//
+// The rules mean what they say only for the engine's sentence. Four of them —
+// the equals rules for "incomplete input", "database is locked" and
+// "interrupted", and the prefix rule for "unrecognized token:" — cannot match a
+// framed message at all, which is why the adapter must unwrap first
+// (TestClassifyErrorExpectsTheEnginesSentence records the boundary).
+func (p Profile) ClassifyError(err error) string {
+	if err == nil {
+		return ""
+	}
+	msg := err.Error()
+	for _, rule := range p.ErrorClassification {
+		if rule.matches(msg) {
+			return rule.Code
+		}
+	}
+	return CodeRuntimeError
+}
+
+// matches reports whether a rule's message test holds. The match kinds are the
+// profile's closed set (prefix, contains, equals); TestErrorClassificationShape
+// makes the default branch unreachable by failing on any other value.
+func (r MatchRule) matches(msg string) bool {
+	switch r.Match {
+	case "equals":
+		return msg == r.Pattern
+	case "prefix":
+		return strings.HasPrefix(msg, r.Pattern)
+	default:
+		return strings.Contains(msg, r.Pattern)
+	}
+}
+
+// defaultMaxSafeInteger is 2^53-1: the largest integer a JSON number (an IEEE
+// 754 double) can hold exactly.
+const defaultMaxSafeInteger = int64(1)<<53 - 1
+
+// EncodeValue renders one value the engine handed back as the JSON value a
+// QueryResult row carries.
+//
+// declaredAffinity is the affinity class of the column the value came from. It
+// is accepted deliberately, and deliberately not applied: SQLite applies
+// affinity when a value is *written*, not when it is read, so by the time a
+// driver returns a value its storage class is already fixed. Re-applying the
+// declared affinity would report a value the engine never stored. A TEXT value
+// in a NUMERIC-affinity column therefore stays a string, which is the dynamic
+// typing the dialect must teach (see TestEncodeValueIgnoresAffinity, which runs
+// every class). The parameter is there so the mismatch is visible at the call
+// site; the class is read from the value.
+func (p Profile) EncodeValue(raw any, declaredAffinity string) any {
+	switch v := raw.(type) {
+	case nil:
+		return nil
+	case bool:
+		// No boolean storage class exists: TRUE/FALSE are 1/0 and the domain is
+		// unenforced, so report the integer rather than inventing a boolean.
+		if v {
+			return int64(1)
+		}
+		return int64(0)
+	case int:
+		return p.encodeInt(int64(v))
+	case int8:
+		return p.encodeInt(int64(v))
+	case int16:
+		return p.encodeInt(int64(v))
+	case int32:
+		return p.encodeInt(int64(v))
+	case int64:
+		return p.encodeInt(v)
+	case uint:
+		return p.encodeUint(uint64(v))
+	case uint8:
+		return p.encodeInt(int64(v))
+	case uint16:
+		return p.encodeInt(int64(v))
+	case uint32:
+		return p.encodeInt(int64(v))
+	case uint64:
+		return p.encodeUint(v)
+	case float32:
+		return p.encodeFloat(float64(v))
+	case float64:
+		return p.encodeFloat(v)
+	case string:
+		return v
+	case []byte:
+		return p.encodeBlob(v)
+	case time.Time:
+		// A driver that materialised a time.Time has already lost the stored
+		// text; keep the value a string, in UTC, rather than a host Date.
+		return v.UTC().Format(time.RFC3339)
+	default:
+		return fmt.Sprintf("%v", v)
+	}
+}
+
+// encodeInt reports an integer as a JSON number, or as a decimal string when it
+// is outside the range a JSON number can hold exactly. That is the same rule
+// web/src/api/pglite.ts already applies to PostgreSQL bigint.
+func (p Profile) encodeInt(v int64) any {
+	if max := p.maxSafeInteger(); v > max || v < -max {
+		return strconv.FormatInt(v, 10)
+	}
+	return v
+}
+
+// encodeUint is encodeInt for an unsigned value, which cannot be negative and
+// may not fit an int64.
+func (p Profile) encodeUint(v uint64) any {
+	if v > uint64(p.maxSafeInteger()) {
+		return strconv.FormatUint(v, 10)
+	}
+	return int64(v)
+}
+
+func (p Profile) maxSafeInteger() int64 {
+	if n := p.ValueEncoding.Integer.MaxSafeInteger; n > 0 {
+		return n
+	}
+	return defaultMaxSafeInteger
+}
+
+// encodeFloat reports a REAL as a JSON number, with the profile's named rule for
+// the three values JSON cannot hold. SQLite stores NaN as NULL, so NaN is
+// reported as null — the engine's own answer; the infinities are strings,
+// because a null would hide a value that exists and a number would be wrong.
+func (p Profile) encodeFloat(v float64) any {
+	nonFinite := p.ValueEncoding.Real.NonFinite
+	switch {
+	case math.IsNaN(v):
+		if nonFinite.NaN == "" || nonFinite.NaN == "null" {
+			return nil
+		}
+		return nonFinite.NaN
+	case math.IsInf(v, 1):
+		if nonFinite.PositiveInfinity != "" {
+			return nonFinite.PositiveInfinity
+		}
+		return "Infinity"
+	case math.IsInf(v, -1):
+		if nonFinite.NegativeInfinity != "" {
+			return nonFinite.NegativeInfinity
+		}
+		return "-Infinity"
+	}
+	return v
+}
+
+// encodeBlob reports binary as the profile's prefix plus lowercase hex, the
+// form PostgreSQL bytea already uses, so both dialects agree.
+func (p Profile) encodeBlob(b []byte) string {
+	prefix := p.ValueEncoding.Blob.Prefix
+	if prefix == "" {
+		prefix = `\x`
+	}
+	return prefix + hex.EncodeToString(b)
+}

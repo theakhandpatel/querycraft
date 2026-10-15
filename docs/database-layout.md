@@ -20,6 +20,10 @@ cluster  (one postgres process)
 │   └── schema app                 gateway metadata, never learner-visible
 │       ├── users  sessions         accounts and bearer-token sessions
 │       ├── progress  events         owner-scoped, FK to users(id)
+│       ├── challenges  courses  patches   generated artifacts (M4/M7/M8)
+│       ├── runs                    agent-run transcripts: each generation's
+│       │                           whole conversation, owner-scoped, redacted
+│       │                           and bounded (read via GET /runs)
 │       └── content_docs            (in-browser PGlite mode)
 └── database querycraft_test       ← gated integration tests
     ├── schema dataset

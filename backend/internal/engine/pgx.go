@@ -275,6 +275,14 @@ func (e *PgxExecutor) Close() error {
 	return nil
 }
 
+// ClassifyError implements ErrorClassifier with PostgreSQL's SQLSTATE rules.
+//
+// It answers rather than declining, and it answers with the very table
+// Execute's fallback uses: two copies of the same rules would eventually
+// disagree, and the learner would see one dialect's mistake described two ways
+// depending on which path reached the classifier.
+func (e *PgxExecutor) ClassifyError(err error) (string, bool) { return pgCodeFor(err) }
+
 type pgxRows struct {
 	rows pgx.Rows
 	tx   pgx.Tx

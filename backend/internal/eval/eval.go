@@ -47,6 +47,11 @@ type Setup struct {
 	Dataset       string `json:"dataset"`
 	SchemaVersion int    `json:"schema_version"`
 	SeedVersion   int    `json:"seed_version"`
+	/* Dialect is the engine this exercise's contract was written for. Grading a
+	   statement the *other* dialect produced against it would compare
+	   engine-specific values (a boolean against 0/1, a numeric against text,
+	   a timestamp's rendering) and call a correct answer wrong. */
+	Dialect string `json:"dialect"`
 }
 
 // ExpectedResult is the reference output that rows are compared against.

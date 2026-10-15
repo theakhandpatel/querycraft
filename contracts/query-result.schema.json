@@ -3,7 +3,7 @@
   "$id": "https://querycraft.app/contracts/query-result.schema.json",
   "title": "QueryResult",
   "type": "object",
-  "required": ["status", "columns", "rows", "row_count", "truncated", "duration_ms", "error", "engine"],
+  "required": ["status", "columns", "rows", "row_count", "truncated", "duration_ms", "error", "engine", "dialect"],
   "properties": {
     "status": { "enum": ["succeeded", "failed"] },
     "columns": {
@@ -21,7 +21,7 @@
           "type": "object",
           "required": ["code", "message"],
           "properties": {
-            "code": { "enum": ["EMPTY_QUERY", "QUERY_SYNTAX_ERROR", "QUERY_RUNTIME_ERROR", "QUERY_TIMEOUT", "RESULT_LIMIT_EXCEEDED", "ENVIRONMENT_UNAVAILABLE", "PERSISTENCE_FAILED", "EVALUATION_ERROR"] },
+            "code": { "enum": ["EMPTY_QUERY", "QUERY_SYNTAX_ERROR", "QUERY_RUNTIME_ERROR", "QUERY_TIMEOUT", "RESULT_LIMIT_EXCEEDED", "ENVIRONMENT_UNAVAILABLE", "DIALECT_MISMATCH", "PERSISTENCE_FAILED", "EVALUATION_ERROR"] },
             "message": { "type": "string" },
             "detail": { "type": ["string", "null"] }
           }
@@ -29,6 +29,10 @@
       ]
     },
     "request_id": { "type": ["string", "null"] },
-    "engine": { "type": "string" }
+    "engine": { "type": "string", "description": "The engine that ran the statement, as a human string (e.g. \"PostgreSQL 18.3\")." },
+    "dialect": {
+      "enum": ["postgresql", "sqlite"],
+      "description": "The machine-readable dialect the engine that produced this result belongs to. A chapter declares one dialect; a result that came from another is a DIALECT_MISMATCH refusal, never a silently graded answer."
+    }
   }
 }

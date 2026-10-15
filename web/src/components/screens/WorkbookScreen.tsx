@@ -28,6 +28,9 @@ export default function WorkbookScreen() {
     }
     setSavedRun({ ts, state: 'running' });
     try {
+      /* The workbook is the learner's own scratchpad on the shared commerce
+         workspace: it belongs to no course, so it names no dataset and the
+         adapter's default answers. */
       const res = await s.api.runQuery(sql);
       if (res.status === 'succeeded') {
         setSavedRun({ ts, state: 'done', rows: res.row_count, cols: res.columns.map((c) => c.name) });
@@ -126,7 +129,7 @@ export default function WorkbookScreen() {
                     {n.kind === 'bookmark' ? (
                       <button className="small ghost" style={{ marginLeft: 8 }} onClick={() => s.openBookmark(n.lesson, n.section)}><Icon name="arrow-right" />Go</button>
                     ) : null}
-                    <button className="small ghost" style={{ marginLeft: 8 }} title="Remove from your workbook" onClick={() => s.removeWorkbookItem(n.ts)}><Icon name="x" /></button>
+                    <button className="small ghost" style={{ marginLeft: 8 }} title="Remove from your workbook" aria-label="Remove from your workbook" onClick={() => s.removeWorkbookItem(n.ts)}><Icon name="x" /></button>
                   </span>
                 </div>
               ))
@@ -146,7 +149,7 @@ export default function WorkbookScreen() {
                     Chapter {q.lesson}
                     <button className="small ghost" style={{ marginLeft: 8 }} onClick={() => runSaved(q)}>Run</button>
                     <button className="small ghost" style={{ marginLeft: 8 }} onClick={() => copySaved(q)}>Copy</button>
-                    <button className="small ghost" style={{ marginLeft: 8 }} title="Remove saved query" onClick={() => s.removeSaved(q.ts ?? -1)}><Icon name="x" /></button>
+                    <button className="small ghost" style={{ marginLeft: 8 }} title="Remove saved query" aria-label="Remove saved query" onClick={() => s.removeSaved(q.ts ?? -1)}><Icon name="x" /></button>
                   </span>
                 </div>
                 {savedRun && savedRun.ts === q.ts ? (
