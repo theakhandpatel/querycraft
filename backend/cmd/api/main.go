@@ -215,7 +215,7 @@ func run() int {
 	// cannot be prepared the dialect is not registered at all, so a sqlite
 	// request is refused with DIALECT_MISMATCH instead of being answered by the
 	// wrong engine.
-	if sqliteEnvs, err := httpapi.NewSQLiteEnvironments(sqliteDataDir); err != nil {
+	if sqliteEnvs, err := httpapi.NewSQLiteEnvironmentsWithOptions(sqliteDataDir, sqliteOptionsFromEnv()); err != nil {
 		log.Warn("SQLite dialect unavailable; a request for it will be refused with DIALECT_MISMATCH", "err", err)
 	} else {
 		defer func() {
@@ -224,7 +224,10 @@ func run() int {
 			}
 		}()
 		api.UseSQLite(sqliteEnvs)
-		log.Info("SQLite dialect ready", "root", sqliteEnvs.Root())
+		log.Info("SQLite dialect ready",
+			"root", sqliteEnvs.Root(),
+			"max_accounts", sqliteEnvs.MaxAccounts(),
+			"idle_ttl", sqliteEnvs.IdleTTL().String())
 	}
 
 	// M4 (ADR 0005): the challenge lab is a capability, not an assumption. It is
@@ -426,4 +429,31 @@ func envBool(key string, fallback bool) bool {
 		return false
 	}
 	return fallback
+}
+
+// envDuration reads a Go duration string ("15m", "1h") and keeps the fallback
+// when it is unset or unparseable, so a typo narrows or widens the window rather
+// than disabling the bound.
+func envDuration(key string, fallback time.Duration) time.Duration {
+	v := strings.TrimSpace(os.Getenv(key))
+	if v == "" {
+		return fallback
+	}
+	d, err := time.ParseDuration(v)
+	if err != nil || d <= 0 {
+		return fallback
+	}
+	return d
+}
+
+// sqliteOptionsFromEnv reads the SQLite store's bound and idle window. The cap
+// is a budget on cached pools, not on accounts: an evicted account keeps its
+// file, and its next statement re-opens it, so a deployment with more accounts
+// than QC_SQLITE_MAX_ACCOUNTS is still correct — it just re-opens more often.
+// Zero or an unparseable value keeps the store's own default.
+func sqliteOptionsFromEnv() httpapi.SQLiteOptions {
+	return httpapi.SQLiteOptions{
+		MaxAccounts: envInt("QC_SQLITE_MAX_ACCOUNTS", 0),
+		IdleTTL:     envDuration("QC_SQLITE_IDLE", 0),
+	}
 }
