@@ -37,8 +37,27 @@ The remaining open items, in dependency order:
 | A1 | Release blocker — account-scoped local progress (was: progress bled across accounts on a shared browser) | delegated | **done — verified** |
 | A2 | Release blocker — empty-admin-password exposure (loopback default + refusal on non-loopback + hint only when true) | delegated | **done — verified** |
 | A3 | Release blocker — brittle `audit-shell` (was red on a correct stylesheet) | — | **done — verified** |
-| F2 | Architecture review finding — dialect-aware `POST /environment/reset` (a SQLite chapter's "restore my data" reset PostgreSQL today) | — | **done — verified** |
+| F2 | Architecture review finding — dialect-aware `POST /environment/reset` | — | **done — verified** |
 | F4 | Architecture review finding — SQLite per-account cache has no bound/reaper (unlike `envdb`) | worktree | **done — merged & verified** |
+| F5 | Login throttling (release follow-up: the blank admin address was brute-forceable) | worktree | **done — merged & verified** |
+| F6 | Self-hosted fonts (was a render-blocking third-party `<link>` on an offline-first app) | Luna/Codex | **done — verified** |
+
+**Full end-to-end gates green on the quiet tree (2026-10-16):**
+`make test` (web typecheck + cgo-free + all 24 audits + all 15 Go packages),
+`make verify` (build → one binary serving SPA + API + auth on embedded
+PostgreSQL 18.3: `/health` ok, `/query` 200, anonymous `/progress` 401, admin
+login 200, signup 201, scoped progress 200/200, revoked token 401, SPA served),
+and `make verify-mock` (no database → `/query` 400 `ENVIRONMENT_UNAVAILABLE`,
+auth still enforced) — all pass.
+
+**Open: one rare, unreproduced test flake.** `TestSQLiteResetDoesNotTouchAnotherAccount`
+(a test written here for F2) failed **once** in ~90 runs — as part of a full
+`go test ./...`, 4 assertions in one run — and has not reproduced since under
+isolation, the full tree, real CPU load, shuffled order, or 20× repeated
+`httpapi` runs. Its failure messages now print the whole `QueryResult`
+(`status` + `error`) so the next occurrence names its own cause instead of
+forcing another guessing round. Not claimed fixed; watched, not dismissed, and
+the F4 eviction path (`MaxAccounts` 8) cannot be the cause in a 2-account test.
 
 Items 4 and 5 share `backend/internal/store`, so they run in sequence, not
 in parallel.

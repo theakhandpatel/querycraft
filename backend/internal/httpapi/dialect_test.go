@@ -367,17 +367,23 @@ func TestSQLiteResetDoesNotTouchAnotherAccount(t *testing.T) {
 
 	// Alice's file is restored; Bob's is untouched: one learner's reset is not
 	// another's.
+	//
+	// The failure messages carry the whole QueryResult, not just the number.
+	// This assertion flaked once (a single httpapi run in ~90) and could not be
+	// reproduced since under isolation, the full tree, real CPU load or
+	// shuffled order — so the next occurrence has to name its own cause rather
+	// than force another guessing round.
 	_, aCount := queryOn(t, s, alice, "sqlite", "SELECT count(*) AS n FROM customers")
 	if got := scalar(t, aCount); got != 30 {
-		t.Errorf("alice sees %v customers after her reset, want 30", got)
+		t.Errorf("alice sees %v customers after her reset, want 30 (result: status=%s err=%+v)", got, aCount.Status, aCount.Error)
 	}
 	_, bCount := queryOn(t, s, bob, "sqlite", "SELECT count(*) AS n FROM customers")
 	if got := scalar(t, bCount); got != 31 {
-		t.Errorf("bob sees %v customers, want his 31 — alice's reset touched his file", got)
+		t.Errorf("bob sees %v customers, want his 31 — alice's reset touched his file (result: status=%s err=%+v)", got, bCount.Status, bCount.Error)
 	}
 	_, bNamed := queryOn(t, s, bob, "sqlite", "SELECT count(*) AS n FROM customers WHERE name = 'Bob Only'")
 	if got := scalar(t, bNamed); got != 1 {
-		t.Errorf("bob's own row is gone (%v matches) after alice's reset", got)
+		t.Errorf("bob's own row is gone (%v matches) after alice's reset (result: status=%s err=%+v)", got, bNamed.Status, bNamed.Error)
 	}
 }
 
