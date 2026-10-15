@@ -141,7 +141,11 @@ func run() int {
 	exec := newExecutor(ctx, log, learner)
 	defer exec.Close()
 
-	st := newStore(ctx, log, dsn)
+	st, err := newStore(ctx, log, dsn)
+	if err != nil {
+		log.Error("could not open explicitly selected metadata store", "err", err)
+		return 1
+	}
 	defer st.Close()
 
 	// Seed the local administrator before any request can be served. Accounts
@@ -340,11 +344,24 @@ func newExecutor(ctx context.Context, log *slog.Logger, dsn string) engine.Execu
 	return ex
 }
 
-func newStore(ctx context.Context, log *slog.Logger, dsn string) store.Store {
+func newStore(ctx context.Context, log *slog.Logger, dsn string) (store.Store, error) {
+	adminDSN := os.Getenv("QC_ADMIN_DATABASE_URL")
+	// QC_ADMIN_DATABASE_URL is an explicit request for PostgreSQL metadata.
+	// Otherwise the opt-in selects SQLite independently of the learner's
+	// execution DSN (which is commonly the gateway's embedded PostgreSQL).
+	if adminDSN == "" && strings.EqualFold(env("QC_METADATA", ""), "sqlite") {
+		defaultPath := filepath.Join(filepath.Dir(env("QC_PG_DATA", localdb.DefaultDataDir("")+"/data")), "metadata.sqlite")
+		path := env("QC_METADATA_PATH", defaultPath)
+		sqliteStore, err := store.NewSQLite(ctx, path)
+		if err != nil {
+			return nil, err
+		}
+		return sqliteStore, nil
+	}
 	dsn = env("QC_ADMIN_DATABASE_URL", dsn)
 	if dsn == "" {
 		log.Warn("no metadata database configured; using in-memory progress store")
-		return store.NewMemory()
+		return store.NewMemory(), nil
 	}
 	pg, err := store.NewPostgres(ctx, dsn)
 	if err != nil {
@@ -352,12 +369,12 @@ func newStore(ctx context.Context, log *slog.Logger, dsn string) store.Store {
 			// Degrading to memory here would look like it worked and then lose
 			// every account and snapshot on restart. Say what to do instead.
 			log.Error("the metadata database was created before accounts existed and has no upgrade path; run `make db-reset` (or DROP SCHEMA app CASCADE) and restart; falling back to the in-memory store until then", "err", err)
-			return store.NewMemory()
+			return store.NewMemory(), nil
 		}
 		log.Warn("metadata store unavailable; using in-memory store", "err", err)
-		return store.NewMemory()
+		return store.NewMemory(), nil
 	}
-	return pg
+	return pg, nil
 }
 
 // passwordFromDSN extracts the password a managed DSN already carries, so the
