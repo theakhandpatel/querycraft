@@ -4,11 +4,14 @@ import (
 	"context"
 	"io"
 	"log/slog"
+	"os"
+	"path/filepath"
 	"runtime"
 	"testing"
 	"time"
 
 	"github.com/querycraft/sqlquery/backend/internal/engine"
+	"github.com/querycraft/sqlquery/backend/internal/store"
 )
 
 // isLoopbackAddr decides whether an empty-password administrator is allowed to
@@ -42,6 +45,45 @@ func TestIsLoopbackAddr(t *testing.T) {
 		if isLoopbackAddr(addr) {
 			t.Errorf("isLoopbackAddr(%q) = true, want false", addr)
 		}
+	}
+}
+
+func TestNewStoreSQLiteIsExplicitAndDefaultStaysMemory(t *testing.T) {
+	log := slog.New(slog.NewTextHandler(io.Discard, nil))
+	t.Setenv("QC_ADMIN_DATABASE_URL", "")
+	t.Setenv("QC_METADATA", "")
+	st, err := newStore(context.Background(), log, "")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if st.Kind() != "memory" {
+		t.Fatalf("default kind=%q, want memory", st.Kind())
+	}
+	_ = st.Close()
+
+	path := filepath.Join(t.TempDir(), "nested", "metadata.sqlite")
+	t.Setenv("QC_METADATA", "sqlite")
+	t.Setenv("QC_METADATA_PATH", path)
+	st, err = newStore(context.Background(), log, "postgres://ignored-by-sqlite-selection")
+	if err != nil {
+		t.Fatalf("select sqlite: %v", err)
+	}
+	if _, ok := st.(*store.SQLite); !ok || st.Kind() != "sqlite" {
+		t.Fatalf("selected store=%T kind=%q", st, st.Kind())
+	}
+	if err := st.Close(); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := os.Stat(path); err != nil {
+		t.Fatalf("sqlite file was not created: %v", err)
+	}
+
+	// Explicit selection must fail visibly when its file cannot be opened,
+	// rather than falsely reporting that metadata was made durable in memory.
+	badPath := t.TempDir() // A directory cannot be opened as the database file.
+	t.Setenv("QC_METADATA_PATH", badPath)
+	if _, err := newStore(context.Background(), log, ""); err == nil {
+		t.Fatal("unopenable explicit SQLite store silently succeeded")
 	}
 }
 

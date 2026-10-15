@@ -340,7 +340,7 @@ func (s *Server) handleDiagnostics(w http.ResponseWriter, r *http.Request) {
 				"max_concurrent": s.cfg.MaxConcurrent,
 			},
 		},
-		"store":    map[string]any{"kind": s.store.Kind(), "persistent": s.store.Kind() == "postgres"},
+		"store":    map[string]any{"kind": s.store.Kind(), "persistent": s.store.Kind() == "postgres" || s.store.Kind() == "sqlite"},
 		"dataset":  map[string]any{"schema": dataset.SchemaName, "version": dataset.DatasetVersion},
 		"progress": map[string]any{"version": ProgressVersion},
 		"metrics":  s.metrics.Names(),

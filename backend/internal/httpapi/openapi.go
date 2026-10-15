@@ -1714,7 +1714,7 @@ const openAPISpec = `{
           "store": {
             "type": "object",
             "properties": {
-              "kind": {"type": "string", "enum": ["postgres", "memory"]},
+              "kind": {"type": "string", "enum": ["postgres", "sqlite", "memory"]},
               "persistent": {"type": "boolean", "description": "False when the gateway is on the in-memory store and a restart would lose accounts and progress."}
             }
           },

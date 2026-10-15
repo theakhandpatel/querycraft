@@ -134,7 +134,9 @@ echoed back. CORS is open (`Access-Control-Allow-Origin: *`), permits the
 | --- | --- | --- |
 | `QC_ADDR` | `127.0.0.1:8080` | Listen address for the HTTP server. Loopback by default; a non-loopback bind requires `QC_ADMIN_PASSWORD`. |
 | `QC_DATABASE_URL` | _(unset → local server)_ | Learner execution DSN. When unset the gateway starts its own local PostgreSQL (see below). When set (or unreachable) it uses that server. Never an administrative connection. |
-| `QC_ADMIN_DATABASE_URL` | `$QC_DATABASE_URL` | Metadata DSN for accounts, sessions, progress snapshots and events. When unset the in-memory store is used (accounts then vanish on restart). |
+| `QC_ADMIN_DATABASE_URL` | `$QC_DATABASE_URL` | PostgreSQL metadata DSN for accounts, sessions, progress, events, challenges, courses, patches and runs. When set it takes precedence over `QC_METADATA`; when unset, metadata stays in memory unless SQLite is explicitly selected. |
+| `QC_METADATA` | _(unset → current behavior)_ | Set to `sqlite` to store app metadata in SQLite while learner SQL still uses the configured execution engine. If unset, Postgres DSN selection and the in-memory fallback are unchanged. |
+| `QC_METADATA_PATH` | `.data/pg/metadata.sqlite` (derived from `QC_PG_DATA`) | File used when `QC_METADATA=sqlite`; created with its parent directory if absent. |
 | `QC_ADMIN_EMAIL` | `admin@querycraft.local` | Address the seeded default administrator gets. |
 | `QC_ADMIN_PASSWORD` | _(empty)_ | Password for the seeded administrator. Empty means "sign in with a blank password", which is allowed only on a loopback bind; the gateway refuses to start with an empty password on a non-loopback `QC_ADDR`. Existing accounts are never reset. |
 | `QC_ADMIN_NAME` | `Administrator` | Display name for the seeded administrator. |
@@ -199,10 +201,12 @@ The service is designed to run usefully with no database configured.
   `/progress/{course}`, `/events`, `/courses/generate` and
   `/challenges/generate`.
 - With no `QC_ADMIN_DATABASE_URL`, progress and events are kept in an
-  in-memory store that is lost on restart. Set it (or `QC_DATABASE_URL`) to
-  persist them in PostgreSQL. The agent-run transcripts live in the same store
-  (`app.runs`); with generation off, `GET /runs` answers `503` rather than
-  inventing a transcript.
+  in-memory store that is lost on restart unless `QC_METADATA=sqlite` is set.
+  The SQLite file stores app metadata only; learner SQL still requires a
+  PostgreSQL execution database. Alternatively set a metadata/Postgres DSN to
+  persist metadata in PostgreSQL. Agent-run transcripts live in the same store;
+  with generation off, `GET /runs` answers `503` rather than inventing a
+  transcript.
 
 This means the React client always has something to talk to, whether or not a
 database is running.
