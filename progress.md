@@ -247,6 +247,22 @@ Three batches were killed by restarts before this; the fourth is the first to
 land work.
 
 Drive tick (latest): **one live track — item 5, `SQLite metadata store
+(worktree)`** — running (`working`), no pending question. It is now writing in
+earnest: `store/sqlite.go` (251 lines) and `store/sqlite_depot.go` (210 — the
+`ai.Depot` half, correctly split from the interface half) plus boot wiring in
+`cmd/api/main.go`. Two design choices worth recording, both right:
+- an **explicitly selected** SQLite store now returns an error from `newStore`
+  and exits, instead of silently falling back to memory — so a misconfigured
+  metadata store fails loudly rather than appearing to work;
+- selection is `QC_METADATA=sqlite` **only when no metadata DSN is set**, so a
+  configured `QC_ADMIN_DATABASE_URL` continues to select PostgreSQL — Postgres
+  stays the default.
+
+The worktree is transiently non-compiling (`sqlite_depot.go` has an unused
+`encoding/json` import) — mid-write, expected, and not touched since the agent
+owns that branch. Main checkout clean.
+
+Drive tick (previous): **one live track — item 5, `SQLite metadata store
 (worktree)`** — running (`working`), no pending question. It has started
 writing: `backend/internal/store/sqlite.go` (253 lines) now exists in the
 worktree, using `database/sql` over `modernc.org/sqlite` directly (not the raw
