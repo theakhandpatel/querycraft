@@ -16,6 +16,12 @@ function describeAuthError(e: unknown): string {
       return 'That email and password do not match.';
     case 'AUTH_EMAIL_TAKEN':
       return 'That email already has an account. Try signing in instead.';
+    case 'AUTH_RATE_LIMITED':
+      /* The gateway throttles failed sign-ins per address+account. The copy has
+         to say what happened and what to do, because "email or password is
+         incorrect" would be a lie — the credentials may be fine, the caller is
+         simply out of attempts for a moment. */
+      return 'Too many failed sign-ins. Wait a few minutes and try again.';
     case 'AUTH_INVALID_INPUT':
       return err?.message || 'Check the email, name, and password and try again.';
     case 'AUTH_UNAVAILABLE':
