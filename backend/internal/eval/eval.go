@@ -263,10 +263,3 @@ func comparisonChecks(cmp Comparison, contract Contract) []CheckResult {
 	}
 	return out
 }
-
-func primaryCode(codes []string) string {
-	if len(codes) == 0 {
-		return ""
-	}
-	return codes[0]
-}

@@ -31,7 +31,7 @@ The remaining open items, in dependency order:
 | 1 | Agent-run audit trail (transcripts: owner-scoped, redacted, bounded, over HTTP) | delegated | **done — verified** |
 | 2 | Design craft pass on `web/` (Impeccable) + generated `PRODUCT.md`/`DESIGN.md` | delegated | **done — verified** |
 | 3 | `exercise_count` unsatisfiable request (a request for fewer exercises than chapters can never be satisfied) | delegated | **done — verified** |
-| 4 | Backend simplification pass in `internal/**` — verify what (if anything) landed; close the track | — | **todo** |
+| 4 | Backend simplification pass in `internal/**` — verify what (if anything) landed; close the track | — | **done — verified** |
 | 5 | App metadata → SQLite (users/sessions/progress/events/courses/challenges/patches/transcripts), PostgreSQL stays the practice engine | — | **todo** (owner-raised; lands after 4, which also touches `internal/store`) |
 | 6 | Outline approval — pause after the outline, learner approves or discards, then chapters build | — | **done — verified** (`docs/outline-approval-design.md`) |
 | A1 | Release blocker — account-scoped local progress (was: progress bled across accounts on a shared browser) | delegated | **done — verified** |
@@ -390,6 +390,39 @@ were updated to loopback so the gates still boot (`Makefile:27`
 blank login 200; non-loopback+password → starts, hint false, blank login 401.
 
 Not built (declared out of scope): login throttling. Recommended follow-up.
+
+Item 4 (backend simplification) — **done and verified (2026-10-16).** The
+"McClintock" track from the earlier session never landed anything verifiable, so
+this was done directly with evidence rather than closing it on faith.
+
+Evidence-first scan: no dead **exported** functions in product code; `go build`/
+`vet` clean. Two real findings, both fixed:
+
+- **Dead code:** `eval.primaryCode` (`eval.go:267`) was defined once and called
+  nowhere — orphaned when the evaluator was refactored in M3 (only stale M2-era
+  worktrees still referenced it). Removed.
+- **The duplication the architecture review named (F5-adjacent):**
+  `envdb.Manager.Ensure`/`EnsurePerf` and `Reset`/`ResetPerf` were near-copies,
+  differing only in a cache-key prefix, the template, the database name and the
+  log/error labels — and they had **already drifted** (the perf variant computed
+  its create duration twice). The template builders (`ensureTemplateLocked` /
+  `ensurePerfTemplateLocked`) were likewise copies. Collapsed to one `ensure`,
+  one `reset` and one `ensureTemplateFromLocked`, parameterised by an `envKind`
+  descriptor that makes every per-kind difference a single field. Behaviour is
+  preserved by construction: same keys, same template, same database names, same
+  messages. Net **−38 lines** (`manager.go` 749→~715), and the refactor then
+  orphaned `createIfAbsentLocked`, which was removed too.
+
+Verified: `go build`/`vet`/`gofmt` clean; `go test ./... -count=1` green on all
+15 packages, including the three `envdb` tests against **real PostgreSQL**
+(per-account isolation, idle reaping, and the perf plan environment), and the
+dead-code re-scan is now empty. No contract, schema or wire behaviour changed.
+
+Not touched (deliberately): the reviewer's larger structural items — unifying
+grading into one executable spec (F1) and splitting `store.Store` from
+`ai.Depot` (F6) — are **post-v1** by its own ranking, and F1 means rewriting 175
+authored checks. Item 4 was "close the simplification track", not "do the
+post-v1 refactor early".
 
 Item 6 (outline approval) — **done and verified (2026-10-16).** Verified against
 disk, not the agent's summary: `go build ./...` + `go vet` clean, `gofmt -l`

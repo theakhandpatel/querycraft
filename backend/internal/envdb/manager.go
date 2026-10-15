@@ -191,27 +191,11 @@ func (m *Manager) EnsureTemplate(ctx context.Context) error {
 }
 
 func (m *Manager) ensureTemplateLocked(ctx context.Context) error {
-	var exists bool
-	if err := m.admin.QueryRow(ctx,
-		"SELECT EXISTS (SELECT 1 FROM pg_database WHERE datname = $1)", m.opts.TemplateName,
-	).Scan(&exists); err != nil {
-		return envErr(fmt.Errorf("look up template %q: %w", m.opts.TemplateName, err))
-	}
-	if !exists {
-		m.opts.Log.Info("building challenge template", "template", m.opts.TemplateName)
-		if err := dataset.CreateDatabase(ctx, m.admin, m.opts.TemplateName); err != nil {
-			return envErr(err)
-		}
-		// Writable, not read-only: this template is what every challenge
-		// environment is copied from, and the copy carries its grant set.
-		if err := dataset.LoadWritableIntoTemplate(ctx, m.admin, m.opts.TemplateName, m.opts.LearnerPassword); err != nil {
-			return envErr(err)
-		}
-	}
-	if err := dataset.SealTemplate(ctx, m.admin, m.opts.TemplateName); err != nil {
-		return envErr(err)
-	}
-	return nil
+	// Writable, not read-only: this template is what every challenge
+	// environment is copied from, and the copy carries its grant set.
+	return m.ensureTemplateFromLocked(ctx, m.opts.TemplateName, "challenge", func(ctx context.Context, name string) error {
+		return dataset.LoadWritableIntoTemplate(ctx, m.admin, name, m.opts.LearnerPassword)
+	})
 }
 
 // EnsurePerfTemplate builds and seals the perf template if it is missing, and
@@ -227,21 +211,32 @@ func (m *Manager) EnsurePerfTemplate(ctx context.Context) error {
 }
 
 func (m *Manager) ensurePerfTemplateLocked(ctx context.Context) error {
-	name := m.opts.PerfTemplateName
+	// Writable: the plan lessons ask the learner to add the missing index
+	// and re-run the statement, which only an environment they own can do.
+	return m.ensureTemplateFromLocked(ctx, m.opts.PerfTemplateName, "perf", func(ctx context.Context, name string) error {
+		return dataset.LoadPerfIntoTemplate(ctx, m.admin, name, m.opts.LearnerPassword)
+	})
+}
+
+// ensureTemplateFromLocked builds and seals one template. The challenge and perf
+// templates differ only in their name, their log label and which fixture loads
+// into them, so the create/seal body is shared rather than copied — the two had
+// already drifted once (one computed its create duration twice) and a shared
+// body cannot drift again. The loader is passed in because the fixture is the
+// only genuine difference between the two.
+func (m *Manager) ensureTemplateFromLocked(ctx context.Context, name, label string, load func(context.Context, string) error) error {
 	var exists bool
 	if err := m.admin.QueryRow(ctx,
 		"SELECT EXISTS (SELECT 1 FROM pg_database WHERE datname = $1)", name,
 	).Scan(&exists); err != nil {
-		return envErr(fmt.Errorf("look up perf template %q: %w", name, err))
+		return envErr(fmt.Errorf("look up %s template %q: %w", label, name, err))
 	}
 	if !exists {
-		m.opts.Log.Info("building perf template", "template", name)
+		m.opts.Log.Info("building "+label+" template", "template", name)
 		if err := dataset.CreateDatabase(ctx, m.admin, name); err != nil {
 			return envErr(err)
 		}
-		// Writable: the plan lessons ask the learner to add the missing index
-		// and re-run the statement, which only an environment they own can do.
-		if err := dataset.LoadPerfIntoTemplate(ctx, m.admin, name, m.opts.LearnerPassword); err != nil {
+		if err := load(ctx, name); err != nil {
 			return envErr(err)
 		}
 	}
@@ -261,63 +256,7 @@ func (m *Manager) ensurePerfTemplateLocked(ctx context.Context) error {
 // The entry lives in the same environment map, so the capacity cap, the idle
 // reaper, the metrics and Close see it exactly like any other environment.
 func (m *Manager) EnsurePerf(ctx context.Context, accountID string) (*engine.PgxExecutor, error) {
-	if strings.TrimSpace(accountID) == "" {
-		return nil, errors.New("envdb: empty account id")
-	}
-	m.mu.Lock()
-	defer m.mu.Unlock()
-	if m.closed {
-		return nil, errClosed()
-	}
-
-	key := "perf:" + digest(accountID)
-	if e, ok := m.envs[key]; ok {
-		e.lastUsed = time.Now()
-		return e.exec, nil
-	}
-	if len(m.envs) >= m.opts.MaxEnvironments {
-		return nil, fmt.Errorf("%w: %w (limit %d active)", engine.ErrEnvironmentUnavailable, ErrTooManyEnvironments, m.opts.MaxEnvironments)
-	}
-	if err := m.ensurePerfTemplateLocked(ctx); err != nil {
-		return nil, err
-	}
-
-	database := dataset.EnvironmentDatabaseName("perf_" + digest(accountID)[:32])
-	dsn, err := m.learnerDSN(database)
-	if err != nil {
-		return nil, err
-	}
-
-	start := time.Now()
-	if err := m.createIfAbsentFromLocked(ctx, database, m.opts.PerfTemplateName); err != nil {
-		return nil, err
-	}
-	exec, err := engine.NewPgxExecutorWithConfig(ctx, dsn, engine.PgxConfig{
-		MaxConns: m.opts.MaxConnsPerEnv,
-		MinConns: 1,
-		Writable: true,
-	})
-	if err != nil {
-		return nil, envErr(err)
-	}
-	if err := probeWritable(ctx, exec); err != nil {
-		exec.Close()
-		return nil, envErr(fmt.Errorf("plan environment %q is not writable: %w", database, err))
-	}
-
-	now := time.Now()
-	m.envs[key] = &environment{
-		account:   accountID,
-		database:  database,
-		exec:      exec,
-		createdAt: now,
-		lastUsed:  now,
-	}
-	m.observeCreate(time.Since(start))
-	m.publishActiveLocked()
-	m.opts.Log.Info("plan environment ready",
-		"account", accountID, "database", database, "created_in", time.Since(start).String())
-	return exec, nil
+	return m.ensure(ctx, accountID, perfEnv)
 }
 
 // ResetPerf restores the account's plan environment from the sealed perf
@@ -329,37 +268,7 @@ func (m *Manager) EnsurePerf(ctx context.Context, accountID string) (*engine.Pgx
 // is graded on — so a reset that restored both would throw away the learner's
 // commerce work as a side effect of asking for a clean lab.
 func (m *Manager) ResetPerf(ctx context.Context, accountID string) (time.Duration, error) {
-	if strings.TrimSpace(accountID) == "" {
-		return 0, errors.New("envdb: empty account id")
-	}
-	m.mu.Lock()
-	defer m.mu.Unlock()
-	if m.closed {
-		return 0, errClosed()
-	}
-
-	key := "perf:" + digest(accountID)
-	if e, ok := m.envs[key]; ok {
-		e.exec.Close()
-		delete(m.envs, key)
-	}
-	if err := m.ensurePerfTemplateLocked(ctx); err != nil {
-		return 0, err
-	}
-
-	// The same name EnsurePerf creates, so a reset restores the environment the
-	// lesson is actually running against rather than a second, empty one.
-	database := dataset.EnvironmentDatabaseName("perf_" + digest(accountID)[:32])
-	start := time.Now()
-	if err := dataset.ResetEnvironment(ctx, m.admin, database, m.opts.PerfTemplateName); err != nil {
-		return 0, envErr(err)
-	}
-	took := time.Since(start)
-	m.observeReset(took)
-	m.publishActiveLocked()
-	m.opts.Log.Info("plan environment reset",
-		"account", accountID, "database", database, "took", took.String())
-	return took, nil
+	return m.reset(ctx, accountID, perfEnv)
 }
 
 // Ensure returns a writable executor for the account's environment, creating
@@ -369,6 +278,50 @@ func (m *Manager) ResetPerf(ctx context.Context, accountID string) (time.Duratio
 //
 // The account id is hashed, never interpolated: see databaseName.
 func (m *Manager) Ensure(ctx context.Context, accountID string) (*engine.PgxExecutor, error) {
+	return m.ensure(ctx, accountID, challengeEnv)
+}
+
+// Reset drops the account's environment and rebuilds it from the template,
+// returning how long that took. The cached executor is closed and dropped so
+// the next Ensure binds to the fresh copy: a reset that left the old pool
+// pointing at a dropped database would fail on the very next statement.
+func (m *Manager) Reset(ctx context.Context, accountID string) (time.Duration, error) {
+	return m.reset(ctx, accountID, challengeEnv)
+}
+
+// envKind names the two kinds of per-account environment. The challenge
+// environment is the learner's own commerce workspace; the perf environment is
+// the plan lab, a second database copied from its own sealed template so a
+// re-indexed plan lesson cannot decide the plan a challenge lesson is graded on.
+//
+// Every per-kind difference is a field here — the cache-key prefix, the template
+// to copy from, the environment database name and the log/error labels — so
+// Ensure/Reset each have exactly one body instead of two near-copies that drift
+// (they already had: the perf variant computed its create duration twice).
+type envKind struct {
+	keyPrefix string
+	template  func(m *Manager) string
+	database  func(m *Manager, accountID string) string
+	label     string // "challenge" or "plan", for logs and error messages
+}
+
+var challengeEnv = envKind{
+	keyPrefix: "",
+	template:  func(m *Manager) string { return m.opts.TemplateName },
+	database:  func(m *Manager, accountID string) string { return m.databaseName(accountID) },
+	label:     "challenge",
+}
+
+var perfEnv = envKind{
+	keyPrefix: "perf:",
+	template:  func(m *Manager) string { return m.opts.PerfTemplateName },
+	database: func(_ *Manager, accountID string) string {
+		return dataset.EnvironmentDatabaseName("perf_" + digest(accountID)[:32])
+	},
+	label: "plan",
+}
+
+func (m *Manager) ensure(ctx context.Context, accountID string, kind envKind) (*engine.PgxExecutor, error) {
 	if strings.TrimSpace(accountID) == "" {
 		return nil, errors.New("envdb: empty account id")
 	}
@@ -378,7 +331,7 @@ func (m *Manager) Ensure(ctx context.Context, accountID string) (*engine.PgxExec
 		return nil, errClosed()
 	}
 
-	key := digest(accountID)
+	key := kind.keyPrefix + digest(accountID)
 	if e, ok := m.envs[key]; ok {
 		e.lastUsed = time.Now()
 		return e.exec, nil
@@ -386,18 +339,19 @@ func (m *Manager) Ensure(ctx context.Context, accountID string) (*engine.PgxExec
 	if len(m.envs) >= m.opts.MaxEnvironments {
 		return nil, fmt.Errorf("%w: %w (limit %d active)", engine.ErrEnvironmentUnavailable, ErrTooManyEnvironments, m.opts.MaxEnvironments)
 	}
-	if err := m.ensureTemplateLocked(ctx); err != nil {
+	template := kind.template(m)
+	if err := m.ensureTemplateFromLocked(ctx, template, kind.label, m.loaderFor(template)); err != nil {
 		return nil, err
 	}
 
-	database := m.databaseName(accountID)
+	database := kind.database(m, accountID)
 	dsn, err := m.learnerDSN(database)
 	if err != nil {
 		return nil, err
 	}
 
 	start := time.Now()
-	if err := m.createIfAbsentLocked(ctx, database); err != nil {
+	if err := m.createIfAbsentFromLocked(ctx, database, template); err != nil {
 		return nil, err
 	}
 	exec, err := engine.NewPgxExecutorWithConfig(ctx, dsn, engine.PgxConfig{
@@ -413,7 +367,7 @@ func (m *Manager) Ensure(ctx context.Context, accountID string) (*engine.PgxExec
 	// mis-built template, rather than at the learner's first INSERT.
 	if err := probeWritable(ctx, exec); err != nil {
 		exec.Close()
-		return nil, envErr(fmt.Errorf("environment %q is not writable: %w", database, err))
+		return nil, envErr(fmt.Errorf("%s environment %q is not writable: %w", kind.label, database, err))
 	}
 
 	created := time.Since(start)
@@ -427,16 +381,12 @@ func (m *Manager) Ensure(ctx context.Context, accountID string) (*engine.PgxExec
 	}
 	m.observeCreate(created)
 	m.publishActiveLocked()
-	m.opts.Log.Info("challenge environment ready",
+	m.opts.Log.Info(kind.label+" environment ready",
 		"account", accountID, "database", database, "created_in", created.String())
 	return exec, nil
 }
 
-// Reset drops the account's environment and rebuilds it from the template,
-// returning how long that took. The cached executor is closed and dropped so
-// the next Ensure binds to the fresh copy: a reset that left the old pool
-// pointing at a dropped database would fail on the very next statement.
-func (m *Manager) Reset(ctx context.Context, accountID string) (time.Duration, error) {
+func (m *Manager) reset(ctx context.Context, accountID string, kind envKind) (time.Duration, error) {
 	if strings.TrimSpace(accountID) == "" {
 		return 0, errors.New("envdb: empty account id")
 	}
@@ -446,26 +396,45 @@ func (m *Manager) Reset(ctx context.Context, accountID string) (time.Duration, e
 		return 0, errClosed()
 	}
 
-	key := digest(accountID)
+	key := kind.keyPrefix + digest(accountID)
 	if e, ok := m.envs[key]; ok {
 		e.exec.Close()
 		delete(m.envs, key)
 	}
-	if err := m.ensureTemplateLocked(ctx); err != nil {
+	template := kind.template(m)
+	if err := m.ensureTemplateFromLocked(ctx, template, kind.label, m.loaderFor(template)); err != nil {
 		return 0, err
 	}
 
-	database := m.databaseName(accountID)
+	// The name must be the one ensure creates, so a reset restores the
+	// environment the lesson is actually running against rather than a second,
+	// empty one.
+	database := kind.database(m, accountID)
 	start := time.Now()
-	if err := dataset.ResetEnvironment(ctx, m.admin, database, m.opts.TemplateName); err != nil {
+	if err := dataset.ResetEnvironment(ctx, m.admin, database, template); err != nil {
 		return 0, envErr(err)
 	}
 	took := time.Since(start)
 	m.observeReset(took)
 	m.publishActiveLocked()
-	m.opts.Log.Info("challenge environment reset",
+	m.opts.Log.Info(kind.label+" environment reset",
 		"account", accountID, "database", database, "took", took.String())
 	return took, nil
+}
+
+// loaderFor returns the fixture loader for a template name, so the shared
+// ensure/reset bodies can load the right dataset without a second per-kind
+// switch. The perf template loads the larger plan fixture; everything else
+// loads the writable commerce fixture.
+func (m *Manager) loaderFor(template string) func(context.Context, string) error {
+	if template == m.opts.PerfTemplateName && template != m.opts.TemplateName {
+		return func(ctx context.Context, name string) error {
+			return dataset.LoadPerfIntoTemplate(ctx, m.admin, name, m.opts.LearnerPassword)
+		}
+	}
+	return func(ctx context.Context, name string) error {
+		return dataset.LoadWritableIntoTemplate(ctx, m.admin, name, m.opts.LearnerPassword)
+	}
 }
 
 // Facts reports the account's environment without creating it. Exists is read
@@ -549,10 +518,6 @@ func (m *Manager) Close() {
 }
 
 /* ---------- internals ---------- */
-
-func (m *Manager) createIfAbsentLocked(ctx context.Context, database string) error {
-	return m.createIfAbsentFromLocked(ctx, database, m.opts.TemplateName)
-}
 
 // createIfAbsentFromLocked copies one sealed template into an environment
 // database. It takes the template as an argument because the M5 plan
