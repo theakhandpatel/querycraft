@@ -246,7 +246,16 @@ finished track against the real files, and advances the first unblocked item.
 Three batches were killed by restarts before this; the fourth is the first to
 land work.
 
-Drive tick (latest, uptime): **no live tracks on entry; tree clean.** Item 4
+Drive tick (latest, uptime): **one live track — item 5, `SQLite metadata store
+(worktree)`** — running (`working`), no pending question. Its worktree
+(`t3-7a66dc85`, branch `t3/sqlite-metadata-store`) is still at the branch point
+with nothing written; the agent's activity is ~1 min old and it kept a todo list
+(read the roadmap rationale, inspect the store + boot wiring + existing parity
+tests, then implement) — deliberate reconnaissance before a large task (the
+whole `Store` interface incl. `ai.Depot`), so it is left alone. Main checkout:
+`go build`/`vet`/`gofmt` clean and `internal/store` tests green.
+
+Drive tick (previous): **no live tracks on entry; tree clean.** Item 4
 (simplification) is now done, which was item 5's documented precondition ("It
 must land *after* the simplification pass, because both touch `internal/store`"),
 so item 5 was advanced — as a **new worktree track**, branch
