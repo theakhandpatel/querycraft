@@ -247,6 +247,22 @@ Three batches were killed by restarts before this; the fourth is the first to
 land work.
 
 Drive tick (latest): **one live track — item 5, `SQLite metadata store
+(worktree)`** — running (`working`), no pending question, and now **substantially
+built**: `store/sqlite.go` (341) + `store/sqlite_depot.go` (354) +
+`store/sqlite_test.go` (269, 964 lines total), with `store/store.go`,
+`cmd/api/main.go` + `main_test.go`, `httpapi/metrics.go`, `httpapi/openapi.go`
+and `backend/README.md` updated (9 changed/added files). The worktree **builds
+clean** again. Its own note: the implementation, opt-in selection, docs,
+diagnostics and the parity/reopen tests are in place; focused tests pass, and it
+is now reviewing semantics before the full verification run — left alone.
+
+The parity approach is the one that matters and it is real:
+`TestPersistentStoreParity` takes a `storeFactory` map and applies **the same
+behaviour cases to Postgres (the reference) and SQLite (the additive backend)**,
+so SQLite is pinned to the contract Postgres already defines rather than to its
+own behaviour. Main checkout clean.
+
+Drive tick (previous): **one live track — item 5, `SQLite metadata store
 (worktree)`** — running (`working`), no pending question. It is now writing in
 earnest: `store/sqlite.go` (251 lines) and `store/sqlite_depot.go` (210 — the
 `ai.Depot` half, correctly split from the interface half) plus boot wiring in
