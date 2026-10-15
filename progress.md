@@ -32,7 +32,7 @@ The remaining open items, in dependency order:
 | 2 | Design craft pass on `web/` (Impeccable) + generated `PRODUCT.md`/`DESIGN.md` | delegated | **done — verified** |
 | 3 | `exercise_count` unsatisfiable request (a request for fewer exercises than chapters can never be satisfied) | delegated | **done — verified** |
 | 4 | Backend simplification pass in `internal/**` — verify what (if anything) landed; close the track | — | **done — verified** |
-| 5 | App metadata → SQLite (users/sessions/progress/events/courses/challenges/patches/transcripts), PostgreSQL stays the practice engine | — | **todo** (owner-raised; lands after 4, which also touches `internal/store`) |
+| 5 | App metadata → SQLite (users/sessions/progress/events/courses/challenges/patches/transcripts), PostgreSQL stays the practice engine | worktree | **wip — running** (additive, reversible; Postgres stays default) |
 | 6 | Outline approval — pause after the outline, learner approves or discards, then chapters build | — | **done — verified** (`docs/outline-approval-design.md`) |
 | A1 | Release blocker — account-scoped local progress (was: progress bled across accounts on a shared browser) | delegated | **done — verified** |
 | A2 | Release blocker — empty-admin-password exposure (loopback default + refusal on non-loopback + hint only when true) | delegated | **done — verified** |
@@ -246,7 +246,20 @@ finished track against the real files, and advances the first unblocked item.
 Three batches were killed by restarts before this; the fourth is the first to
 land work.
 
-Drive tick (latest, uptime ~228 min, no restart): **two worktree tracks running,
+Drive tick (latest, uptime): **no live tracks on entry; tree clean.** Item 4
+(simplification) is now done, which was item 5's documented precondition ("It
+must land *after* the simplification pass, because both touch `internal/store`"),
+so item 5 was advanced — as a **new worktree track**, branch
+`t3/sqlite-metadata-store` (`t3-7a66dc85`), branched from the item-4 commit
+`678533144`. Model: **Luna on Codex at xhigh/priority** (the owner's choice).
+Scope is deliberately **additive and reversible**: a SQLite implementation of
+`store.Store` selected by an explicit env var (`QC_METADATA=sqlite`), with
+Postgres staying the default and its behaviour unchanged; parity tests against
+the Postgres semantics; `CGO_ENABLED=0` must stay clean. The brief tells the
+agent to say so plainly rather than force it if it cannot be done without
+risking the default.
+
+Earlier tick (uptime ~228 min, no restart): **two worktree tracks running,
 both far along, neither blocked.**
 - Login throttling — worktree `t3-665821a8`, running: has written
   `login_throttle.go` + `login_throttle_test.go` and edited `auth.go`,
