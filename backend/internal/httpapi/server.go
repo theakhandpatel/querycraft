@@ -32,6 +32,14 @@ type Config struct {
 	MaxBytes      int
 	TimeoutMS     int
 	MaxConcurrent int
+
+	// LoginMaxFailures, LoginWindowMS and LoginMaxTracked bound failed sign-in
+	// attempts (see login_throttle.go). A non-positive value falls back to the
+	// shipped default, so leaving them unset cannot disable the limit or leave
+	// the table unbounded.
+	LoginMaxFailures int
+	LoginWindowMS    int
+	LoginMaxTracked  int
 }
 
 // Server wires an Executor and a Store behind the HTTP surface.
@@ -89,6 +97,11 @@ type Server struct {
 	// screen shows the local-admin hint only when it is actually true. It is
 	// set once, before the handler is served, with UseAdminPasswordEmpty.
 	adminPasswordEmpty bool
+
+	// login bounds failed sign-in attempts per (client address, account). It is
+	// created in New, never nil, so handleLogin needs no nil check. See
+	// login_throttle.go.
+	login *loginThrottle
 }
 
 // New builds a Server, filling unset config from the engine defaults.
@@ -116,6 +129,7 @@ func New(exec engine.Executor, st store.Store, cfg Config, log *slog.Logger) *Se
 		metrics:  metrics.New(),
 		sem:      make(chan struct{}, cfg.MaxConcurrent),
 		dialects: []string{engine.DialectPostgres},
+		login:    newLoginThrottle(cfg.LoginMaxFailures, cfg.LoginWindowMS, cfg.LoginMaxTracked),
 	}
 	srv.declareMetrics()
 	return srv

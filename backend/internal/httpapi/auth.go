@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"net/http"
+	"strconv"
 	"strings"
 	"time"
 
@@ -150,9 +151,24 @@ func (s *Server) handleLogin(w http.ResponseWriter, r *http.Request) {
 	if !readJSON(w, r, &req) {
 		return
 	}
+	// Throttle before touching credentials, and key the budget on the caller's
+	// socket address and the account it named. A refusal carries no field from
+	// the request and makes no distinction between a known and an unknown
+	// address, so it leaks neither whether the account exists nor whether the
+	// password was ever compared.
+	key := loginKey(clientIP(r), auth.NormalizeEmail(req.Email))
+	if allowed, retryAfter := s.login.allow(key); !allowed {
+		w.Header().Set("Retry-After", strconv.Itoa(retryAfter))
+		writeJSON(w, http.StatusTooManyRequests, map[string]any{
+			"ok":    false,
+			"error": map[string]string{"code": "AUTH_RATE_LIMITED", "message": "Too many failed sign-in attempts. Try again later."},
+		})
+		return
+	}
 	u, err := auth.Authenticate(r.Context(), s.store, req.Email, req.Password)
 	if err != nil {
 		if errors.Is(err, auth.ErrInvalidCredentials) {
+			s.login.fail(key)
 			writeJSON(w, http.StatusUnauthorized, map[string]any{
 				"ok":    false,
 				"error": map[string]string{"code": "AUTH_INVALID_CREDENTIALS", "message": "Email or password is incorrect."},
@@ -162,6 +178,9 @@ func (s *Server) handleLogin(w http.ResponseWriter, r *http.Request) {
 		persistenceFailed(w, err)
 		return
 	}
+	// A successful sign-in clears the pair's failures: the caller has proven it
+	// holds the password, so the budget it spent guessing is irrelevant now.
+	s.login.reset(key)
 	token, expires, err := auth.StartSession(r.Context(), s.store, u.ID)
 	if err != nil {
 		persistenceFailed(w, err)

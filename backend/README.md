@@ -18,7 +18,7 @@ Module: `github.com/querycraft/sqlquery/backend`.
 | `POST` | `/answers/evaluate` | Run the learner's SQL and grade it against the exercise's result contract; returns `passed` plus detail. |
 | `GET` | `/datasets/{id}/tables` | Dataset introspection (schema, row counts, preview) without a live database. Only `commerce` is defined. |
 | `POST` | `/auth/signup` | Create a **learner** account and start a session; `201` with `{user, token, expiresAt}`. `409 AUTH_EMAIL_TAKEN` on a duplicate address. |
-| `POST` | `/auth/login` | Exchange email + password for a session token. Unknown email and wrong password both return the same `401 AUTH_INVALID_CREDENTIALS`. |
+| `POST` | `/auth/login` | Exchange email + password for a session token. Unknown email and wrong password both return the same `401 AUTH_INVALID_CREDENTIALS`. Repeated failures for one address against one account return `429 AUTH_RATE_LIMITED`. |
 | `POST` | `/auth/logout` | Revoke the bearer token. Idempotent. |
 | `GET` | `/auth/me` | The account behind the bearer token. |
 | `GET` | `/progress/{course}` | 🔒 Load the caller's progress snapshot for a course. |
@@ -66,9 +66,10 @@ Errors use stable codes, never free text alone: `EMPTY_QUERY`,
 `QUERY_SYNTAX_ERROR`, `QUERY_RUNTIME_ERROR`, `QUERY_TIMEOUT`,
 `RESULT_LIMIT_EXCEEDED`, `ENVIRONMENT_UNAVAILABLE`, `PERSISTENCE_FAILED`,
 `EVALUATION_ERROR`, plus `AUTH_REQUIRED`, `AUTH_INVALID_INPUT`,
-`AUTH_INVALID_CREDENTIALS` and `AUTH_EMAIL_TAKEN` on the auth surface. Error
-responses are shaped as `{"error":{"code":"...","message":"..."}}` (or inside a
-`QueryResult` for `/query` and `/answers/evaluate`).
+`AUTH_INVALID_CREDENTIALS`, `AUTH_EMAIL_TAKEN` and `AUTH_RATE_LIMITED` on the
+auth surface. Error responses are shaped as
+`{"error":{"code":"...","message":"..."}}` (or inside a `QueryResult` for
+`/query` and `/answers/evaluate`).
 
 ## Accounts and sessions
 
@@ -95,6 +96,33 @@ Anonymous access is still allowed for the public surface (`/health`,
 `/capabilities`, `/query`, `/answers/evaluate`, `/datasets/{id}/tables`, the
 generators, `/openapi.json`, `/docs`). A missing or unknown token leaves those
 alone; the scoped routes answer `401 AUTH_REQUIRED`.
+
+### Failed sign-in throttling
+
+`/auth/login` is the one endpoint where an anonymous caller can spend the
+gateway's time guessing a secret, and the seeded administrator's address is
+public knowledge, so attempts are limited. After `QC_LOGIN_MAX_FAILURES`
+failures for one **client address and one account** inside `QC_LOGIN_WINDOW_MS`,
+the next attempt is refused with `429 AUTH_RATE_LIMITED` and a `Retry-After`
+header carrying whole seconds; below the limit the answer is the ordinary
+`401 AUTH_INVALID_CREDENTIALS`, unchanged. A sign-in that succeeds clears the
+pair's failures.
+
+The limit is deliberately small and self-contained:
+
+- **In process, in memory.** No dependency and no Redis: one mutex-guarded map
+  keyed by `address + normalized email`, bounded to `QC_LOGIN_MAX_TRACKED`
+  entries. An expired record is dropped on the way in, and at the cap the
+  record closest to expiry is evicted, so the map cannot grow without bound. It
+  never stores the attempted password.
+- **Keyed on the socket address, never `X-Forwarded-For`.** A caller-supplied
+  header would be a budget an attacker mints at will.
+- **Not a distributed defence.** It does not survive a restart and is not shared
+  between processes, so two gateways behind one address hold a budget each. It
+  is a speed bump on one source guessing one account, not a shield against a
+  botnet, and a refusal says nothing about whether the account exists.
+- **Set any `QC_LOGIN_*` to `0` or below to fall back to the documented default**
+  — it cannot be used to disable the limit or leave the table unbounded.
 
 Every response carries an `X-Request-Id`; a caller-supplied `X-Request-Id` is
 echoed back. CORS is open (`Access-Control-Allow-Origin: *`), permits the
@@ -123,6 +151,9 @@ echoed back. CORS is open (`Access-Control-Allow-Origin: *`), permits the
 | `QC_SQLITE_DATA` | `.data/sqlite` (derived from `QC_PG_DATA`) | Data root for the SQLite dialect: `<root>/accounts/<hash>.db` per learner and `<root>/commerce.db` shared read-only. |
 | `QC_SQLITE_MAX_ACCOUNTS` | `8` | Maximum per-account SQLite executors cached at once. Past the bound the least-recently-used pool is closed and evicted; the learner's file stays on disk and re-opens on their next statement. |
 | `QC_SQLITE_IDLE` | `15m` | Idle window for a cached SQLite executor, as a Go duration (`15m`, `1h`). A pool unused for this long is closed on the next access; the file is untouched. |
+| `QC_LOGIN_MAX_FAILURES` | `5` | Failed sign-ins one address may make against one account inside the window before `/auth/login` answers `429 AUTH_RATE_LIMITED`. |
+| `QC_LOGIN_WINDOW_MS` | `900000` (15 min) | Fixed window, in milliseconds, a pair's failures are counted over. |
+| `QC_LOGIN_MAX_TRACKED` | `4096` | Upper bound on tracked (address, account) pairs in the in-process sign-in throttle. |
 
 ## The local database (no Docker)
 

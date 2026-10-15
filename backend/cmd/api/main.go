@@ -49,6 +49,11 @@ func run() int {
 		MaxBytes:      envInt("QC_MAX_BYTES", engine.DefaultMaxBytes),
 		TimeoutMS:     envInt("QC_TIMEOUT_MS", engine.DefaultTimeoutMS),
 		MaxConcurrent: envInt("QC_MAX_CONCURRENT", 4),
+		// Failed sign-in throttling (see login_throttle.go). The defaults are the
+		// shipped ones, so an install that sets nothing is still limited.
+		LoginMaxFailures: envInt("QC_LOGIN_MAX_FAILURES", httpapi.DefaultLoginMaxFailures),
+		LoginWindowMS:    envInt("QC_LOGIN_WINDOW_MS", httpapi.DefaultLoginWindowMS),
+		LoginMaxTracked:  envInt("QC_LOGIN_MAX_TRACKED", httpapi.DefaultLoginMaxTracked),
 	}
 	// Loopback by default: the seeded administrator may keep an empty password
 	// only on a loopback bind (see the refusal below), which is the zero-setup
