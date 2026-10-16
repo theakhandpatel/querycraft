@@ -186,8 +186,17 @@ func TestCapabilities(t *testing.T) {
 	w := do(t, newTestServer(&fakeExecutor{}), http.MethodGet, "/capabilities", "")
 	var out map[string]any
 	mustDecode(t, w, &out)
-	if out["isolation"] != "read_only_tx" {
-		t.Fatalf("isolation = %v", out["isolation"])
+	// isolation is an object with both halves, because the answer differs by
+	// caller: an anonymous statement is read-only, a signed-in one is writable.
+	iso, ok := out["isolation"].(map[string]any)
+	if !ok {
+		t.Fatalf("isolation = %v, want an object naming the anonymous and signed-in modes", out["isolation"])
+	}
+	if iso["anonymous"] != "read_only_tx" {
+		t.Errorf("isolation.anonymous = %v, want read_only_tx", iso["anonymous"])
+	}
+	if iso["signed_in"] != "writable_workspace" {
+		t.Errorf("isolation.signed_in = %v, want writable_workspace", iso["signed_in"])
 	}
 	if out["max_concurrent"].(float64) != 2 {
 		t.Fatalf("max_concurrent = %v", out["max_concurrent"])

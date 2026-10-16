@@ -1103,7 +1103,15 @@ const openAPISpec = `{
           "hard_timeout": {"type": "boolean"},
           "explain": {"type": "boolean"},
           "max_concurrent": {"type": "integer"},
-          "isolation": {"type": "string"},
+          "isolation": {
+            "type": "object",
+            "description": "How a statement's writes are isolated, named for both callers because the answer differs by caller. An anonymous statement runs read-only against the shared dataset; a signed-in learner's runs in their own writable workspace (a PostgreSQL environment per ADR 0003, or their own SQLite file per ADR 0006).",
+            "properties": {
+              "anonymous": {"type": "string", "description": "The isolation an anonymous caller's statement runs under. Currently read_only_tx."},
+              "signed_in": {"type": "string", "description": "The isolation a signed-in caller's statement runs under. Currently writable_workspace."},
+              "writable": {"type": "boolean", "description": "Whether this gateway can give a signed-in learner a writable workspace at all. False means a signed-in statement still runs read-only."}
+            }
+          },
           "dialects": {
             "type": "array",
             "items": {"type": "string", "enum": ["postgresql", "sqlite"]},

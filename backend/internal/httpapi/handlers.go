@@ -44,7 +44,17 @@ func (s *Server) handleCapabilities(w http.ResponseWriter, r *http.Request) {
 		"hard_timeout":   true,
 		"explain":        true,
 		"max_concurrent": s.cfg.MaxConcurrent,
-		"isolation":      "read_only_tx",
+		// What isolation a statement actually runs under depends on the caller,
+		// so the honest answer names both halves rather than the weaker one: an
+		// anonymous statement runs read-only against the shared dataset, and a
+		// signed-in learner's runs in their own writable workspace (a PostgreSQL
+		// environment per ADR 0003, or their own SQLite file per ADR 0006).
+		// Reporting "read_only_tx" flatly was false for every signed-in learner.
+		"isolation": map[string]any{
+			"anonymous": "read_only_tx",
+			"signed_in": "writable_workspace",
+			"writable":  s.envs != nil || s.sqlite != nil,
+		},
 		// The dialects this gateway can run, so a chapter written for another
 		// engine is refused by the UI before the learner types anything (M6
 		// step 1). PostgreSQL is always present and always the default.

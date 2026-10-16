@@ -395,7 +395,14 @@ var capabilitiesSchema = schemaObject(
 		"hard_timeout":   schemaBoolean(),
 		"explain":        schemaBoolean(),
 		"max_concurrent": schemaInteger(),
-		"isolation":      schemaString(),
+		"isolation": schemaObject(
+			[]string{"anonymous", "signed_in"},
+			map[string]any{
+				"anonymous": schemaString(),
+				"signed_in": schemaString(),
+				"writable":  schemaBoolean(),
+			},
+		),
 		"plan": schemaObject(nil, map[string]any{
 			"available":             schemaBoolean(),
 			"reason":                schemaString(),
