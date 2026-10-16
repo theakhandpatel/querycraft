@@ -867,7 +867,17 @@ verified chapter the record did not yet have; storage now precedes publish.
 | M5 — SQL performance lab | done | all 8 steps landed; `make audit-perf` green on all four clauses (below); `docs/m5-implementation-plan.md` |
 | M6 — second dialect: SQLite | done | all 9 steps landed; `make audit-parity` green for both dialects (PostgreSQL 119/119, SQLite 49/49, 0 diverge); `docs/m6-implementation-plan.md` |
 | M7 — real course generation | done | a live model generated a four-chapter course; every exercise's reference, cross-check and adversarial fixtures executed in a throwaway database, and the activated plan carried the engine's own rows. `backend/internal/ai/course_test.go` (6 tests, real PostgreSQL), `httpapi/ai_test.go` |
-| M8 — a course that builds itself, one chapter at a time | **landed, verified live** | tool-calling agent loop in one conversation (`backend/internal/ai/course_agent.go`): outline first, then one `save_chapter` per chapter, each chapter verified and persisted before the next is asked for. Live evidence below. `make test` green including `audit-course-gen` |
+| M8 — a course that builds itself, one chapter at a time | **done, tagged `v0.8.0`** | tool-calling agent loop in one conversation (`backend/internal/ai/course_agent.go`): outline first, then one `save_chapter` per chapter, each chapter verified and persisted before the next is asked for. Live evidence below. `make test` green including `audit-course-gen` |
+
+**Release `v0.8.0` (2026-10-16) — first public release.** All eight milestones
+done; every release blocker (A1 progress bleed, A2 empty-admin-password
+exposure, A3 brittle shell audit, F2 dialect-aware reset, F4 SQLite cache bound,
+F5 login throttling) closed; the multi-agent review pass completed with its
+deferred set worked. Gates at the tag: `make verify` + `make verify-mock` +
+`make test` green, and the live-only suites (`audit-load`,
+`audit-metrics-live`, `audit-adversarial-live`) green against a booted gateway.
+The version is one bump per shipped milestone (M3 was 0.3.0; M4–M8 take it to
+0.8.0).
 
 ## M7 / M8 — real course generation, and the streaming rewrite
 
