@@ -1,6 +1,7 @@
 package httpapi
 
 import (
+	"bytes"
 	"context"
 	"encoding/json"
 	"fmt"
@@ -40,6 +41,10 @@ func (s *Server) handleHealth(w http.ResponseWriter, r *http.Request) {
 }
 
 func (s *Server) handleCapabilities(w http.ResponseWriter, r *http.Request) {
+	// A writable workspace is either a PostgreSQL environment (ADR 0003) or the
+	// learner's own SQLite file (ADR 0006), so either one makes this true. Both
+	// the isolation block and the top-level flag report the same fact.
+	writable := s.envs != nil || s.sqlite != nil
 	writeJSON(w, http.StatusOK, map[string]any{
 		"hard_timeout":   true,
 		"explain":        true,
@@ -47,13 +52,12 @@ func (s *Server) handleCapabilities(w http.ResponseWriter, r *http.Request) {
 		// What isolation a statement actually runs under depends on the caller,
 		// so the honest answer names both halves rather than the weaker one: an
 		// anonymous statement runs read-only against the shared dataset, and a
-		// signed-in learner's runs in their own writable workspace (a PostgreSQL
-		// environment per ADR 0003, or their own SQLite file per ADR 0006).
+		// signed-in learner's runs in their own writable workspace.
 		// Reporting "read_only_tx" flatly was false for every signed-in learner.
 		"isolation": map[string]any{
 			"anonymous": "read_only_tx",
 			"signed_in": "writable_workspace",
-			"writable":  s.envs != nil || s.sqlite != nil,
+			"writable":  writable,
 		},
 		// The dialects this gateway can run, so a chapter written for another
 		// engine is refused by the UI before the learner types anything (M6
@@ -63,9 +67,7 @@ func (s *Server) handleCapabilities(w http.ResponseWriter, r *http.Request) {
 		// gateway. The client cannot know this on its own — a session is not a
 		// workspace — so the gateway answers the half of the question it owns
 		// and the client answers the other half (does it have a session).
-		// A writable workspace is either a PostgreSQL environment (ADR 0003) or
-		// the learner's own SQLite file, so either one makes this true.
-		"writable": s.envs != nil || s.sqlite != nil,
+		"writable": writable,
 		// The M5 plan lab (design 14): what a client needs to know before it
 		// offers an Explain button, and why it is off when it is off.
 		"plan": s.planCapability(),
@@ -256,21 +258,10 @@ func (s *Server) handleSQLiteTables(w http.ResponseWriter, r *http.Request, data
 		return
 	}
 	ctx := r.Context()
-	var ex engine.Executor
-	if u, ok := userFrom(ctx); ok {
-		exec, err := s.sqlite.ForAccount(ctx, u.ID)
-		if err != nil {
-			environmentUnavailable(w, err)
-			return
-		}
-		ex = exec
-	} else {
-		exec, err := s.sqlite.Shared(ctx)
-		if err != nil {
-			environmentUnavailable(w, err)
-			return
-		}
-		ex = exec
+	ex, err := s.sqliteExecutor(ctx, r)
+	if err != nil {
+		environmentUnavailable(w, err)
+		return
 	}
 
 	names, qerr := sqliteTableNames(ctx, ex)
@@ -367,10 +358,6 @@ func quoteSQLiteIdent(name string) string {
 }
 
 func writeSQLiteTablesError(w http.ResponseWriter, qerr *engine.QueryError) {
-	if qerr == nil {
-		errorEnvelope(w, http.StatusInternalServerError, engine.CodeEnvironmentUnavailable, "The SQLite schema could not be read.")
-		return
-	}
 	errorEnvelope(w, http.StatusBadRequest, qerr.Code, qerr.Message)
 }
 
@@ -379,7 +366,7 @@ func (s *Server) handleGetProgress(w http.ResponseWriter, r *http.Request) {
 	if !ok {
 		return
 	}
-	course := trimCourse(r.PathValue("course"))
+	course := strings.TrimSpace(r.PathValue("course"))
 	snap, ok, err := s.store.LoadProgress(r.Context(), u.ID, course)
 	if err != nil {
 		persistenceFailed(w, err)
@@ -402,21 +389,15 @@ func (s *Server) handlePutProgress(w http.ResponseWriter, r *http.Request) {
 	if !ok {
 		return
 	}
-	course := trimCourse(r.PathValue("course"))
+	course := strings.TrimSpace(r.PathValue("course"))
 	raw, err := io.ReadAll(io.LimitReader(r.Body, maxBodyBytes))
 	if err != nil {
-		writeJSON(w, http.StatusBadRequest, map[string]any{
-			"ok":    false,
-			"error": map[string]string{"code": "PERSISTENCE_FAILED", "message": "could not read body"},
-		})
+		persistenceBadRequest(w, "could not read body")
 		return
 	}
-	raw = []byte(strings.TrimSpace(string(raw)))
+	raw = bytes.TrimSpace(raw)
 	if len(raw) == 0 || !json.Valid(raw) {
-		writeJSON(w, http.StatusBadRequest, map[string]any{
-			"ok":    false,
-			"error": map[string]string{"code": "PERSISTENCE_FAILED", "message": "progress snapshot must be valid JSON"},
-		})
+		persistenceBadRequest(w, "progress snapshot must be valid JSON")
 		return
 	}
 	if err := s.store.SaveProgress(r.Context(), u.ID, course, json.RawMessage(raw)); err != nil {

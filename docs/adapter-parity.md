@@ -1,4 +1,4 @@
-# Adapter parity — the same lesson on both engines
+# Adapter parity: the same lesson on both engines
 
 Design source: `docs/technical-design.md` §14 (M3 exit gate: *"The same lesson
 content runs against both adapters unchanged"*), §4.2 (QueryResult and the
@@ -7,8 +7,8 @@ Instrument: `scripts/adapter-parity-audit.mjs`.
 
 ## What it proves
 
-Every statement a learner can actually run — each exercise's reference solution
-and each worked example — is executed twice: once by the browser engine
+Every statement a learner can actually run, each exercise's reference solution
+and each worked example, is executed twice: once by the browser engine
 (`@electric-sql/pglite`, the real PostgreSQL compiled to WebAssembly) and once by
 the Go gateway, and the two results must agree. The lesson text is never
 rewritten for either side; if they disagree, the product disagrees with itself.
@@ -19,7 +19,7 @@ by string equality of the JSON:
 
 - status, error code, column names, column types, row count and the `truncated`
   flag must match exactly;
-- rows compare cell by cell — numeric strings and numbers compare numerically,
+- rows compare cell by cell, numeric strings and numbers compare numerically,
   NULL only equals NULL, text is never normalised;
 - row order is compared as written when the statement has its own `ORDER BY`,
   and as a multiset when it does not;
@@ -34,7 +34,7 @@ the gateway so both sides are the same kind of thing: the browser's own database
 on one side, the learner's per-account environment database copied from the
 sealed template on the other. After every statement that writes, **both**
 workspaces are restored, so probe order can never manufacture a difference. The
-anonymous path is then checked separately, as the property it is — an anonymous
+anonymous path is then checked separately, as the property it is, an anonymous
 caller must be refused a write, must leave the shared dataset untouched, and must
 be told it has no workspace rather than be given one.
 
@@ -64,7 +64,7 @@ It is part of `make test`.
 Each exclusion is printed with its reason; nothing is normalised away silently.
 
 - **Display-only listings.** A `syntax` block is rendered by
-  `LessonScreen` as `<pre className="syntaxblock">{b.sql}</pre>` — a static
+  `LessonScreen` as `<pre className="syntaxblock">{b.sql}</pre>`, a static
   listing with no editor and no Run button, so a learner can never execute one.
   One of them (`q3 syntax 1`) is a deliberate two-statement contrast, "not safe"
   against "safe", written to be *read*. Comparing the adapters' execution of a
@@ -82,7 +82,7 @@ Each exclusion is printed with its reason; nothing is normalised away silently.
 
 Three real divergences, all fixed in the product rather than in the check:
 
-1. The gateway emitted `numeric` as a JSON number, so `118.00` arrived as `118` —
+1. The gateway emitted `numeric` as a JSON number, so `118.00` arrived as `118`: 
    the learner's own price lost its scale.
 2. A naive `timestamp` was decoded into a time value and re-rendered, moving the
    wall-clock time by the host's UTC offset (`10:30` became `05:00` under
@@ -90,7 +90,7 @@ Three real divergences, all fixed in the product rather than in the check:
    PGlite materialises `timestamp` as a JS `Date`.
 3. The gateway classified a missing relation (`42P01`) and a missing column
    (`42703`) as `QUERY_SYNTAX_ERROR` by matching the `42` SQLSTATE class prefix,
-   where the design files "missing relation" under `QUERY_RUNTIME_ERROR` — and
+   where the design files "missing relation" under `QUERY_RUNTIME_ERROR`, and
    the browser adapter already said runtime, so one mistake was described two
    ways depending on which engine ran the lesson.
 
@@ -193,7 +193,7 @@ adapter-parity-audit: OK (4 skipped)
 
 - It compares the statements the curriculum contains today. New lesson SQL is
   covered the moment it is added, but nothing stops a future block from being
-  written against one engine only — which is why the runnable-single-statement
+  written against one engine only, which is why the runnable-single-statement
   rule and the type-name check are enforced rather than advisory.
 - It uses the commerce dataset at its current seed. A dataset change moves both
   sides together (the schema and seed have one source of truth,
@@ -244,12 +244,12 @@ existing knobs (`QC_GO`, `QC_BACKEND`, `QC_BIN`, `QC_GATEWAY`,
   browser side; the anonymous read-only path is a different kind of thing and is
   not what this gate compares.
 
-### The two sides are different builds — the semantics are the contract
+### The two sides are different builds: the semantics are the contract
 
 The browser engine is the **wasm** build of SQLite and the gateway engine is the
 pure-Go `modernc` build, so their `engine` strings differ by construction
 (measured: `SQLite 3.53.4` in the browser, `SQLite 3.50.3` on the gateway). The
-audit prints both strings as *information* and **never compares them** — a
+audit prints both strings as *information* and **never compares them**: a
 version-string difference is expected and is never a finding. What is compared
 is the contract: `dialect`, status, error code, column labels, the row count,
 the `truncated` flag and the cell values, under the project's own §6.1 rule
@@ -260,7 +260,7 @@ with the same rows are what "the same lesson on both engines" means.
 
 Column *types* are compared through a canonical table, as on the PostgreSQL
 side. For SQLite the canonical spelling is the **declared type verbatim**, and
-`expression` for a column that has no declared type — the rule stated in
+`expression` for a column that has no declared type: the rule stated in
 `contracts/dialects/sqlite.json` under
 `value_encoding.column_type_label` (and mirrored by
 `canonicalSqliteType()` in the audit). Both sides report the declared type
@@ -271,23 +271,23 @@ there is no case translation to apply: the labels are compared as exact strings.
 ### What is deliberately not compared (SQLite)
 
 Each exclusion is printed with its reason, is still **executed** on both sides,
-and — where its shape allows it — carries a *verified* claim, so an exclusion
+and, where its shape allows it, carries a *verified* claim, so an exclusion
 can never hide a second difference. All three are specific to SQLite (the first
 mirrors the PostgreSQL half's own `EXPLAIN` exclusion):
 
-- **`EXPLAIN QUERY PLAN`** — returns the planner's own text (which scan or
+- **`EXPLAIN QUERY PLAN`** returns the planner's own text (which scan or
   search each step chose), a property of the build and its statistics, not a
   value the contract covers. The two sides are different SQLite builds, so their
   plans are not required to agree. The PostgreSQL half excludes `EXPLAIN` for
   the same reason.
-- **`rowid`** — a physical address, not a key: SQLite documents it as unstable
+- **`rowid`** is a physical address, not a key: SQLite documents it as unstable
   across `VACUUM`, and each adapter's database is its own file with its own
   insertion history, so the two are not required to number rows the same way.
   The label differs too (the wasm build reports `INTEGER` from
   `sqlite3_column_decltype`, the Go driver reports `expression`, because
   `decltype` answers for a declared column and `rowid` is implicit). Both are
   properties of the file, like a plan.
-- **`storage-layer-pragma`** (SQLite-only) — `PRAGMA journal_mode`, `page_size`,
+- **`storage-layer-pragma`** (SQLite-only): `PRAGMA journal_mode`, `page_size`,
   `page_count`, `freelist_count`, the cache and locking settings, `encoding`,
   `integrity_check`, `data_version`, `wal_checkpoint` and the rest read a fact
   about the database *file*, and the two adapters are two files: the browser's
@@ -295,15 +295,15 @@ mirrors the PostgreSQL half's own `EXPLAIN` exclusion):
   the gateway's is a file on disk (`journal_mode = delete`), and the two builds
   ship different defaults (measured `page_size`: `8192` web, `4096` gateway,
   with `page_count` and anything computed from it moving with it). The exclusion
-  is *verified* — every column in such a statement that is not a bare
+  is *verified*: every column in such a statement that is not a bare
   `expression` must still agree, so a real divergence in stored data cannot hide
-  under it — and it recognises the table-valued form (`pragma_journal_mode()`,
+  under it. It also recognises the table-valued form (`pragma_journal_mode()`,
   `pragma_page_size()`) the schema lessons use, not only the bare `PRAGMA x`
   spelling. A *data* pragma the lessons read for their schema
   (`pragma_table_info`, `pragma_foreign_key_list`) is **not** excluded and is
   compared normally.
 A `DATE`/`TIMESTAMP`-declared column is **not** excluded. Both adapters report
-the stored text verbatim — the browser through `sqlite3_column_text`, the
+the stored text verbatim: the browser through `sqlite3_column_text`, the
 gateway through the same raw sqlite3 API on its read path
 (`backend/internal/engine/sqlite_raw.go`), so the declared type is only a label
 and no `time.Time` is ever materialised. The two date probes are ordinary
@@ -326,8 +326,8 @@ adapter-parity-audit: OK (4 skipped)
 
 The 57 statements executed (51 compared, 6 excluded) are the real lesson SQL of
 every `dialect: 'sqlite'` chapter (`sqlite-essentials` s1–s7,
-`sqlite-in-production` r1–r7, `x1`–`x7`) — each exercise's reference solution
-and each worked example, 42 statements — plus 15 probes for the paths a curated
+`sqlite-in-production` r1–r7, `x1`–`x7`), each exercise's reference solution
+and each worked example, 42 statements, plus 15 probes for the paths a curated
 lesson never hits: syntax error, incomplete input, no such
 table/column/function, a UNIQUE and a NOT NULL constraint failure, the storage
 classes, division by zero, an empty result, a declared `DATE` and `TIMESTAMP`

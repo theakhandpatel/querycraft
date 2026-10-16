@@ -8,7 +8,9 @@ import (
 	"time"
 
 	"github.com/querycraft/sqlquery/backend/internal/ai"
+	"github.com/querycraft/sqlquery/backend/internal/ai/jobs"
 	"github.com/querycraft/sqlquery/backend/internal/metrics"
+	"github.com/querycraft/sqlquery/backend/internal/schema"
 )
 
 /* The M4 generation surface.
@@ -33,7 +35,18 @@ func (s *Server) UseAI(cfg ai.Config) {
 	// rather than a second, private guess. Its services are built per owner on
 	// demand, for the same reason a request builds one: the owner of a job
 	// comes from the session and never from the body.
-	s.jobs = ai.NewJobs(s.aiServiceFor, cfg.Limits)
+	s.jobs = jobs.NewJobs(s.aiServiceFor, cfg.Limits)
+}
+
+// DrainJobs waits for running generation jobs to finish, or for the context to
+// end. It is the shutdown path: a job detaches from the request that submitted
+// it, so the server closing does not stop it, and the store it writes to closes
+// when run returns.
+func (s *Server) DrainJobs(ctx context.Context) error {
+	if s == nil || s.jobs == nil {
+		return nil
+	}
+	return s.jobs.Drain(ctx)
 }
 
 // aiConfigured reports whether a generation service was attached at all.
@@ -71,16 +84,16 @@ func (s *Server) aiServiceFor(ownerID string) *ai.Service {
 // ownerScopedDepot records who asked for a challenge without letting the
 // request name that owner itself.
 type ownerScopedDepot struct {
-	ai.Depot
+	schema.Depot
 	owner string
 }
 
-func (d ownerScopedDepot) SaveChallenge(ctx context.Context, rec ai.Record) error {
+func (d ownerScopedDepot) SaveChallenge(ctx context.Context, rec schema.Record) error {
 	rec.OwnerID = d.owner
 	return d.Depot.SaveChallenge(ctx, rec)
 }
 
-func (d ownerScopedDepot) SaveCourse(ctx context.Context, rec ai.CourseRecord) error {
+func (d ownerScopedDepot) SaveCourse(ctx context.Context, rec schema.CourseRecord) error {
 	rec.OwnerID = d.owner
 	return d.Depot.SaveCourse(ctx, rec)
 }
@@ -89,7 +102,7 @@ func (d ownerScopedDepot) SaveCourse(ctx context.Context, rec ai.CourseRecord) e
 // same reason SaveChallenge and SaveCourse do: the owner of a record comes from
 // the session and never from the caller. A run's own id travels unchanged, so a
 // job id a client polled names the transcript it can later audit.
-func (d ownerScopedDepot) SaveRun(ctx context.Context, rec ai.RunTranscript) error {
+func (d ownerScopedDepot) SaveRun(ctx context.Context, rec schema.RunTranscript) error {
 	rec.OwnerID = d.owner
 	return d.Depot.SaveRun(ctx, rec)
 }
@@ -98,13 +111,13 @@ func (d ownerScopedDepot) SaveRun(ctx context.Context, rec ai.RunTranscript) err
 // route never loads every learner's records and discards them in the handler.
 // Overriding the *For methods here is what makes the service's own calls
 // owner-scoped without the service needing to know the caller.
-func (d ownerScopedDepot) ChallengesFor(ctx context.Context, _ string) ([]ai.Record, error) {
+func (d ownerScopedDepot) ChallengesFor(ctx context.Context, _ string) ([]schema.Record, error) {
 	return d.Depot.ChallengesFor(ctx, d.owner)
 }
-func (d ownerScopedDepot) CoursesFor(ctx context.Context, _ string) ([]ai.CourseRecord, error) {
+func (d ownerScopedDepot) CoursesFor(ctx context.Context, _ string) ([]schema.CourseRecord, error) {
 	return d.Depot.CoursesFor(ctx, d.owner)
 }
-func (d ownerScopedDepot) RunsFor(ctx context.Context, _ string) ([]ai.RunSummary, error) {
+func (d ownerScopedDepot) RunsFor(ctx context.Context, _ string) ([]schema.RunSummary, error) {
 	return d.Depot.RunsFor(ctx, d.owner)
 }
 
@@ -125,7 +138,7 @@ func (s *Server) runGeneration(w http.ResponseWriter, r *http.Request, kind stri
 	if !ok {
 		return
 	}
-	var req ai.GenerationRequest
+	var req schema.GenerationRequest
 	if !readJSON(w, r, &req) {
 		return
 	}
@@ -169,7 +182,7 @@ func (s *Server) runGeneration(w http.ResponseWriter, r *http.Request, kind stri
 	}
 	defer release()
 
-	var out ai.Outcome
+	var out schema.Outcome
 	if kind == "course" {
 		out = svc.GenerateCourse(ctx, req)
 	} else {
@@ -185,10 +198,8 @@ func (s *Server) runGeneration(w http.ResponseWriter, r *http.Request, kind stri
 // a client written against the standard would send; `async=1` is here because a
 // query parameter is what a person reaches for with curl.
 func asyncRequested(r *http.Request) bool {
-	if strings.EqualFold(strings.TrimSpace(r.URL.Query().Get("async")), "1") {
-		return true
-	}
-	if strings.EqualFold(strings.TrimSpace(r.URL.Query().Get("async")), "true") {
+	switch strings.ToLower(strings.TrimSpace(r.URL.Query().Get("async"))) {
+	case "1", "true":
 		return true
 	}
 	for _, pref := range strings.Split(r.Header.Get("Prefer"), ",") {
@@ -204,15 +215,15 @@ func asyncRequested(r *http.Request) bool {
 // gateway is already at its generation limit — and that refusal is reported in
 // the same envelope the blocking route uses, so a client has one shape to read
 // either way.
-func (s *Server) submitGenerationJob(w http.ResponseWriter, r *http.Request, ownerID, kind string, req ai.GenerationRequest) {
-	job, err := s.jobs.Submit(r.Context(), ai.Submission{
+func (s *Server) submitGenerationJob(w http.ResponseWriter, r *http.Request, ownerID, kind string, req schema.GenerationRequest) {
+	job, err := s.jobs.Submit(r.Context(), jobs.Submission{
 		OwnerID:  ownerID,
 		Kind:     kind,
 		Request:  req,
 		OnFinish: s.recordJob,
 	})
 	if err != nil {
-		var aiErr *ai.Error
+		var aiErr *schema.Error
 		if errors.As(err, &aiErr) {
 			out := unavailableOutcome(kind, aiErr.Message)
 			out.Error.Code = aiErr.Code
@@ -258,31 +269,31 @@ func (s *Server) handleGenerationJob(w http.ResponseWriter, r *http.Request) {
 }
 
 // unavailableOutcome is the shape every "AI is off" answer takes.
-func unavailableOutcome(kind, message string) ai.Outcome {
-	return ai.Outcome{
-		Status:   ai.StatusUnavailable,
+func unavailableOutcome(kind, message string) schema.Outcome {
+	return schema.Outcome{
+		Status:   schema.StatusUnavailable,
 		Kind:     kind,
 		Artifact: nil,
-		Stages:   []ai.Stage{},
-		Attempts: []ai.Attempt{},
-		Error:    &ai.Error{Code: ai.CodeUnavailable, Message: message},
+		Stages:   []schema.Stage{},
+		Attempts: []schema.Attempt{},
+		Error:    &schema.Error{Code: ai.CodeUnavailable, Message: message},
 	}
 }
 
 // statusForOutcome maps the envelope onto a status line. The envelope is always
 // the body, so a client can branch on `status` without inspecting the code; the
 // status line exists for caches, proxies and humans.
-func statusForOutcome(o ai.Outcome) int {
+func statusForOutcome(o schema.Outcome) int {
 	if o.Error != nil && o.Error.Code == ai.CodeInvalidRequest {
 		return http.StatusBadRequest
 	}
 	switch o.Status {
-	case ai.StatusActive, ai.StatusAwaitingApproval:
+	case schema.StatusActive, schema.StatusAwaitingApproval:
 		// Both mean a course was created and stored: an active one is finished,
 		// an awaiting-approval one has its outline stored and is waiting for the
 		// learner. 201 is the honest status line for either.
 		return http.StatusCreated
-	case ai.StatusUnavailable:
+	case schema.StatusUnavailable:
 		return http.StatusServiceUnavailable
 	default:
 		return http.StatusUnprocessableEntity
@@ -300,7 +311,7 @@ func (s *Server) handleListChallenges(w http.ResponseWriter, r *http.Request) {
 	svc := s.aiServiceFor(u.ID)
 	if svc == nil {
 		writeJSON(w, http.StatusServiceUnavailable, map[string]any{
-			"ok": false, "challenges": []ai.Record{},
+			"ok": false, "challenges": []schema.Record{},
 			"error": map[string]string{"code": ai.CodeUnavailable, "message": "AI is off: no generation service is configured."},
 		})
 		return
@@ -321,7 +332,7 @@ func (s *Server) handleGetChallenge(w http.ResponseWriter, r *http.Request) {
 	}
 	svc := s.aiServiceFor(u.ID)
 	if svc == nil {
-		writeAIError(w, &ai.Error{Code: ai.CodeUnavailable, Message: "AI is off: no generation service is configured."})
+		writeAIError(w, &schema.Error{Code: ai.CodeUnavailable, Message: "AI is off: no generation service is configured."})
 		return
 	}
 	rec, found, err := svc.Challenge(r.Context(), r.PathValue("id"))
@@ -347,7 +358,7 @@ func (s *Server) handleResetChallenge(w http.ResponseWriter, r *http.Request) {
 	}
 	svc := s.aiServiceFor(u.ID)
 	if svc == nil {
-		writeAIError(w, &ai.Error{Code: ai.CodeUnavailable, Message: "AI is off: no generation service is configured."})
+		writeAIError(w, &schema.Error{Code: ai.CodeUnavailable, Message: "AI is off: no generation service is configured."})
 		return
 	}
 	if err := svc.Reset(r.Context(), r.PathValue("id")); err != nil {
@@ -363,7 +374,7 @@ func (s *Server) handleResetChallenge(w http.ResponseWriter, r *http.Request) {
 // courses are read through the depot rather than through the owner-scoped
 // wrapper, because the wrapper scopes writes only: ownership is enforced here,
 // in the handlers that a request reaches with an id of its own choosing.
-func (s *Server) aiCourseDepot() ai.Depot {
+func (s *Server) aiCourseDepot() schema.Depot {
 	if !s.aiConfigured() || s.aiCfg.Depot == nil {
 		return nil
 	}
@@ -372,7 +383,7 @@ func (s *Server) aiCourseDepot() ai.Depot {
 
 // courseView is a stored course as a client sees it. The owner is the session's
 // own account and travels nowhere in the body.
-func courseView(rec ai.CourseRecord) ai.CourseRecord {
+func courseView(rec schema.CourseRecord) schema.CourseRecord {
 	rec.OwnerID = ""
 	return rec
 }
@@ -386,7 +397,7 @@ func (s *Server) handleListCourses(w http.ResponseWriter, r *http.Request) {
 	depot := s.aiCourseDepot()
 	if depot == nil {
 		writeJSON(w, http.StatusServiceUnavailable, map[string]any{
-			"ok": false, "courses": []ai.CourseRecord{},
+			"ok": false, "courses": []schema.CourseRecord{},
 			"error": map[string]string{"code": ai.CodeUnavailable, "message": "AI is off: no generation service is configured."},
 		})
 		return
@@ -398,11 +409,26 @@ func (s *Server) handleListCourses(w http.ResponseWriter, r *http.Request) {
 	}
 	/* The store filters by owner in SQL; nothing another learner owns is loaded
 	   only to be discarded. */
-	mine := make([]ai.CourseRecord, 0, len(recs))
+	mine := make([]schema.CourseRecord, 0, len(recs))
 	for _, rec := range recs {
 		mine = append(mine, courseView(rec))
 	}
 	writeJSON(w, http.StatusOK, map[string]any{"ok": true, "courses": mine})
+}
+
+// ownedCourse fetches a course by id and enforces the owner rule: a course that
+// is not the caller's is reported as missing, never as forbidden, so an id
+// cannot be probed for existence. The store error is returned so the caller can
+// answer it with the AI error envelope.
+func ownedCourse(ctx context.Context, depot schema.Depot, ownerID, id string) (schema.CourseRecord, bool, error) {
+	rec, found, err := depot.Course(ctx, id)
+	if err != nil {
+		return schema.CourseRecord{}, false, err
+	}
+	if !found || rec.OwnerID != ownerID {
+		return schema.CourseRecord{}, false, nil
+	}
+	return rec, true, nil
 }
 
 // handleGetCourse implements GET /courses/{id}.
@@ -413,17 +439,15 @@ func (s *Server) handleGetCourse(w http.ResponseWriter, r *http.Request) {
 	}
 	depot := s.aiCourseDepot()
 	if depot == nil {
-		writeAIError(w, &ai.Error{Code: ai.CodeUnavailable, Message: "AI is off: no generation service is configured."})
+		writeAIError(w, &schema.Error{Code: ai.CodeUnavailable, Message: "AI is off: no generation service is configured."})
 		return
 	}
-	rec, found, err := depot.Course(r.Context(), r.PathValue("id"))
+	rec, owned, err := ownedCourse(r.Context(), depot, u.ID, r.PathValue("id"))
 	if err != nil {
 		writeAIError(w, err)
 		return
 	}
-	// 404, never 403: a learner must not be able to confirm that another
-	// learner's course exists.
-	if !found || rec.OwnerID != u.ID {
+	if !owned {
 		notFound(w, "unknown course: "+r.PathValue("id"))
 		return
 	}
@@ -439,21 +463,20 @@ func (s *Server) handleDeleteCourse(w http.ResponseWriter, r *http.Request) {
 	}
 	depot := s.aiCourseDepot()
 	if depot == nil {
-		writeAIError(w, &ai.Error{Code: ai.CodeUnavailable, Message: "AI is off: no generation service is configured."})
+		writeAIError(w, &schema.Error{Code: ai.CodeUnavailable, Message: "AI is off: no generation service is configured."})
 		return
 	}
-	rec, found, err := depot.Course(r.Context(), r.PathValue("id"))
+	id := r.PathValue("id")
+	_, owned, err := ownedCourse(r.Context(), depot, u.ID, id)
 	if err != nil {
 		writeAIError(w, err)
 		return
 	}
-	// Ownership is checked before the delete, and a course that is not the
-	// caller's is reported as missing rather than as forbidden.
-	if !found || rec.OwnerID != u.ID {
-		notFound(w, "unknown course: "+r.PathValue("id"))
+	if !owned {
+		notFound(w, "unknown course: "+id)
 		return
 	}
-	if err := depot.DeleteCourse(r.Context(), r.PathValue("id")); err != nil {
+	if err := depot.DeleteCourse(r.Context(), id); err != nil {
 		writeAIError(w, err)
 		return
 	}
@@ -461,7 +484,7 @@ func (s *Server) handleDeleteCourse(w http.ResponseWriter, r *http.Request) {
 	// run that was paused on it, so a poller is told the run it was watching
 	// will never continue rather than being left on `awaiting_approval`.
 	if s.jobs != nil {
-		s.jobs.DiscardCourse(u.ID, r.PathValue("id"))
+		s.jobs.DiscardCourse(u.ID, id)
 	}
 	writeJSON(w, http.StatusOK, map[string]any{"ok": true})
 }
@@ -478,22 +501,22 @@ func (s *Server) handleBuildCourse(w http.ResponseWriter, r *http.Request) {
 	}
 	depot := s.aiCourseDepot()
 	if depot == nil {
-		writeAIError(w, &ai.Error{Code: ai.CodeUnavailable, Message: "AI is off: no generation service is configured."})
+		writeAIError(w, &schema.Error{Code: ai.CodeUnavailable, Message: "AI is off: no generation service is configured."})
 		return
 	}
 	id := r.PathValue("id")
-	rec, found, err := depot.Course(r.Context(), id)
+	rec, owned, err := ownedCourse(r.Context(), depot, u.ID, id)
 	if err != nil {
 		writeAIError(w, err)
 		return
 	}
-	if !found || rec.OwnerID != u.ID {
+	if !owned {
 		notFound(w, "unknown course: "+id)
 		return
 	}
 	// Only a course that is still being built can be continued. A finished
 	// course is not re-run, and a course refused earlier has no row at all.
-	if rec.Status != ai.StatusBuilding && rec.Status != ai.StatusAwaitingApproval {
+	if rec.Status != schema.StatusBuilding && rec.Status != schema.StatusAwaitingApproval {
 		writeJSON(w, http.StatusConflict, map[string]any{
 			"error": map[string]string{
 				"code":    ai.CodeInvalidRequest,
@@ -541,14 +564,14 @@ func (s *Server) handleBuildCourse(w http.ResponseWriter, r *http.Request) {
 // continuation to poll. It mirrors submitGenerationJob: a refusal the registry
 // cannot start is reported in the same envelope the blocking route uses.
 func (s *Server) submitCourseBuild(w http.ResponseWriter, r *http.Request, ownerID, courseID string) {
-	job, err := s.jobs.Submit(r.Context(), ai.Submission{
+	job, err := s.jobs.Submit(r.Context(), jobs.Submission{
 		OwnerID:       ownerID,
 		Kind:          "course",
 		BuildCourseID: courseID,
 		OnFinish:      s.recordJob,
 	})
 	if err != nil {
-		var aiErr *ai.Error
+		var aiErr *schema.Error
 		if errors.As(err, &aiErr) {
 			out := unavailableOutcome("course", aiErr.Message)
 			out.Error.Code = aiErr.Code
@@ -577,7 +600,7 @@ func (s *Server) handleTutor(w http.ResponseWriter, r *http.Request) {
 	}
 	svc := s.aiServiceFor(u.ID)
 	if svc == nil {
-		writeAIError(w, &ai.Error{Code: ai.CodeUnavailable, Message: "AI is off: no generation service is configured."})
+		writeAIError(w, &schema.Error{Code: ai.CodeUnavailable, Message: "AI is off: no generation service is configured."})
 		return
 	}
 	resp, err := svc.Tutor(r.Context(), req)
@@ -602,7 +625,7 @@ func (s *Server) handleCritique(w http.ResponseWriter, r *http.Request) {
 	req.ChallengeID = r.PathValue("id")
 	svc := s.aiServiceFor(u.ID)
 	if svc == nil {
-		writeAIError(w, &ai.Error{Code: ai.CodeUnavailable, Message: "AI is off: no generation service is configured."})
+		writeAIError(w, &schema.Error{Code: ai.CodeUnavailable, Message: "AI is off: no generation service is configured."})
 		return
 	}
 	resp, err := svc.Critique(r.Context(), req)
@@ -627,7 +650,7 @@ func (s *Server) handleReportDefect(w http.ResponseWriter, r *http.Request) {
 	rep.ChallengeID = r.PathValue("id")
 	svc := s.aiServiceFor(u.ID)
 	if svc == nil {
-		writeAIError(w, &ai.Error{Code: ai.CodeUnavailable, Message: "AI is off: no generation service is configured."})
+		writeAIError(w, &schema.Error{Code: ai.CodeUnavailable, Message: "AI is off: no generation service is configured."})
 		return
 	}
 	verdict, err := svc.ReportDefect(r.Context(), rep)
@@ -659,7 +682,7 @@ func (s *Server) handlePatch(w http.ResponseWriter, r *http.Request) {
 	dec.ApprovedBy = u.Email
 	svc := s.aiServiceFor(u.ID)
 	if svc == nil {
-		writeAIError(w, &ai.Error{Code: ai.CodeUnavailable, Message: "AI is off: no generation service is configured."})
+		writeAIError(w, &schema.Error{Code: ai.CodeUnavailable, Message: "AI is off: no generation service is configured."})
 		return
 	}
 	res, err := svc.ApplyPatch(r.Context(), dec)
@@ -672,10 +695,10 @@ func (s *Server) handlePatch(w http.ResponseWriter, r *http.Request) {
 
 /* ---------- errors and metrics ---------- */
 
-// writeAIError maps a service error onto a status line. An *ai.Error carries a
+// writeAIError maps a service error onto a status line. An *schema.Error carries a
 // stable code; anything else is a bug and is reported as one.
 func writeAIError(w http.ResponseWriter, err error) {
-	var aiErr *ai.Error
+	var aiErr *schema.Error
 	if !errors.As(err, &aiErr) {
 		writeJSON(w, http.StatusInternalServerError, map[string]any{
 			"error": map[string]string{"code": "EVALUATION_ERROR", "message": err.Error()},
@@ -719,7 +742,7 @@ const (
 // recordJob counts a generation that ran in the background. It is the same
 // series the blocking route increments, because from the operator's side a
 // generation is a generation however it was requested.
-func (s *Server) recordJob(v ai.JobView) {
+func (s *Server) recordJob(v jobs.JobView) {
 	code := ""
 	if v.Error != nil {
 		code = v.Error.Code
@@ -732,7 +755,7 @@ func (s *Server) recordJob(v ai.JobView) {
 	s.metrics.Set(metricGenerationJobs, metrics.Labels{"state": "running"}, float64(s.jobs.Running()), helpGenerationJobs)
 }
 
-func (s *Server) recordGeneration(out ai.Outcome) {
+func (s *Server) recordGeneration(out schema.Outcome) {
 	code := ""
 	if out.Error != nil {
 		code = out.Error.Code

@@ -94,10 +94,10 @@ export default function WorkbookScreen() {
         <div className="card">
           <h2>Course content</h2>
           {mods.map((m, i) => (
-            <div className="reportrow" key={m.id} style={{ cursor: 'pointer' }} onClick={() => s.openLessonIn(course.id, i)}>
+            <button type="button" className="reportrow action" key={m.id} onClick={() => s.openLessonIn(course.id, i)}>
               <span>{progress.done[m.id] ? <span className="pass">✓</span> : `${i + 1}.`} {m.title}</span>
               <span className="muted">{m.minutes} min</span>
-            </div>
+            </button>
           ))}
           <button className="small ghost mt-12" onClick={() => s.showScreen('course')}><Icon name="layers" />Open course home</button>
         </div>

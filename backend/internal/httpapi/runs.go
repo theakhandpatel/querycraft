@@ -4,12 +4,15 @@ import (
 	"net/http"
 
 	"github.com/querycraft/sqlquery/backend/internal/ai"
+	"github.com/querycraft/sqlquery/backend/internal/ai/transcript"
+	"github.com/querycraft/sqlquery/backend/internal/schema"
 )
 
 /* The agent-run audit trail, read over HTTP.
  *
- * A generation run leaves a transcript in app.runs (see backend/internal/ai
- * transcript.go). These two routes expose it to the account that owns the run:
+ * A generation run leaves a transcript in app.runs (see
+ * backend/internal/ai/transcript). These two routes expose it to the account
+ * that owns the run:
  *
  *   GET /runs       -> the caller's runs, newest first, as summaries
  *   GET /runs/{id}  -> one run's whole transcript
@@ -28,13 +31,13 @@ import (
 
 // runView is a stored transcript as a client sees it. The owner is the session's
 // own account, so it does not travel in the body.
-func runView(rec ai.RunTranscript) ai.RunTranscript {
+func runView(rec schema.RunTranscript) schema.RunTranscript {
 	rec.OwnerID = ""
 	return rec
 }
 
 // runSummaryView is the list shape with the same owner rule.
-func runSummaryView(s ai.RunSummary) ai.RunSummary {
+func runSummaryView(s schema.RunSummary) schema.RunSummary {
 	s.OwnerID = ""
 	return s
 }
@@ -44,7 +47,7 @@ func runSummaryView(s ai.RunSummary) ai.RunSummary {
 func runsOff(w http.ResponseWriter) {
 	writeJSON(w, http.StatusServiceUnavailable, map[string]any{
 		"ok":   false,
-		"runs": []ai.RunSummary{},
+		"runs": []schema.RunSummary{},
 		"error": map[string]string{
 			"code":    ai.CodeUnavailable,
 			"message": "Generation is off: no generation service is configured.",
@@ -71,10 +74,10 @@ func (s *Server) handleListRuns(w http.ResponseWriter, r *http.Request) {
 	/* The store filters by owner in SQL, so this list never loads another
 	   learner's runs only to discard them. `mine` is already only this owner's;
 	   the bound is still applied here. */
-	mine := make([]ai.RunSummary, 0, len(summaries))
+	mine := make([]schema.RunSummary, 0, len(summaries))
 	for _, sm := range summaries {
 		mine = append(mine, runSummaryView(sm))
-		if len(mine) >= ai.MaxRunList {
+		if len(mine) >= transcript.MaxRunList {
 			break
 		}
 	}
@@ -89,7 +92,7 @@ func (s *Server) handleGetRun(w http.ResponseWriter, r *http.Request) {
 	}
 	depot := s.aiCourseDepot()
 	if depot == nil {
-		writeAIError(w, &ai.Error{Code: ai.CodeUnavailable, Message: "Generation is off: no generation service is configured."})
+		writeAIError(w, &schema.Error{Code: ai.CodeUnavailable, Message: "Generation is off: no generation service is configured."})
 		return
 	}
 	rec, found, err := depot.Run(r.Context(), r.PathValue("id"))

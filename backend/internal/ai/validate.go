@@ -4,6 +4,8 @@ import (
 	"fmt"
 	"strings"
 	"unicode/utf8"
+
+	"github.com/querycraft/sqlquery/backend/internal/schema"
 )
 
 // The policy gate. A generated bundle is untrusted input: every field is
@@ -31,7 +33,7 @@ const (
 
 // validateRequest checks the learner's ask before any provider call. It returns
 // an envelope error naming the offending field in Detail, or nil.
-func validateRequest(req GenerationRequest, l Limits) *Error {
+func validateRequest(req schema.GenerationRequest, l Limits) *schema.Error {
 	if req.Kind != "" && req.Kind != "challenge" && req.Kind != "course" {
 		return reqError("kind", fmt.Sprintf("unknown kind %q", req.Kind))
 	}
@@ -79,22 +81,22 @@ func validateRequest(req GenerationRequest, l Limits) *Error {
 
 // normalizeRequest applies the clamping and defaulting validateRequest
 // promises, so the pipeline does not have to remember them separately.
-func normalizeRequest(req GenerationRequest, l Limits) GenerationRequest {
+func normalizeRequest(req schema.GenerationRequest, l Limits) schema.GenerationRequest {
 	req.ExerciseCount = clampInt(req.ExerciseCount, 1, 40)
 	if req.Difficulty == "" {
-		req.Difficulty = Intermediate
+		req.Difficulty = schema.Intermediate
 	}
 	return req
 }
 
-func reqError(field, detail string) *Error {
-	return newError(CodeInvalidRequest, StageValidateRequest,
+func reqError(field, detail string) *schema.Error {
+	return NewError(CodeInvalidRequest, schema.StageValidateRequest,
 		"The generation request is not usable.", field+": "+detail)
 }
 
-func validDifficulty(d Difficulty) bool {
+func validDifficulty(d schema.Difficulty) bool {
 	switch d {
-	case Beginner, Intermediate, Advanced:
+	case schema.Beginner, schema.Intermediate, schema.Advanced:
 		return true
 	}
 	return false
@@ -111,13 +113,7 @@ func nonEmpty(in []string) []string {
 }
 
 func clampInt(v, lo, hi int) int {
-	if v < lo {
-		return lo
-	}
-	if v > hi {
-		return hi
-	}
-	return v
+	return min(max(v, lo), hi)
 }
 
 /* ---------- artifact validation ---------- */
@@ -126,7 +122,7 @@ func clampInt(v, lo, hi int) int {
 // executed. Identity fields (id, version) and provenance are not checked: those
 // are the service's to stamp, not the model's to supply, and a supplied value
 // is overwritten rather than trusted.
-func validateArtifact(a Artifact, l Limits) *Error {
+func validateArtifact(a schema.Artifact, l Limits) *schema.Error {
 	type check struct {
 		field   string
 		present bool
@@ -198,8 +194,8 @@ func validateArtifact(a Artifact, l Limits) *Error {
 	return nil
 }
 
-func artifactError(field, detail string) *Error {
-	return newError(CodeInvalidArtifact, StageValidateArtifact,
+func artifactError(field, detail string) *schema.Error {
+	return NewError(CodeInvalidArtifact, schema.StageValidateArtifact,
 		"The generated challenge did not pass validation.", field+": "+detail)
 }
 
@@ -402,7 +398,7 @@ var forbiddenWords = map[string]bool{
 // validateReference enforces that a generated solution is one read-only
 // statement. It is the load-bearing check of the whole gate: this is the SQL
 // the pipeline will actually run.
-func validateReference(sql string) *Error {
+func validateReference(sql string) *schema.Error {
 	tokens := tokenizeSQL(sql)
 	segs := splitStatements(tokens)
 	if len(segs) == 0 || len(segs[0]) == 0 {
@@ -457,7 +453,7 @@ var setupForbiddenWords = map[string]bool{
 // scratch object. Statements are applied in a throwaway environment, but the
 // environment shares a cluster with everything else, so "throwaway" is a
 // property of the database, not of the statement.
-func validateSetupStatement(sql string) *Error {
+func validateSetupStatement(sql string) *schema.Error {
 	tokens := tokenizeSQL(sql)
 	segs := splitStatements(tokens)
 	if len(segs) == 0 || len(segs[0]) == 0 {

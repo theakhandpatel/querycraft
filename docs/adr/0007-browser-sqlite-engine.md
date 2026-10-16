@@ -1,9 +1,9 @@
-# ADR 0007 — The browser's SQLite engine: `@sqlite.org/sqlite-wasm` 3.53.4, chosen by `sqlite3_column_decltype`
+# ADR 0007: The browser's SQLite engine, `@sqlite.org/sqlite-wasm` 3.53.4, chosen by `sqlite3_column_decltype`
 
 - **Status:** accepted
 - **Date:** 2026-10-15
 - **Deciders:** project owner + agent session
-- **Question:** M6 needs a second engine *in the page* — SQLite compiled to WebAssembly,
+- **Question:** M6 needs a second engine *in the page*, SQLite compiled to WebAssembly,
   running next to PGlite, obeying the same deadline, the same caps and the same honesty
   rules, and grading the same answers as the gateway's `modernc.org/sqlite` executor. Four
   builds are credible. Which one, and what does choosing it commit the adapter to?
@@ -12,7 +12,7 @@ Settles **D12** in `docs/technical-design.md` §15. Extends ADR 0004 (why the ap
 PostgreSQL-first and SQLite is a second dialect) to the browser half of that dialect;
 ADR 0006 settles the *gateway* half's isolation. Every number below is measured on this
 machine (Linux, x86-64, Node 20.17 for the harness, Chromium for the in-page checks) and
-kept in `/tmp/sqlite-spike/RESULTS.json` — the harness is `harness/*.mjs` beside it. The
+kept in `/tmp/sqlite-spike/RESULTS.json`, the harness is `harness/*.mjs` beside it. The
 in-page side was re-measured against the shipping adapter after the code landed; those
 numbers are the ones quoted as "in the page".
 
@@ -31,7 +31,7 @@ numbers are the ones quoted as "in the page".
 | Error messages match the profile as-is | **yes** | **yes** | 2 mismatches | 2 mismatches |
 | Passes the 18-item SQL surface | yes | yes | yes | yes |
 
-All four passed every surface item the app actually needs — window functions, `WITH
+All four passed every surface item the app actually needs: window functions, `WITH
 RECURSIVE`, aggregate `FILTER`, `RETURNING`, `STRICT`, RIGHT/FULL JOIN, `json1` with `->`
 and `->>`, `rowid`, `AUTOINCREMENT`, dynamic typing, `LIKE` case-insensitive for ASCII,
 `GLOB`, the `date`/`strftime`/`julianday` family, `PRAGMA journal_mode`, and `EXPLAIN
@@ -67,14 +67,14 @@ sql.js / wa-sqlite / 3.41
 `sql.js` keeps its `Statement` pointer private and exports no `sqlite3_column_decltype`;
 `wa-sqlite`'s `sqlite-api.js` wraps 71 `sqlite3_*` calls and decltype is not among them, nor
 is `_sqlite3_column_decltype` in the Emscripten export list; 3.41 has no C-API surface at
-all. Each of them would label **every** column `expression` — including `id`, `name` and
-`price` — so the parity audit could never be green for this dialect, and the browser would
+all. Each of them would label **every** column `expression`: including `id`, `name` and
+`price`, so the parity audit could never be green for this dialect, and the browser would
 teach the opposite of what the gateway does.
 
 **Rejected alternative:** take the smaller engine (`wa-sqlite`, with the in-engine interrupt
 and clean messages) and relax the profile's label rule to `expression` everywhere. Rejected
 because it would make one of the dialect's few genuinely load-bearing facts untellable in
-the browser, and because the rule is shared, contract-level data — changing it to suit one
+the browser, and because the rule is shared, contract-level data: changing it to suit one
 driver would change the gateway's answer too.
 
 **Rejected alternative:** report the *storage class* instead of the declared type. Rejected
@@ -92,21 +92,21 @@ incomplete input          ->  SQLITE_ERROR: sqlite3 result code 1: incomplete in
 SELEC 1                   ->  SQLITE_ERROR: sqlite3 result code 1: near "SELEC": syntax error
 SELECT 'abc              ->  SQLITE_ERROR: sqlite3 result code 1: unrecognized token: "'abc"
 SELECT * FROM nope        ->  SQLITE_ERROR: sqlite3 result code 1: no such table: nope
-SELECT 1/0 (no error)     ->  —
+SELECT 1/0 (no error)     ->  (none)
 interrupted (deadline)    ->  SQLITE_INTERRUPT: sqlite3 result code 9: interrupted
 duplicate key             ->  SQLITE_CONSTRAINT_UNIQUE: sqlite3 result code 2067: UNIQUE constraint failed: …
 ```
 
-The profile's rules are written for SQLite's own sentence — `equals "incomplete input"`,
-`prefix "unrecognized token:"` — and those two rules can only fire once the driver's frame is
+The profile's rules are written for SQLite's own sentence: `equals "incomplete input"`,
+`prefix "unrecognized token:"`, and those two rules can only fire once the driver's frame is
 gone. `sql.js` and `wa-sqlite` need no such treatment (0 mismatches measured), which is the
 trade: the one engine that can label columns is the one engine that needs an unframer.
 
 The unframer is therefore **driver-specific and lives beside the driver**, in
 `web/src/api/sqlite.ts` (`sqliteUnframe`), exactly as the Go executor's `sqliteUnframe` lives
 beside `modernc.org/sqlite` in `backend/internal/engine/sqlite.go`. The two invert *different*
-frames — modernc writes `<errstr>: <msg> (<rc>)`, this build writes `<CODE>: sqlite3 result
-code <n>: <msg>` — and that is the point: `contracts/dialects/sqlite.json` stays a pure
+frames, modernc writes `<errstr>: <msg> (<rc>)`, this build writes `<CODE>: sqlite3 result
+code <n>: <msg>`, and that is the point: `contracts/dialects/sqlite.json` stays a pure
 matcher that both readers share, and neither reader has to know the other's driver. The
 profile has been pinned on both sides since (`scripts/sqlite-error-codes.mjs`, and the Go
 table test), which is what caught the Go half of the same defect.
@@ -114,7 +114,7 @@ table test), which is what caught the Go half of the same defect.
 The frame's own anchoring is what keeps SQLite's sentence intact: only the literal words
 `sqlite3 result code <n>: ` are removed, so `no such table: nope` and
 `unrecognized token: "'abc"` keep their colons. A message this build did not write is handed
-on untouched — reporting the driver's own words beats reporting a sentence the adapter
+on untouched: reporting the driver's own words beats reporting a sentence the adapter
 guessed at.
 
 ## Deadline, caps and placement
@@ -125,7 +125,7 @@ guessed at.
   connection answered a normal query immediately afterwards (`[[4]]`). This is the first
   engine in the app that can stop itself: PGlite's deadline is enforced by *terminating the
   Worker*, which loses the database, and `sql.js` cannot be stopped at all (`sqlite3_interrupt`
-  is not in its exports and it has no progress handler — its only stop is the host killing
+  is not in its exports and it has no progress handler: its only stop is the host killing
   the thread).
 - **The Worker is still required.** The progress handler cannot run while the step loop is
   not running: measured, a 137.7 ms statement on the page's thread pushed a 50 ms timer to
@@ -136,7 +136,7 @@ guessed at.
 - **The caps mirror the gateway, not PGlite.** `SQLITE_MAX_ROWS = 500` and
   `SQLITE_MAX_BYTES = 1 << 20` are `engine.DefaultLimits()` on the Go side, so a capped
   result is described identically by both adapters: the row cap is a successful, truncated
-  result (the callback returns literal `false`, which stops the step loop *without* an error —
+  result (the callback returns literal `false`, which stops the step loop *without* an error: 
   the browser's equivalent of the gateway cancelling at the cap), and the byte cap is
   `RESULT_LIMIT_EXCEEDED` with the rows already collected. `web/src/api/pglite.ts` keeps its
   own 200-row guard, which is deliberately stricter and exists to keep a 10 000-row
@@ -163,7 +163,7 @@ guessed at.
    through `web/src/api/sqliteProfile.ts`, which reads `contracts/dialects/sqlite.json`
    directly. One rule table, two readers, no mirror in the browser.
 4. **The workspace is an in-memory database**, private to the page, restored by closing and
-   reopening it — the browser's equivalent of ADR 0006's replace-the-file reset, with the copy
+   reopening it: the browser's equivalent of ADR 0006's replace-the-file reset, with the copy
    made unnecessary. `PRAGMA foreign_keys = ON` is applied per connection because SQLite's
    default is off and the dataset declares its references.
 5. **Anonymous and signed-in learners get the same in-page workspace.** The read-only posture
@@ -173,8 +173,8 @@ guessed at.
    `analyze: false`; the capability block carries `explain: false`, `dialects` names both
    engines, and `explainDialects` names only PostgreSQL, so the plan action is disabled with
    the profile's own reason (`sqlitePlanRefusal`) instead of a guessed one. `EXPLAIN QUERY
-   PLAN` is *available* (`explain_query_plan: true`) and is a different thing — planner text
-   with no row counts and no costs — and is the dialect's own plan affordance for the course
+   PLAN` is *available* (`explain_query_plan: true`) and is a different thing: planner text
+   with no row counts and no costs, and is the dialect's own plan affordance for the course
    track, not this app's plan contract.
 
 ## Consequences
@@ -184,7 +184,7 @@ guessed at.
 - The adapter owns an unframer, and the frame shape is pinned in
   `scripts/sqlite-error-codes.mjs` against the exact strings above, so a dependency bump that
   changes the frame fails a test instead of silently downgrading every syntax error to a
-  runtime error — which is the defect that produced this ADR's unframer in the first place.
+  runtime error, which is the defect that produced this ADR's unframer in the first place.
 - 849 KiB is the largest candidate and the slowest to boot. That cost is accepted because it
   is the only one that can teach the lesson, and it is not paid by anyone who does not open a
   SQLite chapter.

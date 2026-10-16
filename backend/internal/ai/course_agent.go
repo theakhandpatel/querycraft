@@ -1,13 +1,19 @@
 package ai
 
 import (
+	"cmp"
 	"context"
 	"encoding/json"
 	"fmt"
+	"slices"
+	"strconv"
 	"strings"
 	"time"
 
+	"github.com/querycraft/sqlquery/backend/internal/ai/provider"
+	"github.com/querycraft/sqlquery/backend/internal/ai/transcript"
 	"github.com/querycraft/sqlquery/backend/internal/engine"
+	"github.com/querycraft/sqlquery/backend/internal/schema"
 )
 
 /* M8 — the course agent.
@@ -81,7 +87,7 @@ type CourseOutline struct {
 	Subtitle   string           `json:"subtitle"`
 	Level      string           `json:"level"`
 	Objectives []string         `json:"objectives"`
-	Setup      SetupPlan        `json:"setup"`
+	Setup      schema.SetupPlan `json:"setup"`
 	Chapters   []OutlineChapter `json:"chapters"`
 }
 
@@ -116,7 +122,7 @@ type OutlineChapter struct {
 // whose outline must either widen the exercise count to one per chapter or
 // shrink the chapter list — and the gate is what turns that fact into a
 // sentence the learner can act on.
-func validateCourseOutline(o *CourseOutline, budget int, l Limits) *Error {
+func validateCourseOutline(o *CourseOutline, budget int, l Limits) *schema.Error {
 	if o == nil {
 		return coursePlanError("outline", "no outline")
 	}
@@ -198,7 +204,7 @@ func validateCourseOutline(o *CourseOutline, budget int, l Limits) *Error {
 // make could not be built, and the reason is a coupling between two numbers —
 // every chapter needs at least one exercise, so a request for N exercises
 // cannot be satisfied by an outline of more than N chapters.
-func courseOutlineExerciseError(o *CourseOutline, budget int) *Error {
+func courseOutlineExerciseError(o *CourseOutline, budget int) *schema.Error {
 	chapters := len(o.Chapters)
 	detail := fmt.Sprintf(
 		"the request asked for %d exercise(s) but the outline planned %d chapter(s), and every chapter must contain at least one exercise",
@@ -214,7 +220,7 @@ func courseOutlineExerciseError(o *CourseOutline, budget int) *Error {
 		detail += fmt.Sprintf(
 			"; give every chapter at least one exercise, or plan at most %d chapter(s)", budget)
 	}
-	return newError(CodeInvalidArtifact, StageValidateArtifact,
+	return NewError(CodeInvalidArtifact, schema.StageValidateArtifact,
 		fmt.Sprintf("The course's outline planned a chapter with no exercise. Every chapter must contain at least one exercise, and the request asked for %d exercise(s).", budget),
 		detail)
 }
@@ -237,27 +243,34 @@ const (
 	ChapterSkipped = "skipped"
 )
 
+// Exercise statuses in the per-exercise report, alongside the chapter statuses.
+const (
+	ExerciseVerified = "verified"
+	ExerciseFailed   = "failed"
+	ExerciseNotRun   = "not_run"
+)
+
 // courseBuild is the course as it is being written. It owns the plan the
 // gateway stores, the state of every planned chapter, and the running totals a
 // poller reads. One build serves one run; it is not shared and needs no lock,
 // because only the run's own goroutine touches it and every snapshot handed out
 // is a copy.
 type courseBuild struct {
-	request GenerationRequest
+	request schema.GenerationRequest
 	outline CourseOutline
-	plan    CoursePlan
+	plan    schema.CoursePlan
 	// written is indexed by outline position. A chapter that has not been
 	// handed in yet has the zero write: no state, and zero writes.
 	written []chapterWrite
 	// report carries the resolved chapters in outline order, which is the shape
 	// the outcome and the job view publish.
-	report   []ChapterResult
+	report   []schema.ChapterResult
 	repaired int
 	finished bool
 	// fatal is set when the run cannot continue for a reason no repair fixes —
 	// the store failed. The loop stops and the run reports it instead of
 	// pretending the course is still being written.
-	fatal *Error
+	fatal *schema.Error
 }
 
 type chapterWrite struct {
@@ -267,15 +280,15 @@ type chapterWrite struct {
 	// was written and refused is reported as refused rather than as one the run
 	// never reached.
 	attempted bool
-	lastErr   *Error
+	lastErr   *schema.Error
 }
 
 // newCourseBuild turns a validated outline into the plan skeleton the store
 // keeps while the chapters are written. The chapters exist from the first
 // moment — the learner sees the course's shape before its content — and carry
 // no sections until one passes.
-func newCourseBuild(req GenerationRequest, outline CourseOutline) *courseBuild {
-	plan := CoursePlan{
+func newCourseBuild(req schema.GenerationRequest, outline CourseOutline) *courseBuild {
+	plan := schema.CoursePlan{
 		ID:         courseID(outline),
 		Version:    1,
 		Title:      outline.Title,
@@ -284,14 +297,14 @@ func newCourseBuild(req GenerationRequest, outline CourseOutline) *courseBuild {
 		Dialect:    "postgresql",
 		Objectives: outline.Objectives,
 		Setup:      outline.Setup,
-		Chapters:   make([]CourseChapter, 0, len(outline.Chapters)),
+		Chapters:   make([]schema.CourseChapter, 0, len(outline.Chapters)),
 	}
 	for i, ch := range outline.Chapters {
 		n := ch.N
 		if n <= 0 {
 			n = i + 1
 		}
-		plan.Chapters = append(plan.Chapters, CourseChapter{
+		plan.Chapters = append(plan.Chapters, schema.CourseChapter{
 			ID:         ch.ID,
 			N:          n,
 			Title:      ch.Title,
@@ -299,8 +312,8 @@ func newCourseBuild(req GenerationRequest, outline CourseOutline) *courseBuild {
 			Kind:       ch.Kind,
 			Minutes:    ch.Minutes,
 			Objectives: ch.Objectives,
-			Sections:   []CourseSection{},
-			Exercises:  []CourseExercise{},
+			Sections:   []schema.CourseSection{},
+			Exercises:  []schema.CourseExercise{},
 		})
 	}
 	b := &courseBuild{request: req, outline: outline, plan: plan}
@@ -318,12 +331,12 @@ func newCourseBuild(req GenerationRequest, outline CourseOutline) *courseBuild {
 // The skip condition the design names lives here: a chapter the plan already
 // carries exercises for verified, so it is marked resolved and the conversation
 // is never asked to write it again.
-func newCourseBuildFromRecord(rec CourseRecord) *courseBuild {
+func newCourseBuildFromRecord(rec schema.CourseRecord) *courseBuild {
 	req := requestFromRecord(rec)
 	outline := outlineFromRecord(rec)
 	plan := rec.Plan
 	if plan.Chapters == nil {
-		plan.Chapters = []CourseChapter{}
+		plan.Chapters = []schema.CourseChapter{}
 	}
 	b := &courseBuild{request: req, outline: outline, plan: plan}
 	b.written = make([]chapterWrite, len(outline.Chapters))
@@ -349,7 +362,7 @@ func newCourseBuildFromRecord(rec CourseRecord) *courseBuild {
 			b.written[idx].state = ChapterDropped
 		}
 	}
-	b.report = append([]ChapterResult(nil), rec.Outcome.Chapters...)
+	b.report = append([]schema.ChapterResult(nil), rec.Outcome.Chapters...)
 	b.repaired = rec.Outcome.Evidence.Repairs
 	return b
 }
@@ -359,17 +372,17 @@ func newCourseBuildFromRecord(rec CourseRecord) *courseBuild {
 // the plan itself knows — the goal, as the plan's title — are used and the rest
 // are left at their defaults rather than invented, so an old record is still
 // readable and resumes with a prompt built only from what is really known.
-func requestFromRecord(rec CourseRecord) GenerationRequest {
+func requestFromRecord(rec schema.CourseRecord) schema.GenerationRequest {
 	if rec.Request != nil {
 		req := *rec.Request
 		req.Kind = "course"
 		return req
 	}
-	return GenerationRequest{
+	return schema.GenerationRequest{
 		Kind:          "course",
 		Title:         rec.Plan.Title,
-		Difficulty:    Intermediate,
-		ExerciseCount: rec.Plan.exerciseCount(),
+		Difficulty:    schema.Intermediate,
+		ExerciseCount: exerciseCount(&rec.Plan),
 	}
 }
 
@@ -379,7 +392,7 @@ func requestFromRecord(rec CourseRecord) GenerationRequest {
 // the plan does not keep is how many exercises each chapter planned. That is
 // reconstructed from the request's budget and, where a chapter already carries
 // content, reported as the count it actually holds.
-func outlineFromRecord(rec CourseRecord) CourseOutline {
+func outlineFromRecord(rec schema.CourseRecord) CourseOutline {
 	req := requestFromRecord(rec)
 	share := plannedExercisesPerChapter(courseExerciseBudget(req), len(rec.Plan.Chapters))
 	outline := CourseOutline{
@@ -473,8 +486,8 @@ func (b *courseBuild) missing() []string {
 func (b *courseBuild) resolved() bool { return b.next() < 0 }
 
 // verifiedChapters returns the chapters that verified, in outline order.
-func (b *courseBuild) verifiedChapters() []CourseChapter {
-	out := make([]CourseChapter, 0, len(b.outline.Chapters))
+func (b *courseBuild) verifiedChapters() []schema.CourseChapter {
+	out := make([]schema.CourseChapter, 0, len(b.outline.Chapters))
 	for i := range b.plan.Chapters {
 		if b.written[i].state == ChapterVerified {
 			out = append(out, b.plan.Chapters[i])
@@ -506,7 +519,7 @@ func (b *courseBuild) measuredRows() int {
 // The report is rebuilt in outline order rather than appended as chapters
 // arrive, because a chapter may arrive out of order and the report a learner
 // reads is the course's order, not the conversation's.
-func (b *courseBuild) record(res ChapterResult) {
+func (b *courseBuild) record(res schema.ChapterResult) {
 	for i := range b.report {
 		if b.report[i].ID == res.ID {
 			b.report[i] = res
@@ -523,21 +536,17 @@ func (b *courseBuild) sortReport() {
 	for i, ch := range b.outline.Chapters {
 		rank[ch.ID] = i
 	}
-	ordered := make([]ChapterResult, len(b.report))
-	copy(ordered, b.report)
-	for i := 1; i < len(ordered); i++ {
-		for j := i; j > 0 && rank[ordered[j].ID] < rank[ordered[j-1].ID]; j-- {
-			ordered[j], ordered[j-1] = ordered[j-1], ordered[j]
-		}
-	}
-	b.report = ordered
+	b.report = slices.Clone(b.report)
+	slices.SortStableFunc(b.report, func(a, c schema.ChapterResult) int {
+		return cmp.Compare(rank[a.ID], rank[c.ID])
+	})
 }
 
 // fullReport is one entry per planned chapter, in order: what verified, what
 // was dropped, and what the run never reached. A report that omitted the last
 // kind would let "not checked" read as "fine".
-func (b *courseBuild) fullReport() []ChapterResult {
-	out := make([]ChapterResult, 0, len(b.outline.Chapters))
+func (b *courseBuild) fullReport() []schema.ChapterResult {
+	out := make([]schema.ChapterResult, 0, len(b.outline.Chapters))
 	for i, och := range b.outline.Chapters {
 		found := false
 		for _, res := range b.report {
@@ -554,7 +563,7 @@ func (b *courseBuild) fullReport() []ChapterResult {
 			} else if b.written[i].attempted {
 				state = ChapterRefused
 			}
-			out = append(out, ChapterResult{ID: och.ID, Title: och.Title, Status: state, Exercises: []ExerciseResult{}, Error: b.written[i].lastErr})
+			out = append(out, schema.ChapterResult{ID: och.ID, Title: och.Title, Status: state, Exercises: []schema.ExerciseResult{}, Error: b.written[i].lastErr})
 		}
 	}
 	return out
@@ -590,7 +599,7 @@ func (b *courseBuild) verifiedCount() int {
 // exactly the outlines it accepted before. coursePrompt itself is untouched —
 // it is shared with the whole-plan path, and the chapter/exercise coupling only
 // has to be stated where chapters are chosen.
-func courseOutlinePrompt(req GenerationRequest) string {
+func courseOutlinePrompt(req schema.GenerationRequest) string {
 	budget := courseExerciseBudget(req)
 	return coursePrompt(req) + "\n\nBefore writing any chapter, reply with the course's outline only: the title, the subtitle, the level, the course objectives, the setup, and the chapter list. Each chapter in the outline has an id, its position n, a title, a one-sentence summary, its objectives, and how many exercises it will contain. The outline is what the learner sees while the chapters are still being written, so it must stand on its own. Do not write any chapter body yet." +
 		fmt.Sprintf("\n\nThis course's budget is %d exercise(s) in total, and every chapter must contain at least one exercise, so the outline may plan at most %d chapter(s).", budget, budget)
@@ -643,11 +652,11 @@ const courseOutlineSchema = `{
 // courseTools is what the model may call. Both names are constants because the
 // built-in provider answers the same protocol a model does, and a name written
 // twice would eventually be written differently twice.
-func courseTools() []Tool {
-	return []Tool{
+func courseTools() []provider.Tool {
+	return []provider.Tool{
 		{
 			Type: "function",
-			Function: ToolFunction{
+			Function: provider.ToolFunction{
 				Name:        toolSaveChapter,
 				Description: "Save one finished chapter of the course: its markdown sections and its exercises, using the id the outline gave it. The gateway runs every exercise against the real database and answers with what it measured, so a chapter that does not run comes back with the database's own error and must be sent again.",
 				Parameters:  json.RawMessage(courseChapterSchema),
@@ -655,7 +664,7 @@ func courseTools() []Tool {
 		},
 		{
 			Type: "function",
-			Function: ToolFunction{
+			Function: provider.ToolFunction{
 				Name:        toolFinishCourse,
 				Description: "Close the course once every chapter in the outline has been saved and accepted.",
 				Parameters:  json.RawMessage(finishCourseSchema),
@@ -676,7 +685,7 @@ You now write the course one chapter at a time by calling a function instead of 
 // outline that was already agreed and stored, and what to do first. The
 // conversation starts from the outline rather than from the whole course
 // because the outline is what the learner can already see.
-func courseAgentPrompt(req GenerationRequest, outline CourseOutline) string {
+func courseAgentPrompt(req schema.GenerationRequest, outline CourseOutline) string {
 	var b strings.Builder
 	b.WriteString(coursePrompt(req))
 	b.WriteString("\n\nThe course's outline, already agreed and stored. Write exactly these chapters, in this order, with these ids:\n")
@@ -696,8 +705,8 @@ func courseAgentPrompt(req GenerationRequest, outline CourseOutline) string {
 // chapter as an assistant save_chapter call and the gateway's own verdict for
 // it, which is exactly the protocol the model speaks — so the model sees what
 // is done and is never asked to write it again.
-func storedChapterTurns(build *courseBuild) []ProviderMessage {
-	var out []ProviderMessage
+func storedChapterTurns(build *courseBuild) []provider.ProviderMessage {
+	var out []provider.ProviderMessage
 	for i := range build.outline.Chapters {
 		state := build.written[i].state
 		if state != ChapterVerified && state != ChapterDropped {
@@ -705,16 +714,16 @@ func storedChapterTurns(build *courseBuild) []ProviderMessage {
 		}
 		och := build.outline.Chapters[i]
 		out = append(out,
-			ProviderMessage{
+			provider.ProviderMessage{
 				Role:    "assistant",
 				Content: "",
-				ToolCalls: []ToolCall{{
+				ToolCalls: []provider.ToolCall{{
 					ID:       "stored_" + och.ID,
 					Type:     "function",
-					Function: ToolCallFunction{Name: toolSaveChapter, Arguments: `{"id":"` + och.ID + `"}`},
+					Function: provider.ToolCallFunction{Name: toolSaveChapter, Arguments: `{"id":"` + och.ID + `"}`},
 				}},
 			},
-			ProviderMessage{
+			provider.ProviderMessage{
 				Role:       "tool",
 				ToolCallID: "stored_" + och.ID,
 				Content: toolResult(map[string]any{
@@ -738,7 +747,7 @@ func storedChapterTurns(build *courseBuild) []ProviderMessage {
 // (RequireApproval), the run stops after the outline: the stored `building`
 // course is the state, the outcome is `awaiting_approval`, and BuildCourse (a
 // later, separate request) continues it into the chapter phase.
-func (s *Service) generateCourse(ctx context.Context, req GenerationRequest) Outcome {
+func (s *Service) generateCourse(ctx context.Context, req schema.GenerationRequest) schema.Outcome {
 	limits := s.cfg.Limits.Merge(DefaultLimits())
 	runCtx, cancel := context.WithTimeout(ctx, limits.Timeout)
 	defer cancel()
@@ -755,7 +764,7 @@ func (s *Service) generateCourse(ctx context.Context, req GenerationRequest) Out
 		return p.awaitApproval(build)
 	}
 	if aerr := p.runCourseAgent(runCtx, build); aerr != nil {
-		out := p.failedOutcome(StatusFailed, aerr)
+		out := p.failedOutcome(schema.StatusFailed, aerr)
 		out.Plan = nil
 		out.Chapters = build.fullReport()
 		return out
@@ -768,20 +777,20 @@ func (s *Service) generateCourse(ctx context.Context, req GenerationRequest) Out
 // same gate the whole-plan path uses, and stores it as a `building` course
 // before a single chapter is written. It returns the build, or the failed
 // outcome that ended the run — never both.
-func (p *pipeline) outlinePhase(runCtx context.Context, req GenerationRequest, start time.Time) (*courseBuild, *Outcome) {
-	p.begin(StageValidateRequest)
+func (p *pipeline) outlinePhase(runCtx context.Context, req schema.GenerationRequest, start time.Time) (*courseBuild, *schema.Outcome) {
+	p.begin(schema.StageValidateRequest)
 	if verr := validateRequest(req, p.limits); verr != nil {
-		p.timed(StageValidateRequest, StateFailed, verr.Detail, start)
-		out := p.failedOutcome(StatusFailed, verr)
+		p.timed(schema.StageValidateRequest, schema.StateFailed, verr.Detail, start)
+		out := p.failedOutcome(schema.StatusFailed, verr)
 		return nil, &out
 	}
 	req = normalizeRequest(req, p.limits)
-	p.timed(StageValidateRequest, StateDone, requestSummary(req), start)
+	p.timed(schema.StageValidateRequest, schema.StateDone, requestSummary(req), start)
 
 	// The outline. It may use the strict schema path, because it is one small
 	// answer with no tool calls in it.
-	p.begin(StageRequestBundle)
-	raw, perr := p.svc.complete(runCtx, ProviderRequest{
+	p.begin(schema.StageRequestBundle)
+	raw, perr := p.svc.complete(runCtx, provider.ProviderRequest{
 		Kind:           "course",
 		System:         courseSystemPrompt(),
 		Prompt:         courseOutlinePrompt(req),
@@ -789,24 +798,24 @@ func (p *pipeline) outlinePhase(runCtx context.Context, req GenerationRequest, s
 		MaxOutputBytes: p.limits.MaxOutputBytes,
 	})
 	if perr != nil {
-		out := p.failedOutcome(StatusFailed, perr)
+		out := p.failedOutcome(schema.StatusFailed, perr)
 		return nil, &out
 	}
 	var outline CourseOutline
 	if derr := decodeJSON(raw, &outline); derr != nil {
-		e := newError(CodeInvalidArtifact, StageRequestBundle,
+		e := NewError(CodeInvalidArtifact, schema.StageRequestBundle,
 			"The provider's reply is not a usable course outline.", "outline: "+derr.Error())
-		p.timed(StageRequestBundle, StateFailed, e.Detail, start)
-		out := p.failedOutcome(StatusFailed, e)
+		p.timed(schema.StageRequestBundle, schema.StateFailed, e.Detail, start)
+		out := p.failedOutcome(schema.StatusFailed, e)
 		return nil, &out
 	}
-	p.begin(StageValidateArtifact)
+	p.begin(schema.StageValidateArtifact)
 	if verr := validateCourseOutline(&outline, courseExerciseBudget(req), p.limits); verr != nil {
-		p.timed(StageValidateArtifact, StateFailed, verr.Detail, start)
-		out := p.failedOutcome(StatusFailed, verr)
+		p.timed(schema.StageValidateArtifact, schema.StateFailed, verr.Detail, start)
+		out := p.failedOutcome(schema.StatusFailed, verr)
 		return nil, &out
 	}
-	p.timed(StageValidateArtifact, StateDone,
+	p.timed(schema.StageValidateArtifact, schema.StateDone,
 		fmt.Sprintf("outline accepted: %d chapters, %d exercises planned", len(outline.Chapters), outlineExerciseCount(outline)), start)
 
 	build := newCourseBuild(req, outline)
@@ -816,10 +825,10 @@ func (p *pipeline) outlinePhase(runCtx context.Context, req GenerationRequest, s
 	// Stored before a single chapter is written, so a reload, a second device
 	// or a poll sees the course's shape rather than nothing.
 	if oerr := p.storeBuilding(runCtx, build); oerr != nil {
-		out := p.failedOutcome(StatusFailed, oerr)
+		out := p.failedOutcome(schema.StatusFailed, oerr)
 		return nil, &out
 	}
-	p.timed(StageRequestBundle, StateDone,
+	p.timed(schema.StageRequestBundle, schema.StateDone,
 		fmt.Sprintf("outline received: %d chapters planned", len(outline.Chapters)), start)
 	return build, nil
 }
@@ -829,10 +838,10 @@ func (p *pipeline) outlinePhase(runCtx context.Context, req GenerationRequest, s
 // being asked to approve; the chapter phase runs later, as its own request. The
 // activate stage is reported as skipped rather than failed: nothing went wrong,
 // the run simply stopped where the learner asked it to.
-func (p *pipeline) awaitApproval(build *courseBuild) Outcome {
-	p.mark(StageActivate, StateSkipped,
+func (p *pipeline) awaitApproval(build *courseBuild) schema.Outcome {
+	p.mark(schema.StageActivate, schema.StateSkipped,
 		"waiting for the learner to approve the outline before the chapters are written")
-	out := p.outcome(StatusAwaitingApproval, nil, nil)
+	out := p.outcome(schema.StatusAwaitingApproval, nil, nil)
 	plan := build.plan
 	plan.Chapters = buildingChapters(build)
 	out.Plan = &plan
@@ -845,13 +854,13 @@ func (p *pipeline) awaitApproval(build *courseBuild) Outcome {
 // request stored beside it, and runs the chapter phase to completion. A chapter
 // that already verified is not re-asked for: the stored plan's own content is
 // the skip condition (newCourseBuildFromRecord).
-func (s *Service) BuildCourse(ctx context.Context, id string) Outcome {
+func (s *Service) BuildCourse(ctx context.Context, id string) schema.Outcome {
 	avail := s.Available()
 	if !avail.Available {
 		return s.unavailable("course", avail)
 	}
-	rec := newTranscriptRecorder(RunKindCourse, runIDFrom(ctx), providerRedactor(s.cfg.Provider))
-	ctx = WithTranscript(ctx, rec)
+	rec := transcript.NewRecorder(schema.RunKindCourse, transcript.RunIDFrom(ctx), transcript.Redactor(s.cfg.Provider))
+	ctx = transcript.WithRecorder(ctx, rec)
 	out := s.buildCourseRecorded(ctx, id)
 	s.saveTranscript(ctx, rec, out)
 	return out
@@ -861,7 +870,7 @@ func (s *Service) BuildCourse(ctx context.Context, id string) Outcome {
 // attached — the same split generate/generateRecorded use, for the same reason:
 // the recorder has to exist before the first provider call and be finished once,
 // whatever the outcome.
-func (s *Service) buildCourseRecorded(ctx context.Context, id string) Outcome {
+func (s *Service) buildCourseRecorded(ctx context.Context, id string) schema.Outcome {
 	limits := s.cfg.Limits.Merge(DefaultLimits())
 	runCtx, cancel := context.WithTimeout(ctx, limits.Timeout)
 	defer cancel()
@@ -884,7 +893,7 @@ func (s *Service) buildCourseRecorded(ctx context.Context, id string) Outcome {
 	p.courseID = build.plan.ID
 
 	if aerr := p.runCourseAgent(runCtx, build); aerr != nil {
-		out := p.failedOutcome(StatusFailed, aerr)
+		out := p.failedOutcome(schema.StatusFailed, aerr)
 		out.Plan = nil
 		out.Chapters = build.fullReport()
 		return out
@@ -895,14 +904,14 @@ func (s *Service) buildCourseRecorded(ctx context.Context, id string) Outcome {
 // courseBuildRefusal is the honest answer when a build cannot even start: the
 // row is gone, or the store cannot be read. It stores nothing and reports the
 // reason instead of pretending a chapter phase ran.
-func courseBuildRefusal(code, message string) Outcome {
-	return Outcome{
-		Status:   StatusFailed,
+func courseBuildRefusal(code, message string) schema.Outcome {
+	return schema.Outcome{
+		Status:   schema.StatusFailed,
 		Kind:     "course",
 		Artifact: nil,
-		Stages:   []Stage{},
-		Attempts: []Attempt{},
-		Error:    newError(code, StageActivate, message, ""),
+		Stages:   []schema.Stage{},
+		Attempts: []schema.Attempt{},
+		Error:    NewError(code, schema.StageActivate, message, ""),
 	}
 }
 
@@ -918,9 +927,9 @@ func outlineExerciseCount(o CourseOutline) int {
 // runCourseAgent drives the chapter conversation. It returns nil when the
 // conversation ended (however it ended), and an error only when the run itself
 // could not continue: the provider is gone, or the run ran out of time.
-func (p *pipeline) runCourseAgent(ctx context.Context, build *courseBuild) *Error {
+func (p *pipeline) runCourseAgent(ctx context.Context, build *courseBuild) *schema.Error {
 	if p.svc.cfg.Depot == nil {
-		return newError(CodeUnavailable, StageActivate,
+		return NewError(CodeUnavailable, schema.StageActivate,
 			"The course could not be stored while it was being written.", "")
 	}
 	ex, release, err := p.openScratch(ctx, &build.plan)
@@ -929,7 +938,7 @@ func (p *pipeline) runCourseAgent(ctx context.Context, build *courseBuild) *Erro
 	}
 	defer release()
 
-	messages := []ProviderMessage{
+	messages := []provider.ProviderMessage{
 		{Role: "system", Content: courseAgentSystemPrompt()},
 		{Role: "user", Content: courseAgentPrompt(build.request, build.outline)},
 	}
@@ -944,9 +953,9 @@ func (p *pipeline) runCourseAgent(ctx context.Context, build *courseBuild) *Erro
 	// conversation so far, which is not a single request. Recording the two
 	// opening turns here and each assistant turn and tool result below keeps
 	// the transcript one entry per fact rather than one per round.
-	rec := transcriptFrom(ctx)
+	rec := transcript.From(ctx)
 	for _, m := range messages {
-		rec.message(m.Role, m.Content)
+		rec.Message(m.Role, m.Content)
 	}
 	tools := courseTools()
 	turns := 0
@@ -958,8 +967,8 @@ func (p *pipeline) runCourseAgent(ctx context.Context, build *courseBuild) *Erro
 		if build.finished && build.resolved() {
 			break
 		}
-		p.begin(StageRequestBundle)
-		resp, perr := p.svc.completeRaw(ctx, ProviderRequest{
+		p.begin(schema.StageRequestBundle)
+		resp, perr := p.svc.completeRaw(ctx, provider.ProviderRequest{
 			Kind:           "course",
 			Prompt:         courseOutlinePrompt(build.request),
 			Messages:       messages,
@@ -971,25 +980,25 @@ func (p *pipeline) runCourseAgent(ctx context.Context, build *courseBuild) *Erro
 			return perr
 		}
 		turns++
-		p.mark(StageRequestBundle, StateDone,
+		p.mark(schema.StageRequestBundle, schema.StateDone,
 			fmt.Sprintf("chapter conversation: %d turn(s), %d of %d chapters written", turns, build.verifiedCount(), len(build.outline.Chapters)))
 
 		// The assistant turn itself is recorded by completeRaw. A reply with no
 		// tool call is the protocol being missed; the nudge back is a real
 		// message the model is sent, so it is recorded too.
-		messages = append(messages, ProviderMessage{Role: "assistant", Content: resp.Text, ToolCalls: resp.ToolCalls})
+		messages = append(messages, provider.ProviderMessage{Role: "assistant", Content: resp.Text, ToolCalls: resp.ToolCalls})
 		if len(resp.ToolCalls) == 0 {
 			// The protocol asks for a tool call. Saying so once is a repair; a
 			// model that keeps replying with prose is bounded by the rounds.
 			nudge := "Call save_chapter with the next chapter, or finish_course when every chapter has been written and accepted."
-			rec.message("user", nudge)
-			messages = append(messages, ProviderMessage{Role: "user", Content: nudge})
+			rec.Message("user", nudge)
+			messages = append(messages, provider.ProviderMessage{Role: "user", Content: nudge})
 			continue
 		}
 		for _, call := range resp.ToolCalls {
 			result := p.handleToolCall(ctx, build, ex, call)
-			rec.recordToolResult(call.ID, result)
-			messages = append(messages, ProviderMessage{
+			rec.RecordToolResult(call.ID, result)
+			messages = append(messages, provider.ProviderMessage{
 				Role:       "tool",
 				ToolCallID: call.ID,
 				Content:    result,
@@ -1004,7 +1013,7 @@ func (p *pipeline) runCourseAgent(ctx context.Context, build *courseBuild) *Erro
 		// The conversation ran out of rounds with chapters still unwritten.
 		// Every one of them is reported as skipped by fullReport, so the course
 		// is a smaller honest one rather than a course with a hole in it.
-		p.mark(StageRepair, StateDone,
+		p.mark(schema.StageRepair, schema.StateDone,
 			fmt.Sprintf("the conversation ended after %d turn(s) with %d chapter(s) unwritten", turns, len(build.missing())))
 	}
 	return nil
@@ -1014,7 +1023,7 @@ func (p *pipeline) runCourseAgent(ctx context.Context, build *courseBuild) *Erro
 // model reads next. The result is the engine's own verdict, never a summary of
 // it: "the cross-check disagreed" is not something a model can repair against,
 // and the evaluator's message is.
-func (p *pipeline) handleToolCall(ctx context.Context, build *courseBuild, ex engine.Executor, call ToolCall) string {
+func (p *pipeline) handleToolCall(ctx context.Context, build *courseBuild, ex engine.Executor, call provider.ToolCall) string {
 	switch strings.TrimSpace(call.Function.Name) {
 	case toolSaveChapter:
 		return p.saveChapterTool(ctx, build, ex, call)
@@ -1031,12 +1040,12 @@ func (p *pipeline) handleToolCall(ctx context.Context, build *courseBuild, ex en
 // saveChapterTool is the load-bearing call. It validates the chapter with the
 // same gate the whole-plan path uses, runs it in the course's scratch
 // environment, and answers with the engine's verdict.
-func (p *pipeline) saveChapterTool(ctx context.Context, build *courseBuild, ex engine.Executor, call ToolCall) string {
+func (p *pipeline) saveChapterTool(ctx context.Context, build *courseBuild, ex engine.Executor, call provider.ToolCall) string {
 	args := strings.TrimSpace(call.Function.Arguments)
 	if args == "" {
 		return toolResult(map[string]any{"status": "invalid", "message": "save_chapter was called with no arguments."})
 	}
-	var chapter CourseChapter
+	var chapter schema.CourseChapter
 	if jerr := decodeJSON(args, &chapter); jerr != nil {
 		return toolResult(map[string]any{
 			"status":  "invalid",
@@ -1130,13 +1139,13 @@ func (p *pipeline) saveChapterTool(ctx context.Context, build *courseBuild, ex e
 // resolved, and reporting it as resolved would be a claim about a chapter the
 // engine has already refused.
 func (p *pipeline) publish(build *courseBuild) {
-	p.chapters = append([]ChapterResult(nil), build.report...)
+	p.chapters = append([]schema.ChapterResult(nil), build.report...)
 	p.verified = build.verifiedCount()
 	p.notify()
 }
 
 // chapterRows totals one chapter's measured reference rows.
-func chapterRows(res ChapterResult) int {
+func chapterRows(res schema.ChapterResult) int {
 	n := 0
 	for _, ex := range res.Exercises {
 		n += ex.ReferenceRows
@@ -1147,7 +1156,7 @@ func chapterRows(res ChapterResult) int {
 // chapterRefused turns a failed write into the model's next instruction. Before
 // the write budget is spent it is a repair; after it, the chapter is dropped,
 // because the chapters around it are not the reason it failed.
-func (p *pipeline) chapterRefused(ctx context.Context, build *courseBuild, pos int, candidate CourseChapter, verr *Error, failed string) string {
+func (p *pipeline) chapterRefused(ctx context.Context, build *courseBuild, pos int, candidate schema.CourseChapter, verr *schema.Error, failed string) string {
 	build.written[pos].writes++
 	build.written[pos].attempted = true
 	build.written[pos].lastErr = verr
@@ -1174,7 +1183,7 @@ func (p *pipeline) chapterRefused(ctx context.Context, build *courseBuild, pos i
 		// verify can still be handed to a learner — a smaller honest course,
 		// never a course with an unverified exercise in it.
 		build.written[pos].state = ChapterDropped
-		build.record(ChapterResult{
+		build.record(schema.ChapterResult{
 			ID:        och.ID,
 			Title:     och.Title,
 			Status:    ChapterDropped,
@@ -1222,7 +1231,7 @@ func (p *pipeline) finishCourseTool(build *courseBuild) string {
 
 // finalizeCourse assembles the plan from the chapters that verified and decides
 // whether the course can be handed to a learner.
-func (p *pipeline) finalizeCourse(ctx context.Context, build *courseBuild) Outcome {
+func (p *pipeline) finalizeCourse(ctx context.Context, build *courseBuild) schema.Outcome {
 	report := build.fullReport()
 	verified := build.verifiedChapters()
 
@@ -1242,14 +1251,14 @@ func (p *pipeline) finalizeCourse(ctx context.Context, build *courseBuild) Outco
 		dropNote = fmt.Sprintf("; %d chapter(s) dropped (%s)", len(dropped), strings.Join(dropped, ", "))
 	}
 	stageStart := time.Now()
-	p.timed(StageReferenceContract, StateDone,
+	p.timed(schema.StageReferenceContract, schema.StateDone,
 		fmt.Sprintf("%d/%d reference solutions returned rows (%d rows measured)", verifiedExercises, verifiedExercises, p.evidence.ReferenceRows), stageStart)
-	p.timed(StageCrossCheck, StateDone,
+	p.timed(schema.StageCrossCheck, schema.StateDone,
 		fmt.Sprintf("%d independent solutions agreed with their reference%s", verifiedExercises, dropNote), stageStart)
-	p.timed(StageAdversarialFixtures, StateDone,
+	p.timed(schema.StageAdversarialFixtures, schema.StateDone,
 		fmt.Sprintf("wrong queries were rejected for all %d exercises%s", verifiedExercises, dropNote), stageStart)
 	if build.repaired > 0 {
-		p.mark(StageRepair, StateDone, fmt.Sprintf("%d chapter write(s) repaired in session", build.repaired))
+		p.mark(schema.StageRepair, schema.StateDone, fmt.Sprintf("%d chapter write(s) repaired in session", build.repaired))
 	}
 
 	if len(verified) == 0 {
@@ -1257,7 +1266,7 @@ func (p *pipeline) finalizeCourse(ctx context.Context, build *courseBuild) Outco
 		// the outline is deleted rather than left as a course a learner can
 		// open, because "a course with no chapters" is not a course.
 		if err := p.svc.cfg.Depot.DeleteCourse(ctx, build.plan.ID); err != nil {
-			p.mark(StageActivate, StateFailed, "no chapter verified and the outline row could not be removed")
+			p.mark(schema.StageActivate, schema.StateFailed, "no chapter verified and the outline row could not be removed")
 		}
 		return p.courseRefused(build, report)
 	}
@@ -1266,13 +1275,13 @@ func (p *pipeline) finalizeCourse(ctx context.Context, build *courseBuild) Outco
 
 // courseRefused is the outcome of a run in which no chapter verified. It names
 // the failure that stopped the last chapter and counts what was attempted.
-func (p *pipeline) courseRefused(build *courseBuild, report []ChapterResult) Outcome {
+func (p *pipeline) courseRefused(build *courseBuild, report []schema.ChapterResult) schema.Outcome {
 	// The row the outline wrote is gone, so the run stops naming it: a poller
 	// that reads after the delete must not be handed an id that no longer
 	// answers.
 	p.courseID = ""
 	refused, dropped := 0, 0
-	var last *Error
+	var last *schema.Error
 	for _, ch := range report {
 		switch ch.Status {
 		case ChapterDropped:
@@ -1281,7 +1290,7 @@ func (p *pipeline) courseRefused(build *courseBuild, report []ChapterResult) Out
 			refused++
 		}
 		for _, ex := range ch.Exercises {
-			if ex.Status != "verified" && ex.Error != nil {
+			if ex.Status != ExerciseVerified && ex.Error != nil {
 				last = ex.Error
 			}
 		}
@@ -1290,23 +1299,23 @@ func (p *pipeline) courseRefused(build *courseBuild, report []ChapterResult) Out
 		}
 	}
 	code := CodeRepairExhausted
-	stage := StageRequestBundle
+	stage := schema.StageRequestBundle
 	if last != nil {
 		stage = last.Stage
 		switch last.Stage {
-		case StageCrossCheck:
+		case schema.StageCrossCheck:
 			code = CodeCrossCheckFailed
-		case StageReferenceContract:
+		case schema.StageReferenceContract:
 			code = CodeReferenceFailed
-		case StageValidateArtifact:
+		case schema.StageValidateArtifact:
 			code = CodeInvalidArtifact
 		}
 	}
-	e := newError(code, stage,
+	e := NewError(code, stage,
 		fmt.Sprintf("No chapter verified, so the course was refused and nothing was stored: %d chapter(s) dropped, %d written and refused.",
 			dropped, refused), "")
 	p.evidence.Repairs = build.repaired
-	out := p.failedOutcome(StatusRejected, e)
+	out := p.failedOutcome(schema.StatusRejected, e)
 	out.Chapters = report
 	return out
 }
@@ -1317,7 +1326,7 @@ func (p *pipeline) courseRefused(build *courseBuild, report []ChapterResult) Out
 // summary, objectives, kind, minutes — alongside the content the model sent.
 // The outline is what the learner has already been shown, so the chapter cannot
 // rename itself in the middle of the course.
-func withChapterSkeleton(chapter CourseChapter, outline OutlineChapter, prev CourseChapter) CourseChapter {
+func withChapterSkeleton(chapter schema.CourseChapter, outline OutlineChapter, prev schema.CourseChapter) schema.CourseChapter {
 	out := chapter
 	out.ID = outline.ID
 	out.N = prev.N
@@ -1327,10 +1336,10 @@ func withChapterSkeleton(chapter CourseChapter, outline OutlineChapter, prev Cou
 	out.Kind = outline.Kind
 	out.Minutes = outline.Minutes
 	if out.Sections == nil {
-		out.Sections = []CourseSection{}
+		out.Sections = []schema.CourseSection{}
 	}
 	if out.Exercises == nil {
-		out.Exercises = []CourseExercise{}
+		out.Exercises = []schema.CourseExercise{}
 	}
 	return out
 }
@@ -1368,7 +1377,7 @@ func (b *courseBuild) chapterIDs() []string {
 // the field it refused as "chapters[2].exercises[0].id"; the engine reports the
 // statement it could not run. Both are needed by a repair, and the first one
 // names the exercise.
-func failingExercise(verr *Error, ch *CourseChapter) (string, string) {
+func failingExercise(verr *schema.Error, ch *schema.CourseChapter) (string, string) {
 	if verr == nil {
 		return "", ""
 	}
@@ -1387,16 +1396,7 @@ func exerciseIndexFromField(detail string) int {
 		if end <= 0 {
 			continue
 		}
-		n := 0
-		digits := true
-		for _, r := range part[:end] {
-			if r < '0' || r > '9' {
-				digits = false
-				break
-			}
-			n = n*10 + int(r-'0')
-		}
-		if digits {
+		if n, err := strconv.Atoi(part[:end]); err == nil {
 			return n
 		}
 	}
@@ -1406,9 +1406,9 @@ func exerciseIndexFromField(detail string) int {
 // failedExerciseID is the exercise a chapter's verification stopped on: the
 // last one it recorded, which is the one it refused. An empty string means the
 // chapter was refused before any exercise ran.
-func failedExerciseID(res ChapterResult) string {
+func failedExerciseID(res schema.ChapterResult) string {
 	for i := len(res.Exercises) - 1; i >= 0; i-- {
-		if res.Exercises[i].Status == "failed" {
+		if res.Exercises[i].Status == ExerciseFailed {
 			return res.Exercises[i].ID
 		}
 	}
@@ -1420,16 +1420,16 @@ func failedExerciseID(res ChapterResult) string {
 // reached. A chapter is verified exercise by exercise and stops at the first
 // refusal, so reporting an exercise that never ran as failed would be a claim
 // about something the engine never did.
-func failedExercises(ch *CourseChapter, verr *Error, failedID string) []ExerciseResult {
-	out := make([]ExerciseResult, 0, len(ch.Exercises))
+func failedExercises(ch *schema.CourseChapter, verr *schema.Error, failedID string) []schema.ExerciseResult {
+	out := make([]schema.ExerciseResult, 0, len(ch.Exercises))
 	for i := range ch.Exercises {
-		res := ExerciseResult{
+		res := schema.ExerciseResult{
 			ID:     ch.Exercises[i].ID,
 			Title:  ch.Exercises[i].Title,
-			Status: "not_run",
+			Status: ExerciseNotRun,
 		}
 		if ch.Exercises[i].ID == failedID {
-			res.Status = "failed"
+			res.Status = ExerciseFailed
 			res.Error = verr
 		}
 		out = append(out, res)
@@ -1439,7 +1439,7 @@ func failedExercises(ch *CourseChapter, verr *Error, failedID string) []Exercise
 
 // exerciseVerdicts is the per-exercise evidence inside one tool result: what
 // the model needs to know about what it just wrote.
-func exerciseVerdicts(res ChapterResult) []map[string]any {
+func exerciseVerdicts(res schema.ChapterResult) []map[string]any {
 	out := make([]map[string]any, 0, len(res.Exercises))
 	for _, ex := range res.Exercises {
 		out = append(out, map[string]any{
@@ -1447,21 +1447,15 @@ func exerciseVerdicts(res ChapterResult) []map[string]any {
 			"status":         ex.Status,
 			"reference_rows": ex.ReferenceRows,
 			"cross_rows":     ex.CrossCheckRows,
-			"fixtures":       fmt.Sprintf("%d/%d", ex.FixturesPassed, ex.FixturesTotal),
+			"fixtures":       fmt.Sprintf("%d/%d", ex.FixturesRejected, ex.FixturesTotal),
 		})
 	}
 	return out
 }
 
 // removeReport drops one chapter's entry from the report slice.
-func removeReport(report []ChapterResult, id string) []ChapterResult {
-	out := report[:0]
-	for _, ch := range report {
-		if ch.ID != id {
-			out = append(out, ch)
-		}
-	}
-	return out
+func removeReport(report []schema.ChapterResult, id string) []schema.ChapterResult {
+	return slices.DeleteFunc(report, func(ch schema.ChapterResult) bool { return ch.ID == id })
 }
 
 /* ---------- storage ---------- */
@@ -1469,28 +1463,28 @@ func removeReport(report []ChapterResult, id string) []ChapterResult {
 // storeBuilding writes the course as it stands: the outline with the chapters
 // that verified, under the "building" status. GET /courses/{id} answers with
 // it, so a learner who reloads mid-run sees the chapters that already passed.
-func (p *pipeline) storeBuilding(ctx context.Context, build *courseBuild) *Error {
+func (p *pipeline) storeBuilding(ctx context.Context, build *courseBuild) *schema.Error {
 	if p.svc.cfg.Depot == nil {
-		return newError(CodeUnavailable, StageActivate, "There is nowhere to store the course.", "")
+		return NewError(CodeUnavailable, schema.StageActivate, "There is nowhere to store the course.", "")
 	}
 	plan := build.plan
 	plan.Chapters = buildingChapters(build)
-	out := Outcome{
-		Status:   StatusBuilding,
+	out := schema.Outcome{
+		Status:   schema.StatusBuilding,
 		Kind:     "course",
 		Plan:     &plan,
 		Chapters: build.report,
 		Stages:   p.snapshotStages(),
-		Attempts: []Attempt{},
+		Attempts: []schema.Attempt{},
 	}
-	if err := p.svc.cfg.Depot.SaveCourse(ctx, CourseRecord{
+	if err := p.svc.cfg.Depot.SaveCourse(ctx, schema.CourseRecord{
 		Plan:      plan,
 		Outcome:   out,
-		Status:    StatusBuilding,
+		Status:    schema.StatusBuilding,
 		CreatedAt: time.Now().UTC(),
 		Request:   &build.request,
 	}); err != nil {
-		return newError(CodeUnavailable, StageActivate,
+		return NewError(CodeUnavailable, schema.StageActivate,
 			"The course could not be stored while it was being written.", engine.RedactSecrets(err.Error()))
 	}
 	p.courseID = plan.ID
@@ -1502,12 +1496,12 @@ func (p *pipeline) storeBuilding(ctx context.Context, build *courseBuild) *Error
 // chapter, with content only where it verified. The sections are empty until
 // then, which is exactly what "this chapter has not been written yet" looks
 // like — the client renders the shape and fills it in.
-func buildingChapters(build *courseBuild) []CourseChapter {
-	out := make([]CourseChapter, 0, len(build.plan.Chapters))
+func buildingChapters(build *courseBuild) []schema.CourseChapter {
+	out := make([]schema.CourseChapter, 0, len(build.plan.Chapters))
 	for i := range build.plan.Chapters {
 		ch := build.plan.Chapters[i]
 		if build.written[i].state != ChapterVerified {
-			ch = CourseChapter{
+			ch = schema.CourseChapter{
 				ID:         build.outline.Chapters[i].ID,
 				N:          build.plan.Chapters[i].N,
 				Title:      build.outline.Chapters[i].Title,
@@ -1515,8 +1509,8 @@ func buildingChapters(build *courseBuild) []CourseChapter {
 				Kind:       build.outline.Chapters[i].Kind,
 				Minutes:    build.outline.Chapters[i].Minutes,
 				Objectives: build.outline.Chapters[i].Objectives,
-				Sections:   []CourseSection{},
-				Exercises:  []CourseExercise{},
+				Sections:   []schema.CourseSection{},
+				Exercises:  []schema.CourseExercise{},
 			}
 		}
 		out = append(out, ch)
@@ -1535,5 +1529,5 @@ func toolResult(v map[string]any) string {
 	if err != nil {
 		return `{"status":"internal_error","message":"the tool result could not be rendered"}`
 	}
-	return clipRunes(string(raw), maxToolResultChars)
+	return provider.ClipRunes(string(raw), maxToolResultChars)
 }

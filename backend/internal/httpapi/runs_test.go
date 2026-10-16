@@ -8,6 +8,7 @@ import (
 	"time"
 
 	"github.com/querycraft/sqlquery/backend/internal/ai"
+	"github.com/querycraft/sqlquery/backend/internal/schema"
 	"github.com/querycraft/sqlquery/backend/internal/store"
 )
 
@@ -34,7 +35,7 @@ func runServer(t *testing.T) *Server {
 
 // seedRun writes a transcript into the server's own store under an owner. It
 // goes through the store seam, not through a container the handler could see.
-func seedRun(t *testing.T, s *Server, rec ai.RunTranscript) {
+func seedRun(t *testing.T, s *Server, rec schema.RunTranscript) {
 	t.Helper()
 	if err := s.store.(*store.Memory).SaveRun(context.Background(), rec); err != nil {
 		t.Fatalf("seed run: %v", err)
@@ -61,17 +62,17 @@ func userID(t *testing.T, s *Server, token string) string {
 	return out.User.ID
 }
 
-func transcriptWithEntries(owner string, at time.Time) ai.RunTranscript {
-	return ai.RunTranscript{
+func transcriptWithEntries(owner string, at time.Time) schema.RunTranscript {
+	return schema.RunTranscript{
 		ID:      "run-seeded",
-		Kind:    ai.RunKindCourse,
+		Kind:    schema.RunKindCourse,
 		OwnerID: owner,
-		Status:  ai.StatusActive,
-		Entries: []ai.TranscriptEntry{
-			{Seq: 0, Kind: ai.EntryMessage, Role: "system", Content: "You design SQL courses.", At: at},
-			{Seq: 1, Kind: ai.EntryMessage, Role: "user", Content: "Design one complete course.", At: at},
-			{Seq: 2, Kind: ai.EntryToolCall, Role: "assistant", ToolName: "save_chapter", ToolCallID: "call_1", Content: `{"id":"gen.joins"}`, At: at},
-			{Seq: 3, Kind: ai.EntryToolResult, Role: "tool", ToolCallID: "call_1", Content: `{"status":"verified"}`, At: at},
+		Status:  schema.StatusActive,
+		Entries: []schema.TranscriptEntry{
+			{Seq: 0, Kind: schema.EntryMessage, Role: "system", Content: "You design SQL courses.", At: at},
+			{Seq: 1, Kind: schema.EntryMessage, Role: "user", Content: "Design one complete course.", At: at},
+			{Seq: 2, Kind: schema.EntryToolCall, Role: "assistant", ToolName: "save_chapter", ToolCallID: "call_1", Content: `{"id":"gen.joins"}`, At: at},
+			{Seq: 3, Kind: schema.EntryToolResult, Role: "tool", ToolCallID: "call_1", Content: `{"status":"verified"}`, At: at},
 		},
 		EntryCount: 4,
 		Bytes:      80,
@@ -190,7 +191,7 @@ func TestListRunsIsOwnerScopedAndNewestFirst(t *testing.T) {
 	newer.ID = "run-new"
 	foreign := transcriptWithEntries(bobID, base)
 	foreign.ID = "run-bob"
-	for _, rec := range []ai.RunTranscript{old, newer, foreign} {
+	for _, rec := range []schema.RunTranscript{old, newer, foreign} {
 		seedRun(t, s, rec)
 	}
 
@@ -318,7 +319,7 @@ func contractDef(t *testing.T, contract map[string]any, ref string) map[string]a
 func TestOwnerScopedDepotStampsTheRunOwner(t *testing.T) {
 	inner := store.NewMemory()
 	wrapped := ownerScopedDepot{Depot: inner, owner: "user-1"}
-	if err := wrapped.SaveRun(context.Background(), ai.RunTranscript{ID: "run-x", OwnerID: "someone-else"}); err != nil {
+	if err := wrapped.SaveRun(context.Background(), schema.RunTranscript{ID: "run-x", OwnerID: "someone-else"}); err != nil {
 		t.Fatalf("SaveRun: %v", err)
 	}
 	got, ok, _ := inner.Run(context.Background(), "run-x")
@@ -343,7 +344,7 @@ func TestAGenerationStoresATranscriptReadableByItsOwner(t *testing.T) {
 	mustDecode(t, w, &submitted)
 
 	done := waitJob(t, s, token, submitted.Job.ID)
-	if done.Job.Status != ai.StatusActive {
+	if done.Job.Status != schema.StatusActive {
 		t.Fatalf("terminal status = %q, want active (error = %+v)", done.Job.Status, done.Job.Error)
 	}
 
@@ -371,7 +372,7 @@ func TestAGenerationStoresATranscriptReadableByItsOwner(t *testing.T) {
 	if out.Run.ID != submitted.Job.ID {
 		t.Fatalf("transcript id = %q, want the job id %q", out.Run.ID, submitted.Job.ID)
 	}
-	if out.Run.Kind != "course" || out.Run.Status != ai.StatusActive {
+	if out.Run.Kind != "course" || out.Run.Status != schema.StatusActive {
 		t.Fatalf("run = %+v, want an active course run", out.Run)
 	}
 	if out.Run.OwnerID != "" {

@@ -2,8 +2,8 @@ import { defineConfig } from 'vite';
 import react from '@vitejs/plugin-react';
 
 // The client is adapter-agnostic. VITE_API_MODE selects where ExecutionService
-// lives: "pglite" (default) runs real PostgreSQL in the page, "http" talks to
-// the Go gateway in backend/, and "mock" is the original canned-data adapter.
+// lives: "pglite" (default) runs real PostgreSQL in the page, and "http" talks
+// to the Go gateway in backend/.
 // The dataset SQL is imported as raw text from backend/internal/dataset, so the
 // dev server must be allowed to read the repository root.
 export default defineConfig({

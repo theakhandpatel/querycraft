@@ -7,10 +7,10 @@ import (
 	"strings"
 	"time"
 
-	"github.com/querycraft/sqlquery/backend/internal/ai"
 	"github.com/querycraft/sqlquery/backend/internal/dataset"
 	"github.com/querycraft/sqlquery/backend/internal/engine"
 	"github.com/querycraft/sqlquery/backend/internal/envdb"
+	"github.com/querycraft/sqlquery/backend/internal/schema"
 )
 
 /* ADR 0003: learner SQL may write, but only inside a per-account database.
@@ -96,6 +96,19 @@ func errorEnvelope(w http.ResponseWriter, status int, code, message string) {
 		"error": map[string]string{
 			"code":    code,
 			"message": message,
+		},
+	})
+}
+
+// courseSetupFailed reports a reset whose course setup did not apply. It carries
+// the redacted machine detail the plain errorEnvelope has no room for.
+func courseSetupFailed(w http.ResponseWriter, err error) {
+	writeJSON(w, http.StatusInternalServerError, map[string]any{
+		"ok": false,
+		"error": map[string]string{
+			"code":    engine.CodeEnvironmentUnavailable,
+			"message": "The course setup could not be applied to the learner workspace.",
+			"detail":  engine.RedactSecrets(err.Error()),
 		},
 	})
 }
@@ -208,7 +221,7 @@ func (s *Server) handleEnvironmentReset(w http.ResponseWriter, r *http.Request) 
 	// course this caller does not own is refused without destroying the data
 	// they asked to restore.
 	courseID := strings.TrimSpace(r.URL.Query().Get("course"))
-	var setup ai.SetupPlan
+	var setup schema.SetupPlan
 	if courseID != "" {
 		if perf {
 			errorEnvelope(w, http.StatusBadRequest, engine.CodeEnvironmentUnavailable,
@@ -255,14 +268,7 @@ func (s *Server) handleEnvironmentReset(w http.ResponseWriter, r *http.Request) 
 		}
 		applied, err = applyCourseSetup(r.Context(), exec, setup)
 		if err != nil {
-			writeJSON(w, http.StatusInternalServerError, map[string]any{
-				"ok": false,
-				"error": map[string]string{
-					"code":    engine.CodeEnvironmentUnavailable,
-					"message": "The course setup could not be applied to the learner workspace.",
-					"detail":  engine.RedactSecrets(err.Error()),
-				},
-			})
+			courseSetupFailed(w, err)
 			return
 		}
 	}
@@ -277,7 +283,7 @@ func (s *Server) handleEnvironmentReset(w http.ResponseWriter, r *http.Request) 
 	}
 	// The manager discards its record on Reset, so the fresh copy has no reset
 	// time of its own; the moment we reset it is the honest value.
-	body.ResetAt = time.Now().UTC().Format(time.RFC3339)
+	body.ResetAt = rfc3339(time.Now())
 	writeJSON(w, http.StatusOK, map[string]any{
 		"ok":               true,
 		"duration_ms":      float64(took) / float64(time.Millisecond),
@@ -303,7 +309,7 @@ func (s *Server) resetSQLiteEnvironment(w http.ResponseWriter, r *http.Request, 
 		return
 	}
 	courseID := strings.TrimSpace(r.URL.Query().Get("course"))
-	var setup ai.SetupPlan
+	var setup schema.SetupPlan
 	if courseID != "" {
 		found, err := s.courseSetup(r.Context(), ownerID, courseID, &setup)
 		if err != nil {
@@ -326,14 +332,7 @@ func (s *Server) resetSQLiteEnvironment(w http.ResponseWriter, r *http.Request, 
 	if courseID != "" {
 		applied, err = applyCourseSetup(r.Context(), ex, setup)
 		if err != nil {
-			writeJSON(w, http.StatusInternalServerError, map[string]any{
-				"ok": false,
-				"error": map[string]string{
-					"code":    engine.CodeEnvironmentUnavailable,
-					"message": "The course setup could not be applied to the learner workspace.",
-					"detail":  engine.RedactSecrets(err.Error()),
-				},
-			})
+			courseSetupFailed(w, err)
 			return
 		}
 	}
@@ -345,7 +344,7 @@ func (s *Server) resetSQLiteEnvironment(w http.ResponseWriter, r *http.Request, 
 			Account:  ownerID,
 			Exists:   true,
 			Writable: true,
-			ResetAt:  time.Now().UTC().Format(time.RFC3339),
+			ResetAt:  rfc3339(time.Now()),
 		},
 	})
 }
@@ -353,16 +352,16 @@ func (s *Server) resetSQLiteEnvironment(w http.ResponseWriter, r *http.Request, 
 // courseSetup resolves the named course owner-scoped and copies its setup plan
 // into out. It is the same rule GET /courses/{id} applies: the record must
 // exist and belong to the caller, and anything else is reported as missing.
-func (s *Server) courseSetup(ctx context.Context, ownerID, courseID string, out *ai.SetupPlan) (bool, error) {
+func (s *Server) courseSetup(ctx context.Context, ownerID, courseID string, out *schema.SetupPlan) (bool, error) {
 	depot := s.aiCourseDepot()
 	if depot == nil {
 		return false, nil
 	}
-	rec, found, err := depot.Course(ctx, courseID)
+	rec, owned, err := ownedCourse(ctx, depot, ownerID, courseID)
 	if err != nil {
 		return false, err
 	}
-	if !found || rec.OwnerID != ownerID {
+	if !owned {
 		return false, nil
 	}
 	*out = rec.Plan.Setup
@@ -373,7 +372,7 @@ func (s *Server) courseSetup(ctx context.Context, ownerID, courseID string, out 
 // reset environment, in order, and returns how many were applied. It mirrors
 // the pipeline's own prepare step over the same engine seam, so the two cannot
 // disagree about what "the setup applied" means.
-func applyCourseSetup(ctx context.Context, ex engine.Executor, setup ai.SetupPlan) (int, error) {
+func applyCourseSetup(ctx context.Context, ex engine.Executor, setup schema.SetupPlan) (int, error) {
 	for i, stmt := range setup.Statements {
 		res := engine.Execute(ctx, ex, stmt, engine.DefaultLimits())
 		if res.Status != "succeeded" || res.Truncated {

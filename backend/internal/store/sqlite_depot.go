@@ -8,16 +8,16 @@ import (
 	"fmt"
 	"time"
 
-	"github.com/querycraft/sqlquery/backend/internal/ai"
+	"github.com/querycraft/sqlquery/backend/internal/schema"
 )
 
-func (s *SQLite) SaveChallenge(ctx context.Context, rec ai.Record) error {
+func (s *SQLite) SaveChallenge(ctx context.Context, rec schema.Record) error {
 	if rec.Artifact.ID == "" {
 		return errors.New("challenge id is required")
 	}
 	status, created := rec.Status, rec.CreatedAt
 	if status == "" {
-		status = ai.StatusActive
+		status = schema.StatusActive
 	}
 	if created.IsZero() {
 		created = time.Now().UTC()
@@ -43,33 +43,33 @@ func (s *SQLite) SaveChallenge(ctx context.Context, rec ai.Record) error {
 	return err
 }
 
-func (s *SQLite) Challenge(ctx context.Context, id string) (ai.Record, bool, error) {
-	var rec ai.Record
+func (s *SQLite) Challenge(ctx context.Context, id string) (schema.Record, bool, error) {
+	var rec schema.Record
 	var artifact, outcome, created string
 	err := s.db.QueryRowContext(ctx, `SELECT owner_id,status,artifact,outcome,created_at FROM challenges WHERE id=?`, id).Scan(&rec.OwnerID, &rec.Status, &artifact, &outcome, &created)
 	if errors.Is(err, sql.ErrNoRows) {
-		return ai.Record{}, false, nil
+		return schema.Record{}, false, nil
 	}
 	if err != nil {
-		return ai.Record{}, false, err
+		return schema.Record{}, false, err
 	}
 	if err = decodeRecord(&rec, []byte(artifact), []byte(outcome)); err != nil {
-		return ai.Record{}, false, err
+		return schema.Record{}, false, err
 	}
 	rec.CreatedAt, err = parseTimestamp(created)
 	return rec, err == nil, err
 }
 
-func (s *SQLite) Challenges(ctx context.Context) ([]ai.Record, error) {
+func (s *SQLite) Challenges(ctx context.Context) ([]schema.Record, error) {
 	return s.challengesWhere(ctx, "")
 }
 
-// ChallengesFor filters to one owner in SQL (see ai.Depot.ChallengesFor).
-func (s *SQLite) ChallengesFor(ctx context.Context, ownerID string) ([]ai.Record, error) {
+// ChallengesFor filters to one owner in SQL (see schema.Depot.ChallengesFor).
+func (s *SQLite) ChallengesFor(ctx context.Context, ownerID string) ([]schema.Record, error) {
 	return s.challengesWhere(ctx, ownerID)
 }
 
-func (s *SQLite) challengesWhere(ctx context.Context, ownerID string) ([]ai.Record, error) {
+func (s *SQLite) challengesWhere(ctx context.Context, ownerID string) ([]schema.Record, error) {
 	q := `SELECT id,owner_id,status,artifact,outcome,created_at FROM challenges`
 	args := []any{}
 	if ownerID != "" {
@@ -82,9 +82,9 @@ func (s *SQLite) challengesWhere(ctx context.Context, ownerID string) ([]ai.Reco
 		return nil, err
 	}
 	defer rows.Close()
-	out := []ai.Record{}
+	out := []schema.Record{}
 	for rows.Next() {
-		var rec ai.Record
+		var rec schema.Record
 		var id, artifact, outcome, created string
 		if err := rows.Scan(&id, &rec.OwnerID, &rec.Status, &artifact, &outcome, &created); err != nil {
 			return nil, err
@@ -106,13 +106,13 @@ func (s *SQLite) DeleteChallenge(ctx context.Context, id string) error {
 	return err
 }
 
-func (s *SQLite) SaveCourse(ctx context.Context, rec ai.CourseRecord) error {
+func (s *SQLite) SaveCourse(ctx context.Context, rec schema.CourseRecord) error {
 	if rec.Plan.ID == "" {
 		return errors.New("course id is required")
 	}
 	status, created := rec.Status, rec.CreatedAt
 	if status == "" {
-		status = ai.StatusActive
+		status = schema.StatusActive
 	}
 	if created.IsZero() {
 		created = time.Now().UTC()
@@ -151,39 +151,39 @@ func (s *SQLite) SaveCourse(ctx context.Context, rec ai.CourseRecord) error {
 	return err
 }
 
-func (s *SQLite) Course(ctx context.Context, id string) (ai.CourseRecord, bool, error) {
-	var rec ai.CourseRecord
+func (s *SQLite) Course(ctx context.Context, id string) (schema.CourseRecord, bool, error) {
+	var rec schema.CourseRecord
 	var plan, outcome string
 	var request sql.NullString
 	var created string
 	err := s.db.QueryRowContext(ctx, `SELECT owner_id,status,plan,outcome,request,created_at FROM courses WHERE id=?`, id).Scan(&rec.OwnerID, &rec.Status, &plan, &outcome, &request, &created)
 	if errors.Is(err, sql.ErrNoRows) {
-		return ai.CourseRecord{}, false, nil
+		return schema.CourseRecord{}, false, nil
 	}
 	if err != nil {
-		return ai.CourseRecord{}, false, err
+		return schema.CourseRecord{}, false, err
 	}
 	var requestBytes []byte
 	if request.Valid {
 		requestBytes = []byte(request.String)
 	}
 	if err = decodeCourse(&rec, []byte(plan), []byte(outcome), requestBytes); err != nil {
-		return ai.CourseRecord{}, false, err
+		return schema.CourseRecord{}, false, err
 	}
 	rec.CreatedAt, err = parseTimestamp(created)
 	return rec, err == nil, err
 }
 
-func (s *SQLite) Courses(ctx context.Context) ([]ai.CourseRecord, error) {
+func (s *SQLite) Courses(ctx context.Context) ([]schema.CourseRecord, error) {
 	return s.coursesWhere(ctx, "")
 }
 
-// CoursesFor filters to one owner in SQL (see ai.Depot.CoursesFor).
-func (s *SQLite) CoursesFor(ctx context.Context, ownerID string) ([]ai.CourseRecord, error) {
+// CoursesFor filters to one owner in SQL (see schema.Depot.CoursesFor).
+func (s *SQLite) CoursesFor(ctx context.Context, ownerID string) ([]schema.CourseRecord, error) {
 	return s.coursesWhere(ctx, ownerID)
 }
 
-func (s *SQLite) coursesWhere(ctx context.Context, ownerID string) ([]ai.CourseRecord, error) {
+func (s *SQLite) coursesWhere(ctx context.Context, ownerID string) ([]schema.CourseRecord, error) {
 	q := `SELECT id,owner_id,status,plan,outcome,request,created_at FROM courses`
 	args := []any{}
 	if ownerID != "" {
@@ -196,9 +196,9 @@ func (s *SQLite) coursesWhere(ctx context.Context, ownerID string) ([]ai.CourseR
 		return nil, err
 	}
 	defer rows.Close()
-	out := []ai.CourseRecord{}
+	out := []schema.CourseRecord{}
 	for rows.Next() {
-		var rec ai.CourseRecord
+		var rec schema.CourseRecord
 		var id, plan, outcome, created string
 		var request sql.NullString
 		if err := rows.Scan(&id, &rec.OwnerID, &rec.Status, &plan, &outcome, &request, &created); err != nil {
@@ -225,7 +225,7 @@ func (s *SQLite) DeleteCourse(ctx context.Context, id string) error {
 	return err
 }
 
-func (s *SQLite) SavePatch(ctx context.Context, proposal ai.PatchProposal) error {
+func (s *SQLite) SavePatch(ctx context.Context, proposal schema.PatchProposal) error {
 	if proposal.ID == "" {
 		return errors.New("patch id is required")
 	}
@@ -242,18 +242,18 @@ func (s *SQLite) SavePatch(ctx context.Context, proposal ai.PatchProposal) error
 	return err
 }
 
-func (s *SQLite) Patch(ctx context.Context, id string) (ai.PatchProposal, bool, error) {
+func (s *SQLite) Patch(ctx context.Context, id string) (schema.PatchProposal, bool, error) {
 	var raw string
 	err := s.db.QueryRowContext(ctx, `SELECT proposal FROM patches WHERE id=?`, id).Scan(&raw)
 	if errors.Is(err, sql.ErrNoRows) {
-		return ai.PatchProposal{}, false, nil
+		return schema.PatchProposal{}, false, nil
 	}
 	if err != nil {
-		return ai.PatchProposal{}, false, err
+		return schema.PatchProposal{}, false, err
 	}
-	var proposal ai.PatchProposal
+	var proposal schema.PatchProposal
 	if err := decodeJSON(raw, &proposal, "patch"); err != nil {
-		return ai.PatchProposal{}, false, err
+		return schema.PatchProposal{}, false, err
 	}
 	return proposal, true, nil
 }
@@ -266,16 +266,16 @@ func (s *SQLite) ApprovePatch(ctx context.Context, id, approvedBy string) error 
 	return err
 }
 
-func (s *SQLite) SaveRun(ctx context.Context, rec ai.RunTranscript) error {
+func (s *SQLite) SaveRun(ctx context.Context, rec schema.RunTranscript) error {
 	if rec.ID == "" {
 		return errors.New("run id is required")
 	}
 	kind, status, started, finished := rec.Kind, rec.Status, rec.StartedAt, rec.FinishedAt
 	if kind == "" {
-		kind = ai.RunKindChallenge
+		kind = schema.RunKindChallenge
 	}
 	if status == "" {
-		status = ai.StatusFailed
+		status = schema.StatusFailed
 	}
 	if started.IsZero() {
 		started = time.Now().UTC()
@@ -285,7 +285,7 @@ func (s *SQLite) SaveRun(ctx context.Context, rec ai.RunTranscript) error {
 	}
 	entries := rec.Entries
 	if entries == nil {
-		entries = []ai.TranscriptEntry{}
+		entries = []schema.TranscriptEntry{}
 	}
 	raw, err := jsonText(entries)
 	if err != nil {
@@ -317,17 +317,17 @@ func (s *SQLite) SaveRun(ctx context.Context, rec ai.RunTranscript) error {
 	return err
 }
 
-func (s *SQLite) Run(ctx context.Context, id string) (ai.RunTranscript, bool, error) {
-	var rec ai.RunTranscript
+func (s *SQLite) Run(ctx context.Context, id string) (schema.RunTranscript, bool, error) {
+	var rec schema.RunTranscript
 	var entries, started, finished string
 	var errJSON sql.NullString
 	var truncated int
 	err := s.db.QueryRowContext(ctx, `SELECT id,kind,owner_id,status,entries,entry_count,bytes,truncated,error,started_at,finished_at FROM runs WHERE id=?`, id).Scan(&rec.ID, &rec.Kind, &rec.OwnerID, &rec.Status, &entries, &rec.EntryCount, &rec.Bytes, &truncated, &errJSON, &started, &finished)
 	if errors.Is(err, sql.ErrNoRows) {
-		return ai.RunTranscript{}, false, nil
+		return schema.RunTranscript{}, false, nil
 	}
 	if err != nil {
-		return ai.RunTranscript{}, false, err
+		return schema.RunTranscript{}, false, err
 	}
 	rec.Truncated = truncated != 0
 	var errorBytes []byte
@@ -335,30 +335,30 @@ func (s *SQLite) Run(ctx context.Context, id string) (ai.RunTranscript, bool, er
 		errorBytes = []byte(errJSON.String)
 	}
 	if err = decodeRun(&rec, []byte(entries), errorBytes); err != nil {
-		return ai.RunTranscript{}, false, err
+		return schema.RunTranscript{}, false, err
 	}
 	if rec.Entries == nil {
-		rec.Entries = []ai.TranscriptEntry{}
+		rec.Entries = []schema.TranscriptEntry{}
 	}
 	if rec.StartedAt, err = parseTimestamp(started); err != nil {
-		return ai.RunTranscript{}, false, err
+		return schema.RunTranscript{}, false, err
 	}
 	if rec.FinishedAt, err = parseTimestamp(finished); err != nil {
-		return ai.RunTranscript{}, false, err
+		return schema.RunTranscript{}, false, err
 	}
 	return rec, true, nil
 }
 
-func (s *SQLite) Runs(ctx context.Context) ([]ai.RunSummary, error) {
+func (s *SQLite) Runs(ctx context.Context) ([]schema.RunSummary, error) {
 	return s.runsWhere(ctx, "")
 }
 
-// RunsFor filters to one owner in SQL (see ai.Depot.RunsFor).
-func (s *SQLite) RunsFor(ctx context.Context, ownerID string) ([]ai.RunSummary, error) {
+// RunsFor filters to one owner in SQL (see schema.Depot.RunsFor).
+func (s *SQLite) RunsFor(ctx context.Context, ownerID string) ([]schema.RunSummary, error) {
 	return s.runsWhere(ctx, ownerID)
 }
 
-func (s *SQLite) runsWhere(ctx context.Context, ownerID string) ([]ai.RunSummary, error) {
+func (s *SQLite) runsWhere(ctx context.Context, ownerID string) ([]schema.RunSummary, error) {
 	q := `SELECT id,kind,owner_id,status,entry_count,bytes,truncated,error,started_at,finished_at FROM runs`
 	args := []any{}
 	if ownerID != "" {
@@ -371,9 +371,9 @@ func (s *SQLite) runsWhere(ctx context.Context, ownerID string) ([]ai.RunSummary
 		return nil, err
 	}
 	defer rows.Close()
-	out := []ai.RunSummary{}
+	out := []schema.RunSummary{}
 	for rows.Next() {
-		var summary ai.RunSummary
+		var summary schema.RunSummary
 		var truncated int
 		var raw sql.NullString
 		var started, finished string
@@ -382,7 +382,7 @@ func (s *SQLite) runsWhere(ctx context.Context, ownerID string) ([]ai.RunSummary
 		}
 		summary.Truncated = truncated != 0
 		if raw.Valid {
-			var e ai.Error
+			var e schema.Error
 			if err := decodeJSON(raw.String, &e, "run error"); err != nil {
 				return nil, err
 			}
@@ -399,4 +399,4 @@ func (s *SQLite) runsWhere(ctx context.Context, ownerID string) ([]ai.RunSummary
 	return out, rows.Err()
 }
 
-var _ ai.Depot = (*SQLite)(nil)
+var _ schema.Depot = (*SQLite)(nil)

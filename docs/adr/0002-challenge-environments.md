@@ -1,11 +1,11 @@
-# ADR 0002 — One PostgreSQL database per challenge environment, created from a sealed template
+# ADR 0002: One PostgreSQL database per challenge environment, created from a sealed template
 
 - **Status:** accepted
 - **Date:** 2026-10-14
 - **Deciders:** project owner + agent session
-- **Question:** when M4 generates a throwaway challenge, what *is* the environment —
+- **Question:** when M4 generates a throwaway challenge, what *is* the environment:
   a separate database, a separate schema, or the one shared schema with row
-  scoping — and what does creating and dropping one actually cost here?
+  scoping, and what does creating and dropping one actually cost here?
 
 Supersedes nothing. Resolves **D11** in `docs/technical-design.md` §2.
 
@@ -22,8 +22,8 @@ template0 --CREATE DATABASE--> qc_template  (schema + seed + learner grants, the
               DROP DATABASE  qc_env_<id> WITH (FORCE)            -- ~25 ms, terminates stragglers
 ```
 
-The template is built once per cluster and **sealed** —
-`ALTER DATABASE qc_template IS_TEMPLATE true ALLOW_CONNECTIONS false` — which is
+The template is built once per cluster and **sealed**:
+`ALTER DATABASE qc_template IS_TEMPLATE true ALLOW_CONNECTIONS false`, which is
 what makes it copyable at any time: PostgreSQL refuses to copy a database that
 another session is attached to (measured below), and `ALLOW_CONNECTIONS false`
 guarantees no session ever is.
@@ -58,10 +58,10 @@ reproduced by setting `QC_SPIKE_OUT` when running the test.
 | `CREATE DATABASE qc_template TEMPLATE template0` (cold, once per cluster) | 57–71 ms |
 | Load schema + seed + learner grants into the template (once per cluster) | 55–63 ms |
 | **`CREATE DATABASE qc_env_x TEMPLATE qc_template`** | **min 32 ms, median 34–44 ms, max 65 ms** (n=7/run, 3 runs) |
-| First copy in a fresh cluster ("cold") | 32–45 ms — **no meaningful cold penalty**; the template's pages are already in cache |
-| Burst of 8 copies | 353–457 ms total, 44–57 ms each — linear, no contention |
+| First copy in a fresh cluster ("cold") | 32–45 ms: **no meaningful cold penalty**; the template's pages are already in cache |
+| Burst of 8 copies | 353–457 ms total, 44–57 ms each: linear, no contention |
 | `DROP DATABASE` (idle) | min 24 ms, median 24–29 ms; **the first drop in a cluster took ~2.9 s** (see below) |
-| `DROP DATABASE ... WITH (FORCE)` with a live learner session | 128–133 ms — the session is terminated and the database goes |
+| `DROP DATABASE ... WITH (FORCE)` with a live learner session | 128–133 ms: the session is terminated and the database goes |
 | Reset (`DROP` + `CREATE` from template) | 164–228 ms |
 | Sealing the template | 1–4 ms |
 | Copy size on disk | **7.6 MiB per environment** (template itself 7.8 MiB); 15 environments = 114.5 MiB |
@@ -85,23 +85,23 @@ and the schema's `USAGE` grant with it, because grants are per-database *objects
 stored in the catalogs being copied. Measured: `has_table_privilege('dataset.orders','SELECT')`
 is true in a fresh copy, `INSERT` is false, and a real analytic query runs. A copy
 made from an un-seeded or un-granted database would instead fail every learner
-query with `permission denied` — grants are the one thing that cannot be assumed.
+query with `permission denied`: grants are the one thing that cannot be assumed.
 
 **How does this interact with `search_path = dataset` as a role default?** The
 default is a *cluster-wide* `pg_db_role_setting` row (`datbase = 0`), so it
-applies in every database on the cluster with no work per environment — which is
+applies in every database on the cluster with no work per environment, which is
 why the copy needs no session setup. The flip side is that it is also not
 scoped: the learner role can attach to the gateway's own metadata database
 (measured: `CONNECT` is allowed because `PUBLIC` holds it by default) and there
 finds its own copy of the `dataset` schema. That is not a leak of another
-learner's rows — progress and events live in `app`, which the role cannot read —
+learner's rows: progress and events live in `app`, which the role cannot read, 
 but it is a surface that should be closed explicitly (below).
 
 ## Failure modes and mitigations
 
 1. **Connection-slot exhaustion.** `max_connections = 100`; a non-superuser role
-   may hold 97 (measured 96). An environment costs **0 slots at rest** — the
-   database exists, no session does — but a pool kept open per environment costs
+   may hold 97 (measured 96). An environment costs **0 slots at rest**: the
+   database exists, no session does, but a pool kept open per environment costs
    `MinConns` (1) and can grow to `MaxConns` (8 on this 8-vCPU host, pgxpool's
    `max(4, NumCPU)`). 12 environments at full pool exhaust the server.
    *Mitigation:* cap the number of **active** environments (not just created
@@ -115,7 +115,7 @@ but it is a surface that should be closed explicitly (below).
 3. **Orphaned databases after a crash or a killed process.** Measured: three
    environments survived a server restart and nothing on the boot path noticed.
    A crash between "create the database" and "record it" leaks one forever.
-   *Mitigation:* `ReapEnvironmentDatabases(ctx, admin, keep)` — call it on boot
+   *Mitigation:* `ReapEnvironmentDatabases(ctx, admin, keep)`, call it on boot
    with the environments the store still references; it drops the rest. The
    store, not the database, is the source of truth. `DROP ... WITH (FORCE)` means
    one abandoned connection cannot pin a database indefinitely.
@@ -132,7 +132,7 @@ but it is a surface that should be closed explicitly (below).
 
 ## Operational plan for M4
 
-- **Cap concurrent environments** in the store (a small, explicit number —
+- **Cap concurrent environments** in the store (a small, explicit number, 
   single-digit on this machine), enforced before `CREATE DATABASE`, surfaced as a
   typed failure rather than a PostgreSQL error.
 - **Reap on boot**: `ReapEnvironmentDatabases` with the environments the store

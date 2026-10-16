@@ -101,7 +101,7 @@ export function unavailableOutcome(kind: 'challenge' | 'course', reason: string 
 }
 
 /**
- * The AI methods for the browser-only adapters (mock, pglite).
+ * The AI methods for the browser-only adapter (pglite).
  *
  * Generation *policy* lives on the gateway, so there is no honest artifact to
  * return here and these adapters do not synthesise one. The generate calls

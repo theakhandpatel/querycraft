@@ -80,6 +80,17 @@ func (e *fakeExecutor) Ready(ctx context.Context) (bool, string) {
 	}
 	return true, ""
 }
+
+// Dialect, EngineLabel, ClassifyError and Diagnostics answer for the default
+// dialect, which is what this fake stood in for when the four capability
+// interfaces were optional. ClassifyError declines, so execute.go's shared
+// table keeps classifying this fake's errors, exactly as it did when the probe
+// found no classifier.
+func (e *fakeExecutor) Dialect() string                                { return DialectPostgres }
+func (e *fakeExecutor) EngineLabel() string                            { return EngineName }
+func (e *fakeExecutor) ClassifyError(err error) (string, bool)         { return "", false }
+func (e *fakeExecutor) Diagnostics(ctx context.Context) map[string]any { return nil }
+
 func (e *fakeExecutor) Close() error { return nil }
 
 func cols(names ...string) []Column {
@@ -288,6 +299,31 @@ func TestUnavailableExecutor(t *testing.T) {
 	qr := Execute(context.Background(), ex, "select 1", Limits{})
 	if qr.Error == nil || qr.Error.Code != CodeEnvironmentUnavailable {
 		t.Fatalf("code = %v, want %s", qr.Error, CodeEnvironmentUnavailable)
+	}
+}
+
+// The four capability answers are explicit now. Each one returns the value the
+// deleted probe fell back to, so a result refused by this executor still names
+// the default dialect and the default engine.
+func TestUnavailableExecutorCapabilities(t *testing.T) {
+	ex := UnavailableExecutor{}
+	if got := ex.Dialect(); got != DialectPostgres {
+		t.Errorf("Dialect = %q, want the old fallback %q", got, DialectPostgres)
+	}
+	if got := ex.EngineLabel(); got != EngineName {
+		t.Errorf("EngineLabel = %q, want the old fallback %q", got, EngineName)
+	}
+	if code, ok := ex.ClassifyError(errors.New("boom")); ok || code != "" {
+		t.Errorf("ClassifyError = (%q, %v), want no opinion so the shared table decides", code, ok)
+	}
+	// The words are unchanged: the diagnostics block still says unavailable and
+	// carries the reason.
+	d := ex.Diagnostics(context.Background())
+	if d["unavailable"] != true {
+		t.Errorf("Diagnostics[unavailable] = %#v, want true", d["unavailable"])
+	}
+	if reason, _ := d["reason"].(string); strings.TrimSpace(reason) == "" {
+		t.Errorf("Diagnostics[reason] = %#v, want the reason Ready reports", d["reason"])
 	}
 }
 

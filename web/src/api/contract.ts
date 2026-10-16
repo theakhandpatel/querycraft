@@ -1,4 +1,5 @@
 import { Effect, Schema } from 'effect';
+import { QUERY_ERROR_CODES } from '../types';
 import type { AuthSession, Evaluation, QueryResult, User } from '../types';
 
 /* Effect Schema decoders for the JSON the Go gateway returns. These mirror
@@ -9,7 +10,9 @@ import type { AuthSession, Evaluation, QueryResult, User } from '../types';
 export const ColumnSchema = Schema.Struct({ name: Schema.String, type: Schema.String });
 
 export const QueryErrorSchema = Schema.Struct({
-  code: Schema.String,
+  /* Literals, not String: the gateway's code must be one the contract names,
+     or the response fails decoding instead of reaching the UI unvalidated. */
+  code: Schema.Literals(QUERY_ERROR_CODES),
   message: Schema.String,
   detail: Schema.optional(Schema.NullOr(Schema.String)),
 });

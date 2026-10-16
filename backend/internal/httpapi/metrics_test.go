@@ -78,7 +78,8 @@ func TestMetricsRecordStatementOutcomes(t *testing.T) {
 
 func TestDiagnosticsReportsMeasuredFacts(t *testing.T) {
 	s := newTestServer(&fakeExecutor{})
-	w := do(t, s, http.MethodGet, "/diagnostics", "")
+	token := signupUser(t, s, "diagnostics@example.test")
+	w := doAs(t, s, token, http.MethodGet, "/diagnostics", "")
 	if w.Code != http.StatusOK {
 		t.Fatalf("status = %d body = %s", w.Code, w.Body.String())
 	}
@@ -147,7 +148,8 @@ func TestDiagnosticsReportsMeasuredFacts(t *testing.T) {
 // that cannot answer a query is not ready.
 func TestDiagnosticsReportsUnavailableHonestly(t *testing.T) {
 	s := newTestServer(&fakeExecutor{err: errors.New("dial tcp 127.0.0.1:54329: connect: connection refused")})
-	w := do(t, s, http.MethodGet, "/diagnostics", "")
+	token := signupUser(t, s, "diagnostics-down@example.test")
+	w := doAs(t, s, token, http.MethodGet, "/diagnostics", "")
 	if w.Code != http.StatusOK {
 		t.Fatalf("status = %d, want 200", w.Code)
 	}
@@ -170,7 +172,8 @@ func TestDiagnosticsReportsUnavailableHonestly(t *testing.T) {
 // reason that says what to set.
 func TestDiagnosticsWithUnavailableExecutor(t *testing.T) {
 	s := New(engine.UnavailableExecutor{}, store.NewMemory(), Config{MaxConcurrent: 2}, nil)
-	w := do(t, s, http.MethodGet, "/diagnostics", "")
+	token := signupUser(t, s, "diagnostics-unavailable@example.test")
+	w := doAs(t, s, token, http.MethodGet, "/diagnostics", "")
 	var out struct {
 		Engine struct {
 			Ready  bool   `json:"ready"`
@@ -214,7 +217,13 @@ func (b *blockingExecutor) Version(ctx context.Context) (string, error) {
 }
 func (b *blockingExecutor) Stats() engine.PoolStats                  { return engine.PoolStats{MaxConns: 4} }
 func (b *blockingExecutor) Ready(ctx context.Context) (bool, string) { return true, "" }
-func (b *blockingExecutor) Close() error                             { return nil }
+func (b *blockingExecutor) Dialect() string                          { return engine.DialectPostgres }
+func (b *blockingExecutor) EngineLabel() string                      { return engine.EngineName }
+func (b *blockingExecutor) ClassifyError(err error) (string, bool)   { return "", false }
+func (b *blockingExecutor) Diagnostics(ctx context.Context) map[string]any {
+	return nil
+}
+func (b *blockingExecutor) Close() error { return nil }
 
 // MaxConcurrent is advertised in /capabilities, so it has to be enforced. A
 // request that cannot get a slot within its own timeout gets the existing

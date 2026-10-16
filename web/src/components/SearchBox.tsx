@@ -72,7 +72,7 @@ export default function SearchBox() {
           value={query}
           placeholder="Search chapters, exercises, notes…"
           aria-label="Search the course and your workbook"
-          aria-expanded={open && !!trimmed}
+          aria-controls="search-results"
           onChange={(e) => {
             setQuery(e.target.value);
             setOpen(true);
@@ -86,7 +86,7 @@ export default function SearchBox() {
         <span className="kbd" aria-hidden="true">K</span>
       </div>
       {open && trimmed ? (
-        <div className="searchresults">
+        <div className="searchresults" id="search-results">
           {hits.length === 0 ? (
             <div className="empty">
               Nothing matches “{trimmed}”. Searched chapter titles, objectives, sections, exercises, notes,

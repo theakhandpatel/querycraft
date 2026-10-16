@@ -30,10 +30,7 @@ const indexFile = "index.html"
 // dist/index.html exists in the embedded filesystem; with only the .gitkeep
 // placeholder it is false.
 func Available() bool {
-	if subErr != nil || sub == nil {
-		return false
-	}
-	f, err := sub.Open(indexFile)
+	f, err := distFS().Open(indexFile)
 	if err != nil {
 		return false
 	}

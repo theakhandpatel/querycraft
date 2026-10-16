@@ -719,7 +719,7 @@ func (c *sqliteRawConn) engineError(what string) error {
 // stepError is engineError for a failed step, with one exception: when this
 // process's own deadline landed on the statement, the returned error is the
 // context's, because that is the identity engine.Execute (execute.go,
-// classifyFor) turns into QUERY_TIMEOUT and it must survive both doors — the
+// ClassifyFor) turns into QUERY_TIMEOUT and it must survive both doors — the
 // learner's result and a raw Query under the same context.
 func (c *sqliteRawConn) stepError(ctx context.Context, rc int32, fired bool) error {
 	if fired {

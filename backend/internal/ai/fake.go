@@ -7,6 +7,9 @@ import (
 	"hash/fnv"
 	"strings"
 	"time"
+
+	"github.com/querycraft/sqlquery/backend/internal/ai/provider"
+	"github.com/querycraft/sqlquery/backend/internal/schema"
 )
 
 // FakeProvider is the deterministic, no-network, no-key provider the lab ships
@@ -31,8 +34,8 @@ type FakeProvider struct {
 func NewFakeProvider() *FakeProvider { return &FakeProvider{} }
 
 // Descriptor implements Provider.
-func (f *FakeProvider) Descriptor() ProviderDescriptor {
-	return ProviderDescriptor{
+func (f *FakeProvider) Descriptor() provider.ProviderDescriptor {
+	return provider.ProviderDescriptor{
 		Name:          "fake",
 		Model:         "fake-v1",
 		Version:       "1",
@@ -43,9 +46,9 @@ func (f *FakeProvider) Descriptor() ProviderDescriptor {
 
 // Complete implements Provider. The reply depends only on the request, so the
 // same request always yields the same bundle.
-func (f *FakeProvider) Complete(ctx context.Context, req ProviderRequest) (ProviderResponse, error) {
+func (f *FakeProvider) Complete(ctx context.Context, req provider.ProviderRequest) (provider.ProviderResponse, error) {
 	if err := ctx.Err(); err != nil {
-		return ProviderResponse{}, err
+		return provider.ProviderResponse{}, err
 	}
 	if f.Delay > 0 {
 		// A slow provider is still a provider that respects its deadline: the
@@ -53,7 +56,7 @@ func (f *FakeProvider) Complete(ctx context.Context, req ProviderRequest) (Provi
 		select {
 		case <-time.After(f.Delay):
 		case <-ctx.Done():
-			return ProviderResponse{}, ctx.Err()
+			return provider.ProviderResponse{}, ctx.Err()
 		}
 	}
 	start := time.Now()
@@ -90,15 +93,15 @@ func (f *FakeProvider) Complete(ctx context.Context, req ProviderRequest) (Provi
 	case "critique":
 		text = critiqueText(req)
 	default:
-		return ProviderResponse{}, fmt.Errorf("fake provider: unsupported kind %q", req.Kind)
+		return provider.ProviderResponse{}, fmt.Errorf("fake provider: unsupported kind %q", req.Kind)
 	}
 	if err != nil {
-		return ProviderResponse{}, err
+		return provider.ProviderResponse{}, err
 	}
 	if req.MaxOutputBytes > 0 && len(text) > req.MaxOutputBytes {
-		return ProviderResponse{}, fmt.Errorf("fake provider: reply of %d bytes exceeds the %d-byte budget", len(text), req.MaxOutputBytes)
+		return provider.ProviderResponse{}, fmt.Errorf("fake provider: reply of %d bytes exceeds the %d-byte budget", len(text), req.MaxOutputBytes)
 	}
-	return ProviderResponse{
+	return provider.ProviderResponse{
 		Text:      text,
 		Provider:  desc.Name,
 		Model:     desc.Model,
@@ -116,7 +119,7 @@ func (f *FakeProvider) bundle(prompt string) (string, error) {
 	topic := pickTopic(prompt, seed)
 	difficulty := difficultyFromText(prompt)
 
-	artifact := Artifact{
+	artifact := schema.Artifact{
 		ID:                 fmt.Sprintf("fake-%s-%04x", topic.name, seed&0xffff),
 		Version:            1,
 		Dialect:            "postgresql",
@@ -126,17 +129,17 @@ func (f *FakeProvider) bundle(prompt string) (string, error) {
 		Difficulty:         difficulty,
 		Objectives:         topic.objectives,
 		Hints:              topic.hints,
-		Setup:              SetupPlan{Dataset: "commerce", SchemaVersion: 1, SeedVersion: 1, Statements: []string{}},
+		Setup:              schema.SetupPlan{Dataset: "commerce", SchemaVersion: 1, SeedVersion: 1, Statements: []string{}},
 		ReferenceSolution:  topic.reference,
 		CrossCheckSolution: topic.crossCheck,
-		ResultContract: ResultContract{
+		ResultContract: schema.ResultContract{
 			Columns:          topic.columns,
 			ColumnOrder:      "exact",
 			RowOrder:         "exact",
 			Duplicates:       "preserved",
 			NumericTolerance: 0,
 		},
-		Checks: []Check{},
+		Checks: []schema.Check{},
 	}
 	raw, err := json.Marshal(artifact)
 	if err != nil {
@@ -165,15 +168,15 @@ func scenarioSuffix(seed uint64) string {
 	return "\n\n" + scenarios[seed%uint64(len(scenarios))]
 }
 
-func difficultyFromText(prompt string) Difficulty {
+func difficultyFromText(prompt string) schema.Difficulty {
 	lower := strings.ToLower(prompt)
 	switch {
 	case strings.Contains(lower, "advanced"):
-		return Advanced
+		return schema.Advanced
 	case strings.Contains(lower, "beginner"):
-		return Beginner
+		return schema.Beginner
 	default:
-		return Intermediate
+		return schema.Intermediate
 	}
 }
 
@@ -339,7 +342,7 @@ func pickTopic(prompt string, seed uint64) fakeTopic {
 
 // tutorText is a plain-text hint. It never contains SQL from the request other
 // than the learner's own, and it has no access to a reference solution.
-func tutorText(req ProviderRequest) string {
+func tutorText(req provider.ProviderRequest) string {
 	level := 1
 	if strings.Contains(req.Prompt, "hint_level: 0") {
 		level = 0
@@ -361,7 +364,7 @@ func tutorText(req ProviderRequest) string {
 }
 
 // critiqueText reviews the learner's query without seeing a reference solution.
-func critiqueText(req ProviderRequest) string {
+func critiqueText(req provider.ProviderRequest) string {
 	return "The query runs against the commerce dataset. Check the join keys and the grouping first: those are where most wrong answers start. Then confirm the ORDER BY leaves no ties."
 }
 
@@ -430,7 +433,7 @@ const challengeSchema = `{
 // the outline the learner sees and the chapters that are written cannot
 // describe different courses. Everything here is a pure function of the prompt,
 // which is what makes the pipeline's determinism testable.
-func (f *FakeProvider) coursePlanShape(prompt string) CoursePlan {
+func (f *FakeProvider) coursePlanShape(prompt string) schema.CoursePlan {
 	seed := hashPrompt(prompt)
 	difficulty := difficultyFromText(prompt)
 	// Three chapters of one exercise each: enough to be a course, small enough
@@ -447,16 +450,16 @@ func (f *FakeProvider) coursePlanShape(prompt string) CoursePlan {
 	}
 	// A seed whose three picks collide leaves one or two chapters; the plan
 	// stays valid, and a shorter course is a real outcome rather than a bug.
-	plan := CoursePlan{
+	plan := schema.CoursePlan{
 		Title:      courseTitle(prompt, seed),
 		Subtitle:   "Chapter by chapter, from the shape of the data to a question you could be asked in an interview.",
 		Level:      string(difficulty),
 		Dialect:    "postgresql",
 		Objectives: []string{"Read the commerce schema and know which table holds which fact.", "Answer a question with one statement that runs, returns the right columns, and can be explained."},
-		Setup:      SetupPlan{Dataset: "commerce", SchemaVersion: 1, SeedVersion: 1, Statements: []string{}},
+		Setup:      schema.SetupPlan{Dataset: "commerce", SchemaVersion: 1, SeedVersion: 1, Statements: []string{}},
 	}
 	for i, t := range unique {
-		plan.Chapters = append(plan.Chapters, CourseChapter{
+		plan.Chapters = append(plan.Chapters, schema.CourseChapter{
 			ID:         fmt.Sprintf("gen.%s", t.name),
 			N:          i + 1,
 			Title:      t.title,
@@ -464,11 +467,11 @@ func (f *FakeProvider) coursePlanShape(prompt string) CoursePlan {
 			Kind:       "Practice",
 			Minutes:    15,
 			Objectives: t.objectives,
-			Sections: []CourseSection{
+			Sections: []schema.CourseSection{
 				{Title: "The shape of the question", Body: courseSectionIntro(t)},
 				{Title: "How the pieces fit", Body: courseSectionDiagram(t)},
 			},
-			Exercises: []CourseExercise{{
+			Exercises: []schema.CourseExercise{{
 				ID:                 fmt.Sprintf("gen.%s.1", t.name),
 				Title:              t.title,
 				Prompt:             t.prompt + scenarioSuffix(seed),
@@ -478,14 +481,14 @@ func (f *FakeProvider) coursePlanShape(prompt string) CoursePlan {
 				Hints:              t.hints,
 				ReferenceSolution:  t.reference,
 				CrossCheckSolution: t.crossCheck,
-				ResultContract: ResultContract{
+				ResultContract: schema.ResultContract{
 					Columns:          t.columns,
 					ColumnOrder:      "exact",
 					RowOrder:         "exact",
 					Duplicates:       "preserved",
 					NumericTolerance: 0,
 				},
-				Checks: []Check{},
+				Checks: []schema.Check{},
 			}},
 		})
 	}
@@ -538,7 +541,7 @@ func (f *FakeProvider) courseOutline(prompt string) (string, error) {
 // finish_course once every chapter in its own plan is resolved. It is a pure
 // function of the messages, exactly like every other reply this provider makes,
 // so a run is reproducible from its request alone.
-func (f *FakeProvider) agentTurn(req ProviderRequest, desc ProviderDescriptor, start time.Time) (ProviderResponse, error) {
+func (f *FakeProvider) agentTurn(req provider.ProviderRequest, desc provider.ProviderDescriptor, start time.Time) (provider.ProviderResponse, error) {
 	plan := f.coursePlanShape(req.Prompt)
 	resolved := map[string]bool{}
 	for _, m := range req.Messages {
@@ -557,12 +560,12 @@ func (f *FakeProvider) agentTurn(req ProviderRequest, desc ProviderDescriptor, s
 		}
 	}
 
-	respond := func(call ToolCall) (ProviderResponse, error) {
+	respond := func(call provider.ToolCall) (provider.ProviderResponse, error) {
 		if req.MaxOutputBytes > 0 && len(call.Function.Arguments) > req.MaxOutputBytes {
-			return ProviderResponse{}, fmt.Errorf("fake provider: tool call of %d bytes exceeds the %d-byte budget", len(call.Function.Arguments), req.MaxOutputBytes)
+			return provider.ProviderResponse{}, fmt.Errorf("fake provider: tool call of %d bytes exceeds the %d-byte budget", len(call.Function.Arguments), req.MaxOutputBytes)
 		}
-		return ProviderResponse{
-			ToolCalls:    []ToolCall{call},
+		return provider.ProviderResponse{
+			ToolCalls:    []provider.ToolCall{call},
 			FinishReason: "tool_calls",
 			Provider:     desc.Name,
 			Model:        desc.Model,
@@ -578,18 +581,18 @@ func (f *FakeProvider) agentTurn(req ProviderRequest, desc ProviderDescriptor, s
 		}
 		args, err := json.Marshal(ch)
 		if err != nil {
-			return ProviderResponse{}, fmt.Errorf("fake provider: encode chapter: %w", err)
+			return provider.ProviderResponse{}, fmt.Errorf("fake provider: encode chapter: %w", err)
 		}
-		return respond(ToolCall{
+		return respond(provider.ToolCall{
 			ID:       "call_" + ch.ID,
 			Type:     "function",
-			Function: ToolCallFunction{Name: toolSaveChapter, Arguments: string(args)},
+			Function: provider.ToolCallFunction{Name: toolSaveChapter, Arguments: string(args)},
 		})
 	}
-	return respond(ToolCall{
+	return respond(provider.ToolCall{
 		ID:       "call_finish_course",
 		Type:     "function",
-		Function: ToolCallFunction{Name: toolFinishCourse, Arguments: `{"summary":"Every chapter that was written verified against the dataset."}`},
+		Function: provider.ToolCallFunction{Name: toolFinishCourse, Arguments: `{"summary":"Every chapter that was written verified against the dataset."}`},
 	})
 }
 

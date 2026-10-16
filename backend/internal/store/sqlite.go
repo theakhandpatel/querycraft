@@ -18,92 +18,18 @@ import (
 )
 
 // SQLite stores app metadata in one local file. Learner SQL continues to run
-// through the separately configured execution engine.
+// through the separately configured execution engine. The account, progress and
+// session methods live in sqlStore, shared with the Postgres backend.
 type SQLite struct {
 	db *sql.DB
+	sqlStore
 }
 
 var sqliteMemoryID atomic.Uint64
 
-// SQLiteSchema creates the greenfield metadata schema. JSON values are TEXT
-// encoded by this package, and timestamps are canonical UTC RFC3339Nano text.
-const SQLiteSchema = `
-PRAGMA foreign_keys = ON;
--- SQLite strftime has millisecond precision; appending three zeroes gives the
--- same fixed-width microsecond UTC representation used by timestamp().
-CREATE TABLE IF NOT EXISTS users (
-    id TEXT PRIMARY KEY,
-    email TEXT NOT NULL,
-    name TEXT NOT NULL,
-    role TEXT NOT NULL DEFAULT 'learner',
-    password_hash TEXT NOT NULL DEFAULT '',
-    created_at TEXT NOT NULL DEFAULT (strftime('%Y-%m-%dT%H:%M:%f000Z','now'))
-);
-CREATE UNIQUE INDEX IF NOT EXISTS users_email_lower_key ON users (lower(email));
-CREATE TABLE IF NOT EXISTS sessions (
-    token TEXT PRIMARY KEY,
-    user_id TEXT NOT NULL REFERENCES users(id) ON DELETE CASCADE,
-    created_at TEXT NOT NULL DEFAULT (strftime('%Y-%m-%dT%H:%M:%f000Z','now')),
-    expires_at TEXT NOT NULL,
-    last_seen_at TEXT NOT NULL DEFAULT (strftime('%Y-%m-%dT%H:%M:%f000Z','now'))
-);
-CREATE INDEX IF NOT EXISTS sessions_user_key ON sessions (user_id);
-CREATE TABLE IF NOT EXISTS progress (
-    user_id TEXT NOT NULL REFERENCES users(id) ON DELETE CASCADE,
-    course TEXT NOT NULL,
-    snapshot TEXT NOT NULL,
-    updated_at TEXT NOT NULL DEFAULT (strftime('%Y-%m-%dT%H:%M:%f000Z','now')),
-    PRIMARY KEY (user_id, course)
-);
-CREATE TABLE IF NOT EXISTS events (
-    user_id TEXT NOT NULL REFERENCES users(id) ON DELETE CASCADE,
-    id TEXT NOT NULL,
-    payload TEXT NOT NULL,
-    created_at TEXT NOT NULL DEFAULT (strftime('%Y-%m-%dT%H:%M:%f000Z','now')),
-    PRIMARY KEY (user_id, id)
-);
-CREATE TABLE IF NOT EXISTS challenges (
-    id TEXT PRIMARY KEY,
-    owner_id TEXT NOT NULL DEFAULT '',
-    status TEXT NOT NULL DEFAULT 'active',
-    artifact TEXT NOT NULL,
-    outcome TEXT NOT NULL,
-    created_at TEXT NOT NULL DEFAULT (strftime('%Y-%m-%dT%H:%M:%f000Z','now'))
-);
-CREATE INDEX IF NOT EXISTS challenges_created_key ON challenges (created_at DESC, id DESC);
-CREATE TABLE IF NOT EXISTS courses (
-    id TEXT PRIMARY KEY,
-    owner_id TEXT NOT NULL DEFAULT '',
-    status TEXT NOT NULL DEFAULT 'active',
-    plan TEXT NOT NULL,
-    outcome TEXT NOT NULL,
-    request TEXT,
-    created_at TEXT NOT NULL DEFAULT (strftime('%Y-%m-%dT%H:%M:%f000Z','now'))
-);
-CREATE INDEX IF NOT EXISTS courses_created_key ON courses (created_at DESC, id DESC);
-CREATE TABLE IF NOT EXISTS patches (
-    id TEXT PRIMARY KEY,
-    challenge_id TEXT NOT NULL DEFAULT '',
-    proposal TEXT NOT NULL,
-    approved_at TEXT,
-    approved_by TEXT NOT NULL DEFAULT '',
-    created_at TEXT NOT NULL DEFAULT (strftime('%Y-%m-%dT%H:%M:%f000Z','now'))
-);
-CREATE TABLE IF NOT EXISTS runs (
-    id TEXT PRIMARY KEY,
-    kind TEXT NOT NULL DEFAULT 'challenge',
-    owner_id TEXT NOT NULL DEFAULT '',
-    status TEXT NOT NULL DEFAULT 'failed',
-    entries TEXT NOT NULL,
-    entry_count INTEGER NOT NULL DEFAULT 0,
-    bytes INTEGER NOT NULL DEFAULT 0,
-    truncated INTEGER NOT NULL DEFAULT 0,
-    error TEXT,
-    started_at TEXT NOT NULL DEFAULT (strftime('%Y-%m-%dT%H:%M:%f000Z','now')),
-    finished_at TEXT NOT NULL DEFAULT (strftime('%Y-%m-%dT%H:%M:%f000Z','now'))
-);
-CREATE INDEX IF NOT EXISTS runs_owner_started_key ON runs (owner_id, started_at DESC, id DESC);
-`
+// SQLiteSchema is the metadata schema in the SQLite dialect. It renders from
+// appTables, the one description both backends share.
+var SQLiteSchema = sqliteDDL(appTables)
 
 // NewSQLite opens or creates path and applies the metadata schema. The path's
 // parent is created with private permissions; SQLite itself is pure Go through
@@ -154,7 +80,7 @@ func NewSQLite(ctx context.Context, path string) (*SQLite, error) {
 		_ = db.Close()
 		return nil, fmt.Errorf("create metadata schema: %w", err)
 	}
-	return &SQLite{db: db}, nil
+	return &SQLite{db: db, sqlStore: sqliteStore(db)}, nil
 }
 
 func (s *SQLite) Kind() string { return "sqlite" }
@@ -170,11 +96,6 @@ func parseTimestamp(raw string) (time.Time, error) {
 		return time.Time{}, fmt.Errorf("decode metadata timestamp: %w", err)
 	}
 	return t, nil
-}
-
-func marshalJSON(v any) (string, error) {
-	b, err := json.Marshal(v)
-	return string(b), err
 }
 
 func decodeJSON(raw string, dst any, label string) error {
@@ -203,149 +124,8 @@ func normalizeJSON(raw json.RawMessage) (string, error) {
 	return string(b), err
 }
 
-func (s *SQLite) SaveProgress(ctx context.Context, userID, course string, snapshot json.RawMessage) error {
-	if userID == "" {
-		return errors.New("user is required")
-	}
-	if course == "" {
-		return errors.New("course is required")
-	}
-	raw, err := normalizeJSON(snapshot)
-	if err != nil {
-		return err
-	}
-	_, err = s.db.ExecContext(ctx, `INSERT INTO progress(user_id, course, snapshot, updated_at) VALUES(?, ?, ?, ?)
-		ON CONFLICT(user_id, course) DO UPDATE SET snapshot=excluded.snapshot, updated_at=excluded.updated_at`, userID, course, raw, timestamp(time.Now()))
-	return err
-}
-
-func (s *SQLite) LoadProgress(ctx context.Context, userID, course string) (json.RawMessage, bool, error) {
-	var raw string
-	err := s.db.QueryRowContext(ctx, `SELECT snapshot FROM progress WHERE user_id=? AND course=?`, userID, course).Scan(&raw)
-	if errors.Is(err, sql.ErrNoRows) {
-		return nil, false, nil
-	}
-	if err != nil {
-		return nil, false, err
-	}
-	return json.RawMessage([]byte(raw)), true, nil
-}
-
-func (s *SQLite) SaveEvent(ctx context.Context, userID, id string, payload json.RawMessage) error {
-	if userID == "" {
-		return errors.New("user is required")
-	}
-	if id == "" {
-		return errors.New("event id is required")
-	}
-	raw, err := normalizeJSON(payload)
-	if err != nil {
-		return err
-	}
-	_, err = s.db.ExecContext(ctx, `INSERT INTO events(user_id,id,payload,created_at) VALUES(?,?,?,?)
-		ON CONFLICT(user_id,id) DO UPDATE SET payload=excluded.payload`, userID, id, raw, timestamp(time.Now()))
-	return err
-}
-
-func (s *SQLite) CreateUser(ctx context.Context, u User, passwordHash string) error {
-	role := u.Role
-	if role == "" {
-		role = RoleLearner
-	}
-	created := time.Now().UTC()
-	_, err := s.db.ExecContext(ctx, `INSERT INTO users(id,email,name,role,password_hash,created_at) VALUES(?,?,?,?,?,?)`, u.ID, u.Email, u.Name, role, passwordHash, timestamp(created))
-	if isSQLiteUniqueViolation(err) {
-		return ErrEmailTaken
-	}
-	return err
-}
-
-func (s *SQLite) UserByEmail(ctx context.Context, email string) (User, string, bool, error) {
-	var u User
-	var hash, created string
-	err := s.db.QueryRowContext(ctx, `SELECT id,email,name,role,password_hash,created_at FROM users WHERE lower(email)=lower(?)`, email).Scan(&u.ID, &u.Email, &u.Name, &u.Role, &hash, &created)
-	if errors.Is(err, sql.ErrNoRows) {
-		return User{}, "", false, nil
-	}
-	if err != nil {
-		return User{}, "", false, err
-	}
-	u.CreatedAt, err = parseTimestamp(created)
-	return u, hash, err == nil, err
-}
-
-func (s *SQLite) UserByID(ctx context.Context, id string) (User, bool, error) {
-	var u User
-	var created string
-	err := s.db.QueryRowContext(ctx, `SELECT id,email,name,role,created_at FROM users WHERE id=?`, id).Scan(&u.ID, &u.Email, &u.Name, &u.Role, &created)
-	if errors.Is(err, sql.ErrNoRows) {
-		return User{}, false, nil
-	}
-	if err != nil {
-		return User{}, false, err
-	}
-	u.CreatedAt, err = parseTimestamp(created)
-	return u, err == nil, err
-}
-
-func (s *SQLite) CountUsers(ctx context.Context) (int, error) {
-	var n int
-	err := s.db.QueryRowContext(ctx, `SELECT count(*) FROM users`).Scan(&n)
-	return n, err
-}
-
-// UserIDs implements Store: every account id, for the environment reaper.
-func (s *SQLite) UserIDs(ctx context.Context) ([]string, error) {
-	rows, err := s.db.QueryContext(ctx, `SELECT id FROM users`)
-	if err != nil {
-		return nil, err
-	}
-	defer rows.Close()
-	var ids []string
-	for rows.Next() {
-		var id string
-		if err := rows.Scan(&id); err != nil {
-			return nil, err
-		}
-		ids = append(ids, id)
-	}
-	return ids, rows.Err()
-}
-
-func (s *SQLite) SetPasswordHash(ctx context.Context, userID, hash string) error {
-	_, err := s.db.ExecContext(ctx, `UPDATE users SET password_hash=? WHERE id=?`, hash, userID)
-	return err
-}
-
-func (s *SQLite) CreateSession(ctx context.Context, token, userID string, expiresAt time.Time) error {
-	now := time.Now().UTC()
-	_, err := s.db.ExecContext(ctx, `INSERT INTO sessions(token,user_id,created_at,expires_at,last_seen_at) VALUES(?,?,?,?,?)`, token, userID, timestamp(now), timestamp(expiresAt), timestamp(now))
-	return err
-}
-
-func (s *SQLite) SessionUser(ctx context.Context, token string) (User, bool, error) {
-	var u User
-	var created string
-	err := s.db.QueryRowContext(ctx, `SELECT u.id,u.email,u.name,u.role,u.created_at FROM sessions s JOIN users u ON u.id=s.user_id WHERE s.token=? AND s.expires_at>?`, token, timestamp(time.Now())).Scan(&u.ID, &u.Email, &u.Name, &u.Role, &created)
-	if errors.Is(err, sql.ErrNoRows) {
-		return User{}, false, nil
-	}
-	if err != nil {
-		return User{}, false, err
-	}
-	u.CreatedAt, err = parseTimestamp(created)
-	if err != nil {
-		return User{}, false, err
-	}
-	_, _ = s.db.ExecContext(ctx, `UPDATE sessions SET last_seen_at=? WHERE token=?`, timestamp(time.Now()), token)
-	return u, true, nil
-}
-
-func (s *SQLite) DeleteSession(ctx context.Context, token string) error {
-	_, err := s.db.ExecContext(ctx, `DELETE FROM sessions WHERE token=?`, token)
-	return err
-}
-
+// isSQLiteUniqueViolation reports SQLite's duplicate-key errors, which the
+// shared CreateUser maps to ErrEmailTaken.
 func isSQLiteUniqueViolation(err error) bool {
 	var sqliteErr *sqlite.Error
 	if !errors.As(err, &sqliteErr) {
@@ -356,6 +136,9 @@ func isSQLiteUniqueViolation(err error) bool {
 
 var _ Store = (*SQLite)(nil)
 
-// JSON serializers for Depot records are kept here to make the text boundary
-// explicit and to ensure nil optional values remain SQL NULL.
-func jsonText(v any) (string, error) { return marshalJSON(v) }
+// jsonText serializes a Depot record for storage; text keeps the boundary
+// explicit and a nil optional value stays SQL NULL.
+func jsonText(v any) (string, error) {
+	b, err := json.Marshal(v)
+	return string(b), err
+}

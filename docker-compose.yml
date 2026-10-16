@@ -18,18 +18,22 @@
 #             learner search_path.
 #
 # Point the gateway at one environment by choosing its database in the DSN
-# (the gateway reads it from QC_DATABASE_URL; everything is created on first
-# connect, so no manual schema setup is needed):
+# (the gateway reads it from the database_url key in querycraft.json; everything
+# is created on first connect, so no manual schema setup is needed):
 #
-#   export QC_DATABASE_URL='postgres://querycraft:querycraft@localhost:5432/querycraft?sslmode=disable'
-#   export QC_ADMIN_DATABASE_URL="$QC_DATABASE_URL"   # optional: persist progress/events
+#   printf '{"database_url":"postgres://querycraft:querycraft@localhost:5432/querycraft?sslmode=disable"}\n' > querycraft.json
 #   (cd backend && go run ./cmd/api)
+#
+# To also persist progress and events there, add the metadata DSN:
+#
+#   printf '{"database_url":"...","admin_database_url":"..."}\n' > querycraft.json
 #
 # Switch environments by switching databases — e.g. a shared preview database:
 #
-#   export QC_DATABASE_URL='postgres://querycraft:querycraft@localhost:5432/querycraft_preview?sslmode=disable'
+#   printf '{"database_url":"postgres://querycraft:querycraft@localhost:5432/querycraft_preview?sslmode=disable"}\n' > querycraft.json
 #
-# The test database drives the skipped-by-default integration test:
+# The test database drives the skipped-by-default integration test (a test
+# harness variable, not gateway configuration):
 #
 #   (cd backend && QC_TEST_DATABASE_URL='postgres://querycraft:querycraft@localhost:5432/querycraft_test?sslmode=disable' go test ./internal/httpapi -run TestGatewayIntegration -v)
 

@@ -313,8 +313,7 @@ func (s *Server) sampleEngine(ctx context.Context) {
 // Nothing here is a credential: the learner's DSN, the admin's DSN and the
 // passwords never appear, and the learner subsection is read over the
 // restricted connection so it cannot report privileges the learner does not
-// have. It is unauthenticated, like /health and /capabilities, and it is
-// deliberately not a debug dump.
+// have. The route needs a session, and it is deliberately not a debug dump.
 func (s *Server) handleDiagnostics(w http.ResponseWriter, r *http.Request) {
 	ctx, cancel := context.WithTimeout(r.Context(), 5*time.Second)
 	defer cancel()
@@ -345,8 +344,11 @@ func (s *Server) handleDiagnostics(w http.ResponseWriter, r *http.Request) {
 		"progress": map[string]any{"version": ProgressVersion},
 		"metrics":  s.metrics.Names(),
 	}
-	if d, ok := s.exec.(engine.Diagnostician); ok {
-		out["learner"] = d.Diagnostics(ctx)
+	// Every executor answers Diagnostics. A nil map means this engine has no
+	// learner sandbox to describe (SQLite), so the block stays out of the body
+	// instead of appearing as an empty object.
+	if learner := s.exec.Diagnostics(ctx); learner != nil {
+		out["learner"] = learner
 	}
 	writeJSON(w, http.StatusOK, out)
 }

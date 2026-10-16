@@ -1,5 +1,6 @@
 import { useEffect, useRef, useState } from 'react';
 import Icon from '../ui/Icon';
+import Field from '../ui/Field';
 import { useStore } from '../../state/store';
 import { COURSES } from '../../data/curriculum';
 import { courseShort } from '../../lib/model';
@@ -245,9 +246,6 @@ export default function ChallengeLabScreen() {
             ? `<span class="ok">✓</span> ${rejected}/${fixtures.length} wrong queries rejected`
             : `<span class="fail">✕</span> only ${rejected}/${fixtures.length} wrong queries rejected`
         );
-        if (s.api.mode === 'mock' && rejected < fixtures.length) {
-          emit('<span class="hi">note</span> the canned dev engine replays the reference result for any SQL, so it cannot tell these fixtures apart — switch to the gateway or the in-browser engine for a real verdict');
-        }
         mark(2, 'done');
         if (signal.aborted) return;
         await pause(240);
@@ -372,17 +370,18 @@ export default function ChallengeLabScreen() {
       <div className="grid2">
         <div className="card">
           <h2>Request</h2>
-          <div className="field"><label>Topics</label><input value={topics} onChange={(e) => setTopics(e.target.value)} /></div>
-          <div className="field">
-            <label>Difficulty</label>
-            <select value={difficulty} onChange={(e) => setDifficulty(e.target.value)}>
-              <option>Warm-up</option>
-              <option>Challenging</option>
-              <option>Brutal</option>
-            </select>
-          </div>
-          <div className="field"><label>Scenario</label><input value={scenario} onChange={(e) => setScenario(e.target.value)} /></div>
-          <div className="field"><label>Constraints</label><textarea rows={2} value={constraints} onChange={(e) => setConstraints(e.target.value)} /></div>
+          <Field label="Topics">{(id) => <input id={id} value={topics} onChange={(e) => setTopics(e.target.value)} />}</Field>
+          <Field label="Difficulty">
+            {(id) => (
+              <select id={id} value={difficulty} onChange={(e) => setDifficulty(e.target.value)}>
+                <option>Warm-up</option>
+                <option>Challenging</option>
+                <option>Brutal</option>
+              </select>
+            )}
+          </Field>
+          <Field label="Scenario">{(id) => <input id={id} value={scenario} onChange={(e) => setScenario(e.target.value)} />}</Field>
+          <Field label="Constraints">{(id) => <textarea id={id} rows={2} value={constraints} onChange={(e) => setConstraints(e.target.value)} />}</Field>
           <div className="actions mt-14">
             <button className="primary" onClick={run}><Icon name="sparkles" />Generate challenge</button>
             <button onClick={() => void generateOnGateway()} disabled={!aiReady || generating}>

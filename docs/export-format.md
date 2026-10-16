@@ -1,8 +1,8 @@
 # The JSON export
 
 One document, written by the workbook's **Export** button (and from Appearance
-beside *Clear my data*). It is the learner's own copy of their work, and — per
-`technical-design.md` §8.3 — the migration path between browser mode and server
+beside *Clear my data*). It is the learner's own copy of their work, and per
+`technical-design.md` §8.3, the migration path between browser mode and server
 mode.
 
 ```jsonc
@@ -86,7 +86,7 @@ that export exactly, and importing it twice is the same as importing it once.
 row above: it exports, imports into an empty store, exports again, and compares
 the two documents apart from `exported_at`.
 
-Import is adapter-independent — it takes the current `Progress` and the file's
+Import is adapter-independent: it takes the current `Progress` and the file's
 text and returns the merged `Progress`. The same code path runs signed in
 against the gateway and offline against PGlite; the store is what persists the
 result through the appropriate seam.

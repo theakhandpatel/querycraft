@@ -25,7 +25,7 @@
  * the two engines on the chapter's dialect; a result that cannot say which
  * engine produced it cannot be graded, so the dialect travels with the rows.
  */
-import type { Dialect, EngineCapabilities, QueryErrorShape, RowValue } from '../types';
+import type { Dialect, EngineCapabilities, QueryErrorCode, QueryErrorShape, RowValue } from '../types';
 import type { EngineResult, LiveTable } from './pglite';
 import {
   SQLITE_ENGINE_LABEL,
@@ -260,7 +260,7 @@ function stripComments(sql: string): string {
     .trim();
 }
 
-function failed(code: string, message: string, detail?: string | null): EngineResult {
+function failed(code: QueryErrorCode, message: string, detail?: string | null): EngineResult {
   return {
     status: 'failed',
     columns: [],

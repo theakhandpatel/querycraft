@@ -1,18 +1,20 @@
-// Package envdb gives each signed-in learner their own writable PostgreSQL
-// database, created as a copy of one sealed template.
+// Package envdb owns the learner environment: the writable workspace a
+// signed-in learner runs SQL in. It serves two backends of that one job. The
+// PostgreSQL backend gives each account a database copied from one sealed
+// template. The SQLite backend gives each account a database file seeded from
+// the committed schema and seed.
 //
-// The shared dataset the gateway serves is read-only on purpose: one learner
-// typing DELETE FROM orders must not change what another learner sees, and a
-// course that only runs SELECT cannot teach INSERT, UPDATE, DELETE, DDL or
-// transactions. So the read-only dataset stays the anonymous path, and a
-// challenge environment is a separate database the learner owns — wrong DML
-// there breaks their copy and nobody else's, and Reset restores it from the
-// template in one operation.
+// Both backends keep the same rule. The shared dataset the gateway serves is
+// read-only on purpose: one learner typing DELETE FROM orders must not change
+// what another learner sees, and a course that only runs SELECT cannot teach
+// INSERT, UPDATE, DELETE, DDL or transactions. The read-only dataset stays the
+// anonymous path. A learner's environment is separate and writable, so wrong
+// DML there breaks their copy and nobody else's, and Reset restores it.
 //
-// This package is the library layer for that: it owns the template's lifecycle,
-// the environment databases, one small connection pool per active environment,
-// the capacity cap and the idle reaper. The HTTP surface that calls it lives in
-// the gateway; nothing here imports net/http.
+// This package owns each backend's lifecycle: the sealed templates and the
+// environment databases, the per-account SQLite files, one small connection
+// pool per active environment, the capacity cap and the idle reaper. The HTTP
+// surface that calls it lives in the gateway; nothing here imports net/http.
 //
 // Design and the measurements behind it: docs/adr/0002-challenge-environments.md.
 package envdb
@@ -31,6 +33,7 @@ import (
 	"time"
 
 	"github.com/jackc/pgx/v5"
+	"github.com/jackc/pgx/v5/pgconn"
 
 	"github.com/querycraft/sqlquery/backend/internal/dataset"
 	"github.com/querycraft/sqlquery/backend/internal/engine"
@@ -392,10 +395,24 @@ func (m *Manager) ensure(ctx context.Context, accountID string, kind envKind) (*
 		m.building[key] = done
 		m.mu.Unlock()
 
-		exec, created, buildErr := m.buildEnvironment(ctx, kind, accountID, key, database, dsn)
+		exec, created, buildErr := m.buildEnvironment(ctx, kind, database, dsn)
 
 		m.mu.Lock()
 		delete(m.building, key)
+		if m.closed {
+			// Close ran while this build was outside the lock. Installing the
+			// environment now would leave a pool and a database alive after
+			// Close promised to drop every environment it owns, and the next
+			// Ensure would be refused anyway. Close the pool the build just
+			// opened and return the same refusal the caller would get at the
+			// top of this loop.
+			if exec != nil {
+				exec.Close()
+			}
+			close(done)
+			m.mu.Unlock()
+			return nil, errClosed()
+		}
 		if buildErr == nil {
 			now := time.Now()
 			m.envs[key] = &environment{
@@ -416,7 +433,7 @@ func (m *Manager) ensure(ctx context.Context, accountID string, kind envKind) (*
 // buildEnvironment connects the per-account pool and probes it writable, outside
 // the manager lock (see ensure). A failure closes the pool it opened so no
 // connection leaks.
-func (m *Manager) buildEnvironment(ctx context.Context, kind envKind, accountID, key, database, dsn string) (*engine.PgxExecutor, time.Duration, error) {
+func (m *Manager) buildEnvironment(ctx context.Context, kind envKind, database, dsn string) (*engine.PgxExecutor, time.Duration, error) {
 	start := time.Now()
 	exec, err := engine.NewPgxExecutorWithConfig(ctx, dsn, engine.PgxConfig{
 		MaxConns: m.opts.MaxConnsPerEnv,
@@ -440,37 +457,99 @@ func (m *Manager) reset(ctx context.Context, accountID string, kind envKind) (ti
 	if strings.TrimSpace(accountID) == "" {
 		return 0, errors.New("envdb: empty account id")
 	}
-	m.mu.Lock()
-	defer m.mu.Unlock()
-	if m.closed {
-		return 0, errClosed()
-	}
-
 	key := kind.keyPrefix + digest(accountID)
-	if e, ok := m.envs[key]; ok {
-		e.exec.Close()
-		delete(m.envs, key)
-	}
-	template := kind.template(m)
-	if err := m.ensureTemplateFromLocked(ctx, template, kind.label, m.loaderFor(template)); err != nil {
-		return 0, err
-	}
 
-	// The name must be the one ensure creates, so a reset restores the
-	// environment the lesson is actually running against rather than a second,
-	// empty one.
-	database := kind.database(m, accountID)
-	start := time.Now()
-	if err := dataset.ResetEnvironment(ctx, m.admin, database, template); err != nil {
-		return 0, envErr(err)
+	var database, template string
+	for {
+		m.mu.Lock()
+		if m.closed {
+			m.mu.Unlock()
+			return 0, errClosed()
+		}
+		// Another goroutine is already building or resetting THIS account's
+		// environment. Wait for it, exactly like ensure, so two DDL statements
+		// cannot race over one database. The lock is released while waiting.
+		if wait, inflight := m.building[key]; inflight {
+			m.mu.Unlock()
+			select {
+			case <-wait:
+			case <-ctx.Done():
+				return 0, envErr(ctx.Err())
+			}
+			continue
+		}
+		if e, ok := m.envs[key]; ok {
+			e.exec.Close()
+			delete(m.envs, key)
+		}
+		template = kind.template(m)
+		if err := m.ensureTemplateFromLocked(ctx, template, kind.label, m.loaderFor(template)); err != nil {
+			m.mu.Unlock()
+			return 0, err
+		}
+
+		// The name must be the one ensure creates, so a reset restores the
+		// environment the lesson is actually running against rather than a
+		// second, empty one.
+		database = kind.database(m, accountID)
+		// The copy is seconds of DDL (ADR 0002 measured the first drop at
+		// ~2.9 s), so it must run outside the state lock, guarded by the same
+		// in-flight marker a build uses. Holding the lock across it froze every
+		// other account for the whole reset.
+		done := make(chan struct{})
+		m.building[key] = done
+		m.mu.Unlock()
+
+		start := time.Now()
+		err := m.resetDatabase(ctx, database, template)
+
+		m.mu.Lock()
+		delete(m.building, key)
+		close(done)
+		if err != nil {
+			m.mu.Unlock()
+			return 0, err
+		}
+		took := time.Since(start)
+		// The key carries the environment kind, so a plan reset publishes its
+		// own time and leaves the challenge reset time Facts reports alone.
+		m.resetAt[key] = start
+		m.observeReset(took)
+		m.publishActiveLocked()
+		m.opts.Log.Info(kind.label+" environment reset",
+			"account", accountID, "database", database, "took", took.String())
+		m.mu.Unlock()
+		return took, nil
 	}
-	took := time.Since(start)
-	m.resetAt[digest(accountID)] = start
-	m.observeReset(took)
-	m.publishActiveLocked()
-	m.opts.Log.Info(kind.label+" environment reset",
-		"account", accountID, "database", database, "took", took.String())
-	return took, nil
+}
+
+// resetDatabase drops and rebuilds one environment database on a fresh
+// administrative connection. The manager's admin connection is a single
+// pgx.Conn that every catalog statement under the state lock shares, and pgx
+// does not allow concurrent use of one connection. The copy runs outside the
+// lock, so it gets a connection of its own.
+func (m *Manager) resetDatabase(ctx context.Context, database, template string) error {
+	conn, err := m.newAdminConn(ctx)
+	if err != nil {
+		return err
+	}
+	defer func() { _ = conn.Close(context.WithoutCancel(ctx)) }()
+	if err := dataset.ResetEnvironment(ctx, conn, database, template); err != nil {
+		return envErr(err)
+	}
+	return nil
+}
+
+// newAdminConn opens a second administrative connection for slow DDL that runs
+// outside the manager's state lock. It copies the connection config, so the
+// caller can close it without touching the shared admin connection.
+func (m *Manager) newAdminConn(ctx context.Context) (*pgx.Conn, error) {
+	cfg := m.adminCfg.Copy()
+	conn, err := pgx.ConnectConfig(ctx, cfg)
+	if err != nil {
+		return nil, envErr(fmt.Errorf("open a DDL connection: %w", err))
+	}
+	return conn, nil
 }
 
 // loaderFor returns the fixture loader for a template name, so the shared
@@ -508,7 +587,9 @@ func (m *Manager) Facts(ctx context.Context, accountID string) (Facts, error) {
 		facts.CreatedAt = e.createdAt
 		facts.IdleUntil = e.lastUsed.Add(m.opts.IdleTTL)
 	}
-	facts.ResetAt = m.resetAt[digest(accountID)]
+	// Facts describes the challenge environment, so it reads the challenge
+	// key. A plan reset writes the perf key and must not change this time.
+	facts.ResetAt = m.resetAt[challengeEnv.keyPrefix+digest(accountID)]
 	err := m.admin.QueryRow(ctx,
 		"SELECT EXISTS (SELECT 1 FROM pg_database WHERE datname = $1)", database,
 	).Scan(&facts.Exists)
@@ -522,11 +603,28 @@ func (m *Manager) Facts(ctx context.Context, accountID string) (Facts, error) {
 
 	writable, tables, err := m.inspect(ctx, database)
 	if err != nil {
+		// The idle reaper drops databases outside the state lock, so the
+		// database can disappear between the catalog check above and this
+		// connection. That is the same answer as Exists=false, not a failed
+		// environment.
+		if isDatabaseGone(err) {
+			facts.Exists = false
+			return facts, nil
+		}
 		return facts, envErr(err)
 	}
 	facts.Writable = writable
 	facts.Tables = tables
 	return facts, nil
+}
+
+// isDatabaseGone reports whether PostgreSQL refused the work because the
+// database no longer exists (SQLSTATE 3D000). Facts races its own idle reaper,
+// and this is how it tells "that environment was just reaped" from "the server
+// is unreachable".
+func isDatabaseGone(err error) bool {
+	var pgErr *pgconn.PgError
+	return errors.As(err, &pgErr) && pgErr.Code == "3D000"
 }
 
 // Close stops the reaper, drops every environment this manager owns, and closes
@@ -743,13 +841,29 @@ func (m *Manager) reapLoop() {
 // reapOnce drops every environment that has been idle past IdleTTL. The learner
 // pays ~35 ms to get it back; the cluster gets its connection slot and 7.6 MiB
 // back instead of holding them for a learner who has gone.
+//
+// The DROP runs outside the state lock, one victim at a time, and uses a fresh
+// admin connection for the same reason reset does: a sweep used to hold the
+// lock across every database it dropped, so one idle account froze every other
+// account's Ensure and Facts for the whole sweep. Each victim is marked in
+// flight first, so an Ensure for the same account waits for the drop instead of
+// binding a pool to a database about to disappear.
 func (m *Manager) reapOnce() {
 	ctx, cancel := context.WithTimeout(context.Background(), dropTimeout)
 	defer cancel()
 
+	type victim struct {
+		key string
+		env *environment
+		// done is the in-flight marker: waiters on m.building[key] block on it
+		// until the drop lands.
+		done chan struct{}
+	}
+	var victims []victim
+
 	m.mu.Lock()
-	defer m.mu.Unlock()
 	if m.closed {
+		m.mu.Unlock()
 		return
 	}
 	now := time.Now()
@@ -757,17 +871,58 @@ func (m *Manager) reapOnce() {
 		if now.Sub(e.lastUsed) < m.opts.IdleTTL {
 			continue
 		}
-		if err := dataset.DropDatabase(ctx, m.admin, e.database); err != nil {
-			// A reap that failed is retried on the next tick, not fatal.
-			m.opts.Log.Warn("reap idle environment", "database", e.database, "error", err)
+		if _, inflight := m.building[key]; inflight {
 			continue
 		}
-		e.exec.Close()
+		done := make(chan struct{})
+		m.building[key] = done
+		victims = append(victims, victim{key: key, env: e, done: done})
 		delete(m.envs, key)
-		m.opts.Log.Info("reaped idle environment",
-			"database", e.database, "idle_for", now.Sub(e.lastUsed).String())
 	}
 	m.publishActiveLocked()
+	m.mu.Unlock()
+
+	if len(victims) == 0 {
+		return
+	}
+
+	conn, err := m.newAdminConn(ctx)
+	if err != nil {
+		// Nothing was dropped, so every victim is restored and the next tick
+		// retries. A reaper that cannot run is not fatal.
+		m.mu.Lock()
+		for _, v := range victims {
+			delete(m.building, v.key)
+			close(v.done)
+			m.envs[v.key] = v.env
+		}
+		m.publishActiveLocked()
+		m.mu.Unlock()
+		m.opts.Log.Warn("reap idle environments: could not open a DDL connection; retrying on the next sweep", "err", err)
+		return
+	}
+	defer func() { _ = conn.Close(context.WithoutCancel(ctx)) }()
+
+	for _, v := range victims {
+		dropErr := dataset.DropDatabase(ctx, conn, v.env.database)
+
+		m.mu.Lock()
+		delete(m.building, v.key)
+		close(v.done)
+		if dropErr != nil {
+			// A reap that failed is retried on the next tick, not fatal.
+			m.opts.Log.Warn("reap idle environment", "database", v.env.database, "error", dropErr)
+			m.envs[v.key] = v.env
+			m.publishActiveLocked()
+			m.mu.Unlock()
+			continue
+		}
+		m.mu.Unlock()
+
+		v.env.exec.Close()
+		m.opts.Log.Info("reaped idle environment",
+			"database", v.env.database, "idle_for", now.Sub(v.env.lastUsed).String())
+	}
 }
 
 func (m *Manager) observeCreate(d time.Duration) {

@@ -1,4 +1,4 @@
-# M4 implementation plan — "AI Challenge Lab"
+# M4 implementation plan: "AI Challenge Lab"
 
 Design source: `docs/technical-design.md` §14 (M4), §11.1 (the generation
 pipeline), §11.2 (rules), §6.5 (on-demand critique, verification and repair),
@@ -44,16 +44,16 @@ name rather than papered over.
 Measured against the last **landed** step, commit `7c951de11` (*M4 step 1: the AI
 generation seam*), on 2026-10-15. Steps 2–8 are being built in parallel behind the
 frozen seam, so the working tree runs ahead of this table; a row counts as landed
-here only when the commit exists. The pipeline is still a stub — it returns
-`unavailable` — and there is no AI test and no AI audit.
+here only when the commit exists. The pipeline is still a stub: it returns
+`unavailable`, and there is no AI test and no AI audit.
 
 | M4 scope item | State | Evidence |
 | --- | --- | --- |
-| Provider interface | Done | `backend/internal/ai/provider.go` — `Provider{Descriptor, Complete}`, one completion in / text out, no tools, no filesystem; committed in `7c951de11` |
+| Provider interface | Done | `backend/internal/ai/provider.go`, `Provider{Descriptor, Complete}`, one completion in / text out, no tools, no filesystem; committed in `7c951de11` |
 | Deterministic fake provider | **Missing** | no implementation of `Provider` in `backend/internal/ai/`; the package has no `_test.go` |
 | OpenAI-compatible transport + server-side keys | **Missing** | `backend/go.mod` has no AI/vendor dependency and no HTTP provider; no key config in `cmd/api/main.go` |
 | Challenge request + artifact schemas | Done | `contracts/ai.schema.json` (284 lines); `web/src/api/aiContract.ts` (types only) |
-| Generation pipeline (§11.1) | Stub | `backend/internal/ai/pipeline.go` — `generate` returns `s.unavailable(...)`; the nine stage names are declared but nothing runs them |
+| Generation pipeline (§11.1) | Stub | `backend/internal/ai/pipeline.go`: `generate` returns `s.unavailable(...)`; the nine stage names are declared but nothing runs them |
 | Tutoring | Stub | `Service.Tutor` returns `AI_UNAVAILABLE` (`pipeline.go`) |
 | Critique / defect / patch (§6.5) | Stub | `Service.Critique`, `ReportDefect`, `ApplyPatch` all return `AI_UNAVAILABLE` |
 | Persistence seam | **Missing** (step 1 only) | `ai.Depot` is declared in `backend/internal/ai/api.go`; `app.challenges` + `app.patches` and the `store` implementations are parallel work in the working tree, not in `7c951de11` |
@@ -66,8 +66,8 @@ Read plainly: M4 has a contract and the interfaces that every later step must
 compile against, and nothing that generates, stores, serves or displays a
 challenge yet. This plan does not claim any part of that is green.
 
-The parallel work already on disk when this plan was written — `httpapi/ai.go`
-and the extra routes in `server.go`, the `store` `Depot` implementations — is a
+The parallel work already on disk when this plan was written: `httpapi/ai.go`
+and the extra routes in `server.go`, the `store` `Depot` implementations, is a
 step 4/5 advance, and step status is tracked in `progress.md` rather than here.
 This table is the baseline the plan is written against, so it does not move when
 that work lands.
@@ -76,7 +76,7 @@ that work lands.
 
 | # | Step | Ships | Depends on |
 | --- | --- | --- | --- |
-| 1 | The AI generation seam | `contracts/ai.schema.json`, `backend/internal/ai`, `web/src/api/aiContract.ts` | — **(done, `7c951de11`)** |
+| 1 | The AI generation seam | `contracts/ai.schema.json`, `backend/internal/ai`, `web/src/api/aiContract.ts` | **(done, `7c951de11`)** |
 | 2 | Provider: deterministic fake + OpenAI-compatible transport | `DeterministicProvider`, `HTTPProvider`, key config | 1 |
 | 3 | The §11.1 pipeline | the nine stages, `Limits` enforced, provenance and attempts | 2 |
 | 4 | HTTP routes + the `ai` capability block | the challenge/tutor/critique/report/patch routes; `ai` on `/capabilities`; OpenAPI | 3 |
@@ -96,37 +96,37 @@ Step 8 only ships with the owner's go-ahead, matching M3's step 8.
 
 The stage names are the ones the seam already declares
 (`backend/internal/ai/api.go`); the pipeline runs them in this order and reports
-each as `done`, `failed` or `skipped` — never silently. The reason matters as
+each as `done`, `failed` or `skipped`, never silently. The reason matters as
 much as the order, because the order is what makes "nothing becomes visible"
 checkable.
 
-1. `validate_request` — validate the structured request (topics, difficulty,
+1. `validate_request`: validate the structured request (topics, difficulty,
    scenario, constraints). **Why:** the model is fed only well-formed, bounded
    input, and an oversized or malformed request is refused before it costs a
    completion.
-2. `request_bundle` — ask for one candidate bundle under a constrained output
+2. `request_bundle`: ask for one candidate bundle under a constrained output
    schema. **Why:** this is the single place the model is called; a JSON Schema
    constrains the reply and `Limits.MaxOutputBytes` bounds it before parsing, so
    provider output is untrusted input from the first byte.
-3. `validate_artifact` — validate size limits, table and row caps and allowed SQL
+3. `validate_artifact`: validate size limits, table and row caps and allowed SQL
    constructs. **Why:** static policy runs on the untrusted text before any of it
    executes; this is where an invalid generated setup is stopped.
-4. `scratch_environment` — create a throwaway environment, run the setup, check
+4. `scratch_environment`: create a throwaway environment, run the setup, check
    constraints and expected dataset properties. **Why:** the setup plan is
    untrusted SQL and must run where it cannot touch the learner's workspace or the
    shared dataset (ADR 0003; `Runner.Scratch`).
-5. `reference_contract` — run the reference solution and confirm it satisfies its
+5. `reference_contract`: run the reference solution and confirm it satisfies its
    own result contract. **Why:** the artifact's own reference must pass its own
    contract, graded by the deterministic evaluator, never by the model.
-6. `cross_check` — request a second, independently produced solution and require
+6. `cross_check`: request a second, independently produced solution and require
    the same result on the generated data. **Why:** it catches some contract
    errors; it is not proof, because both solutions can share a mistake.
-7. `adversarial_fixtures` — run the evaluator against known-wrong queries where
+7. `adversarial_fixtures`: run the evaluator against known-wrong queries where
    feasible. **Why:** a contract that accepts a deliberately wrong query is too
    loose to grade with.
-8. `repair` — repair within a small budget, then fail clearly. **Why:** the model
+8. `repair`: repair within a small budget, then fail clearly. **Why:** the model
    may fix its own artifact, but only a bounded number of times (see below).
-9. `activate` — save the artifacts and exact versions, then mark the challenge
+9. `activate`: save the artifacts and exact versions, then mark the challenge
    active. **Why:** nothing becomes visible to the learner before this stage, and
    provenance is written with the artifact so a later reader can see why it was
    allowed in.
@@ -146,7 +146,7 @@ Only `activate` may write to the depot, and only after stages 5–7 are `done`.
 - Tutoring never reveals the reference solution, and the request type makes that
   structural (below).
 - SQL, comments, prompts and data values are untrusted input. A tool call routes
-  through a normal service — schema inspection, query execution, evaluation,
+  through a normal service: schema inspection, query execution, evaluation,
   reset, save draft. There is no shell and no filesystem tool (§11.2; §12 row
   *Prompt injection*).
 - A generated setup is untrusted SQL: it runs only in a throwaway environment,
@@ -168,8 +168,8 @@ Only `activate` may write to the depot, and only after stages 5–7 are `done`.
 `Limits.MaxRepairs` (default **2** in `DefaultLimits`) bounds stage 8. A repair is
 not a transport retry: it is another provider completion *plus* another
 scratch-environment run, so each unit costs money, time and an artifact that can
-itself be wrong. The bound answers a product question — *how many times may the
-model try to fix its own artifact before the run is refused* — which is why it is
+itself be wrong. The bound answers a product question: *how many times may the
+model try to fix its own artifact before the run is refused*, which is why it is
 a policy number reviewed with the rest of `Limits` and not a retry count copied
 from a client library. Exhausting it fails with `AI_REPAIR_EXHAUSTED`, names the
 stage, and reports the attempts; a dropped connection may be retried by the
@@ -187,7 +187,7 @@ rather than shown, and the hint level is capped by `Limits.MaxHints` (default 3)
 
 A learner's report starts §6.5, not a mutation. The critic states a falsifiable
 claim with the probes that would confirm it; the verifier sees the claim and the
-exercise files — not the critic's reasoning — and runs the probes on the engine
+exercise files, not the critic's reasoning, and runs the probes on the engine
 through a read-only role. Only a defect confirmed by execution yields a
 `PatchProposal`, which is stored and shown as a diff. The learner chooses Apply or
 Dismiss; `applyPatch` refuses an unverified proposal (`AI_PATCH_UNVERIFIED`) and
@@ -212,7 +212,7 @@ exists; `GET /capabilities` reports `ai.available == false` with the reason; the
 lab UI is hidden or disabled with that reason. Step 7 wraps this as
 `make audit-ai`.
 
-## Step 1 — The AI generation seam (done)
+## Step 1: The AI generation seam (done)
 
 Shipped in commit `7c951de11`.
 
@@ -236,7 +236,7 @@ Shipped in commit `7c951de11`.
 **Does not prove:** that anything generates, validates, stores or serves a
 challenge. The pipeline bodies return `unavailable` on purpose.
 
-## Step 2 — The provider: a deterministic fake, and the OpenAI-compatible transport
+## Step 2: The provider, a deterministic fake, and the OpenAI-compatible transport
 
 1. `backend/internal/ai/fake.go`: `DeterministicProvider` satisfies `Provider`
    with `Descriptor().Deterministic = true` and a fixed, schema-valid bundle per
@@ -248,7 +248,7 @@ challenge. The pipeline bodies return `unavailable` on purpose.
    OpenAI-compatible `POST {base}/chat/completions` (base URL, model and key from
    config, server-side). It sends only `ProviderRequest` fields, bounds the reply
    with `MaxOutputBytes` while reading, and maps transport, quota and malformed
-   responses to `ErrProviderUnavailable` — never to a silent empty bundle.
+   responses to `ErrProviderUnavailable`: never to a silent empty bundle.
 3. Config in `cmd/api/main.go`: `QC_AI_BASE_URL`, `QC_AI_MODEL`, `QC_AI_KEY`
    (key server-side only). Unset selects the fake provider, so the default build
    generates with no network and no key. Provider selection is configuration, not
@@ -266,10 +266,10 @@ challenge. The pipeline bodies return `unavailable` on purpose.
 added.
 
 **Does not prove:** that a hosted provider's output is good, or that the transport
-handles every provider's dialect — only the compatible subset it uses. End-to-end
+handles every provider's dialect: only the compatible subset it uses. End-to-end
 provider latency and cost are unmeasured until a key is configured.
 
-## Step 3 — The §11.1 pipeline
+## Step 3: The §11.1 pipeline
 
 1. Replace each stub body in `pipeline.go` with the real stage, in the declared
    order, reporting `Stage{name,state,detail,ms}` for each. Nothing before
@@ -309,11 +309,11 @@ is rejected at `adversarial_fixtures`; a bundle that never converges exhausts
 **Done when:** every stage name in `api.go` is reachable from a test, and `active`
 is the only status that stores a challenge.
 
-**Does not prove:** that the checks are complete — the cross-check shares blind
-spots with the reference, and the adversarial fixtures run "where feasible" — nor
+**Does not prove:** that the checks are complete: the cross-check shares blind
+spots with the reference, and the adversarial fixtures run "where feasible": nor
 that the model produces good content.
 
-## Step 4 — HTTP routes and the `ai` capability block
+## Step 4: HTTP routes and the `ai` capability block
 
 1. Register the routes in `server.go` (`GET /challenges`, `GET /challenges/{id}`,
    `POST /challenges/{id}/reset`, `POST /tutor`, `POST /challenges/{id}/critique`,
@@ -346,7 +346,7 @@ run.
 **Does not prove:** the UI (step 6), or that a hosted provider answers inside the
 timeout.
 
-## Step 5 — Persistence: survive restart, reset on demand
+## Step 5: Persistence, surviving a restart and resetting on demand
 
 1. Make `Depot` the only path to a stored challenge; `Depot` is already backed by
    `app.challenges` / `app.patches` (store, working tree). `Service.Challenges`,
@@ -376,7 +376,7 @@ removes it, and no patch is applied without an approval record.
 reset are the named cases, and a failed write is surfaced rather than silently
 dropped); ownership rules beyond the `owner_id` the schema already carries.
 
-## Step 6 — Frontend seam and the lab UI
+## Step 6: Frontend seam and the lab UI
 
 1. `web/src/api/aiContract.ts` is the compile target; the operations are added to
    the `ExecutionService` seam (`web/src/api/`). A screen never calls `fetch` and
@@ -404,9 +404,9 @@ is refused rather than shown.
 cannot reach a generation control that the service would refuse.
 
 **Does not prove:** the pedagogy of a generated challenge, or that the lab is
-pleasant at provider latency — no latency budget is set here.
+pleasant at provider latency: no latency budget is set here.
 
-## Step 7 — AI-off proof and the M4 exit-gate audit
+## Step 7: AI-off proof and the M4 exit-gate audit
 
 1. `scripts/ai-audit.mjs` + `make audit-ai` (added to `make test`): boot the
    gateway with no provider and assert every non-AI route still answers and
@@ -427,9 +427,9 @@ off without one, and each gate row has a measured result rather than a promise.
 
 **Does not prove:** a hosted provider, or that the fake is representative of one.
 
-## Step 8 — M4 release
+## Step 8: M4 release
 
-Release checklist — the owner's go-ahead is required before the tag (the "do not
+Release checklist: the owner's go-ahead is required before the tag (the "do not
 commit or tag without asking" constraint holds):
 
 1. `make verify` and `make verify-mock` green; `make audit-ai` green with the
@@ -471,7 +471,7 @@ step 7.
 - **Where the key comes from.** This plan assumes environment variables. Reading a
   key from a file or a secret store would be a new decision.
 - **Cost and rate.** `Limits` bounds bytes, statements, repairs, hints, timeout and
-  concurrency — not dollars. §6.5's reports-per-day cap has no number yet.
+  concurrency, not dollars. §6.5's reports-per-day cap has no number yet.
 
 ## What this does NOT prove
 

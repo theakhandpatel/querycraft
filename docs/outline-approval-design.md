@@ -1,7 +1,7 @@
-# Design — outline approval (pause after the outline)
+# Design: outline approval (pause after the outline)
 
 Status: **built** (2026-10-16). Chosen scope (owner, 2026-10-15): the *cheap
-subset* — the run pauses with the outline stored and waits for the learner to
+subset*: the run pauses with the outline stored and waits for the learner to
 approve it or discard it. **No** edit-and-regenerate loop in v1; a fresh outline
 is a fresh run.
 
@@ -16,7 +16,7 @@ is a fresh run.
   job the screen can watch; the blocking envelope is the default. A course that
   is not `building` is refused with `409`, not silently re-run.
 - `CourseRecord.Request` persists the generation request (the one data change).
-  When it is absent — a record stored before the field existed — the resume
+  When the field is absent on a record stored before it existed, the resume
   recovers the goal from the plan's title and the exercise budget from the
   plan's own exercise count, and leaves the rest at their defaults rather than
   inventing words the learner never said.
@@ -29,7 +29,7 @@ is a fresh run.
   because that is where the run itself stopped.
 - The one deliberate addition to the contract: `contracts/ai.schema.json`
   (`outcome.status`, `generationRequest.require_approval`) and
-  `contracts/run.schema.json` (`runStatus`). The enums genuinely had to grow —
+  `contracts/run.schema.json` (`runStatus`). The enums genuinely had to grow: 
   a response or transcript carrying the new status must validate.
 
 ## Why
@@ -45,7 +45,7 @@ chapter-generation phase.
 That costs the learner in one specific way: **a bad outline wastes the whole
 run.** The outline gate (`validateCourseOutline`) exists precisely because an
 outline can be wrong; today the only recovery is to throw the run away and start
-again. Showing the index first turns that into a cheap "no, not that" — and the
+again. Showing the index first turns that into a cheap "no, not that", and the
 lesson from M8 is that a full run is minutes, while an outline is seconds.
 
 ## The shape
@@ -109,7 +109,7 @@ generation.
 - `POST /courses/generate` gains a mode/flag: default stays today's behaviour
   (compatible), the pause is requested explicitly. A client that does not ask for
   approval must see exactly what it sees today.
-- `POST /courses/{id}/build` — approve: continue the stored outline into the
+- `POST /courses/{id}/build`, approve: continue the stored outline into the
   chapter phase. Owner-scoped; 404 for another account's course (existing rule).
 - The job view's `status` can be `awaiting_approval`; the course id is already
   named as soon as the outline is stored, so the client can navigate to it.
@@ -129,7 +129,7 @@ generation.
 - Approve runs the chapter phase and activates the course
   (`TestApprovingAPausedCourseRunsTheChapterPhase`); a chapter already verified
   before the pause is not re-asked for
-  (`TestAnAlreadyVerifiedChapterIsNotAskedForAgain`) — the stored chapter is
+  (`TestAnAlreadyVerifiedChapterIsNotAskedForAgain`): the stored chapter is
   replayed into the conversation as an already-resolved turn.
 - Discard deletes the row and ends the run `discarded`
   (`TestAPausedCourseCanBeDiscarded`).

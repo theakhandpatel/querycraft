@@ -8,22 +8,21 @@ import (
 	"time"
 
 	"github.com/jackc/pgx/v5"
-
-	"github.com/querycraft/sqlquery/backend/internal/ai"
+	"github.com/querycraft/sqlquery/backend/internal/schema"
 )
 
 /* ---------- generated courses (M7) ---------- */
 
-// SaveCourse implements ai.Depot. The plan and the outcome that admitted it are
+// SaveCourse implements schema.Depot. The plan and the outcome that admitted it are
 // one row, so the evidence cannot drift from the course it justified — the same
 // rule app.challenges follows, for the same reason.
-func (p *Postgres) SaveCourse(ctx context.Context, rec ai.CourseRecord) error {
+func (p *Postgres) SaveCourse(ctx context.Context, rec schema.CourseRecord) error {
 	if rec.Plan.ID == "" {
 		return errors.New("course id is required")
 	}
 	status := rec.Status
 	if status == "" {
-		status = ai.StatusActive
+		status = schema.StatusActive
 	}
 	created := rec.CreatedAt
 	if created.IsZero() {
@@ -60,10 +59,10 @@ func (p *Postgres) SaveCourse(ctx context.Context, rec ai.CourseRecord) error {
 	return err
 }
 
-// Course implements ai.Depot.
-func (p *Postgres) Course(ctx context.Context, id string) (ai.CourseRecord, bool, error) {
+// Course implements schema.Depot.
+func (p *Postgres) Course(ctx context.Context, id string) (schema.CourseRecord, bool, error) {
 	var (
-		rec     ai.CourseRecord
+		rec     schema.CourseRecord
 		plan    []byte
 		outcome []byte
 		request []byte
@@ -72,29 +71,29 @@ func (p *Postgres) Course(ctx context.Context, id string) (ai.CourseRecord, bool
 		`SELECT owner_id, status, plan, outcome, request, created_at FROM app.courses WHERE id = $1`, id).
 		Scan(&rec.OwnerID, &rec.Status, &plan, &outcome, &request, &rec.CreatedAt)
 	if errors.Is(err, pgx.ErrNoRows) {
-		return ai.CourseRecord{}, false, nil
+		return schema.CourseRecord{}, false, nil
 	}
 	if err != nil {
-		return ai.CourseRecord{}, false, err
+		return schema.CourseRecord{}, false, err
 	}
 	if err := decodeCourse(&rec, plan, outcome, request); err != nil {
-		return ai.CourseRecord{}, false, err
+		return schema.CourseRecord{}, false, err
 	}
 	return rec, true, nil
 }
 
-// Courses implements ai.Depot, newest first.
-func (p *Postgres) Courses(ctx context.Context) ([]ai.CourseRecord, error) {
+// Courses implements schema.Depot, newest first.
+func (p *Postgres) Courses(ctx context.Context) ([]schema.CourseRecord, error) {
 	return p.coursesWhere(ctx, "")
 }
 
 // CoursesFor is Courses filtered to one owner in SQL, so the owner-scoped list
 // route does not load every learner's courses and discard them in the handler.
-func (p *Postgres) CoursesFor(ctx context.Context, ownerID string) ([]ai.CourseRecord, error) {
+func (p *Postgres) CoursesFor(ctx context.Context, ownerID string) ([]schema.CourseRecord, error) {
 	return p.coursesWhere(ctx, ownerID)
 }
 
-func (p *Postgres) coursesWhere(ctx context.Context, ownerID string) ([]ai.CourseRecord, error) {
+func (p *Postgres) coursesWhere(ctx context.Context, ownerID string) ([]schema.CourseRecord, error) {
 	query := `SELECT owner_id, status, plan, outcome, request, created_at
 		   FROM app.courses`
 	args := []any{}
@@ -109,10 +108,10 @@ func (p *Postgres) coursesWhere(ctx context.Context, ownerID string) ([]ai.Cours
 	}
 	defer rows.Close()
 
-	out := []ai.CourseRecord{}
+	out := []schema.CourseRecord{}
 	for rows.Next() {
 		var (
-			rec     ai.CourseRecord
+			rec     schema.CourseRecord
 			plan    []byte
 			outcome []byte
 			request []byte
@@ -128,7 +127,7 @@ func (p *Postgres) coursesWhere(ctx context.Context, ownerID string) ([]ai.Cours
 	return out, rows.Err()
 }
 
-// DeleteCourse implements ai.Depot. Learner attempts are the learner's data and
+// DeleteCourse implements schema.Depot. Learner attempts are the learner's data and
 // are not touched here; only the generated course definition goes.
 func (p *Postgres) DeleteCourse(ctx context.Context, id string) error {
 	_, err := p.pool.Exec(ctx, `DELETE FROM app.courses WHERE id = $1`, id)
@@ -139,7 +138,7 @@ func (p *Postgres) DeleteCourse(ctx context.Context, id string) error {
 // nullable, so a NULL column leaves the record's Request nil rather than
 // failing the read — a course stored before the request was kept is still a
 // course.
-func decodeCourse(rec *ai.CourseRecord, plan, outcome, request []byte) error {
+func decodeCourse(rec *schema.CourseRecord, plan, outcome, request []byte) error {
 	if err := json.Unmarshal(plan, &rec.Plan); err != nil {
 		return fmt.Errorf("decode course plan: %w", err)
 	}
@@ -147,7 +146,7 @@ func decodeCourse(rec *ai.CourseRecord, plan, outcome, request []byte) error {
 		return fmt.Errorf("decode course outcome: %w", err)
 	}
 	if len(request) > 0 {
-		var req ai.GenerationRequest
+		var req schema.GenerationRequest
 		if err := json.Unmarshal(request, &req); err != nil {
 			return fmt.Errorf("decode course request: %w", err)
 		}

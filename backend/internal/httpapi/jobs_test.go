@@ -8,9 +8,12 @@ import (
 	"time"
 
 	"github.com/querycraft/sqlquery/backend/internal/ai"
+	"github.com/querycraft/sqlquery/backend/internal/ai/jobs"
+	"github.com/querycraft/sqlquery/backend/internal/ai/provider"
 	"github.com/querycraft/sqlquery/backend/internal/engine"
 	"github.com/querycraft/sqlquery/backend/internal/metrics"
 	"github.com/querycraft/sqlquery/backend/internal/pgtest"
+	"github.com/querycraft/sqlquery/backend/internal/schema"
 	"github.com/querycraft/sqlquery/backend/internal/store"
 )
 
@@ -133,7 +136,7 @@ func jobServer(t *testing.T) *Server {
 
 // jobServerWith is jobServer with the provider under test named by the caller,
 // which is how a test drives a model that misbehaves.
-func jobServerWith(t *testing.T, provider ai.Provider) *Server {
+func jobServerWith(t *testing.T, provider provider.Provider) *Server {
 	t.Helper()
 	srv := pgtest.Start(t)
 	ctx, cancel := context.WithTimeout(context.Background(), 4*time.Minute)
@@ -180,11 +183,11 @@ func waitJob(t *testing.T, s *Server, token, id string) jobEnvelope {
 	deadline := time.Now().Add(90 * time.Second)
 	for {
 		out := pollJob(t, s, token, id)
-		if out.Job.Status != ai.JobRunning {
+		if out.Job.Status != jobs.JobRunning {
 			return out
 		}
 		if time.Now().After(deadline) {
-			t.Fatalf("job %s never left status %q", id, ai.JobRunning)
+			t.Fatalf("job %s never left status %q", id, jobs.JobRunning)
 		}
 		time.Sleep(10 * time.Millisecond)
 	}
@@ -207,7 +210,7 @@ func TestAGenerationJobIsSubmittedPolledAndReadBack(t *testing.T) {
 	if !submitted.OK || submitted.Job.ID == "" {
 		t.Fatalf("a submission must answer with ok and a job id: %s", w.Body.String())
 	}
-	if submitted.Job.Kind != "course" || submitted.Job.Status != ai.JobRunning {
+	if submitted.Job.Kind != "course" || submitted.Job.Status != jobs.JobRunning {
 		t.Fatalf("submitted job = %+v, want a running course", submitted.Job)
 	}
 
@@ -215,8 +218,8 @@ func TestAGenerationJobIsSubmittedPolledAndReadBack(t *testing.T) {
 	// The states have to be one of the live ones, and at least one stage must
 	// still be ahead of the runner.
 	live := pollJob(t, s, token, submitted.Job.ID)
-	if live.Job.Status != ai.JobRunning {
-		t.Fatalf("status = %q while the provider is still answering, want %q", live.Job.Status, ai.JobRunning)
+	if live.Job.Status != jobs.JobRunning {
+		t.Fatalf("status = %q while the provider is still answering, want %q", live.Job.Status, jobs.JobRunning)
 	}
 	if len(live.Job.Stages) == 0 {
 		t.Fatal("a running job reports no stages: a poller would have nothing to show")
@@ -224,9 +227,9 @@ func TestAGenerationJobIsSubmittedPolledAndReadBack(t *testing.T) {
 	ahead := 0
 	for _, st := range live.Job.Stages {
 		switch st.State {
-		case ai.StateQueued, ai.StateRunning:
+		case schema.StateQueued, schema.StateRunning:
 			ahead++
-		case ai.StateDone, ai.StateFailed, ai.StateSkipped:
+		case schema.StateDone, schema.StateFailed, schema.StateSkipped:
 		default:
 			t.Fatalf("stage %q reports %q, which is not a live state", st.Name, st.State)
 		}
@@ -248,17 +251,17 @@ func TestAGenerationJobIsSubmittedPolledAndReadBack(t *testing.T) {
 		}
 		var mid courseEnvelope
 		mustDecode(t, w, &mid)
-		if mid.Course.Status != ai.StatusBuilding && mid.Course.Status != ai.StatusActive {
-			t.Fatalf("a running job's course is %q, want %q or %q", mid.Course.Status, ai.StatusBuilding, ai.StatusActive)
+		if mid.Course.Status != schema.StatusBuilding && mid.Course.Status != schema.StatusActive {
+			t.Fatalf("a running job's course is %q, want %q or %q", mid.Course.Status, schema.StatusBuilding, schema.StatusActive)
 		}
-		if mid.Course.Status == ai.StatusBuilding && len(mid.Course.Plan.Chapters) != live.Job.ChaptersPlanned {
+		if mid.Course.Status == schema.StatusBuilding && len(mid.Course.Plan.Chapters) != live.Job.ChaptersPlanned {
 			t.Fatalf("a building course carries %d chapter(s), the job planned %d", len(mid.Course.Plan.Chapters), live.Job.ChaptersPlanned)
 		}
 	}
 
 	done := waitJob(t, s, token, submitted.Job.ID)
-	if done.Job.Status != ai.StatusActive {
-		t.Fatalf("terminal status = %q, want %q (error = %+v)", done.Job.Status, ai.StatusActive, done.Job.Error)
+	if done.Job.Status != schema.StatusActive {
+		t.Fatalf("terminal status = %q, want %q (error = %+v)", done.Job.Status, schema.StatusActive, done.Job.Error)
 	}
 	if done.Job.CourseID == "" || done.Job.ChallengeID != "" {
 		t.Fatalf("an active course job must name exactly one course: %+v", done.Job)
@@ -268,7 +271,7 @@ func TestAGenerationJobIsSubmittedPolledAndReadBack(t *testing.T) {
 	}
 	for _, st := range done.Job.Stages {
 		switch st.State {
-		case ai.StateDone, ai.StateFailed, ai.StateSkipped:
+		case schema.StateDone, schema.StateFailed, schema.StateSkipped:
 		default:
 			t.Fatalf("a finished job reports stage %q as %q", st.Name, st.State)
 		}
@@ -300,7 +303,7 @@ func TestAGenerationJobIsSubmittedPolledAndReadBack(t *testing.T) {
 		} `json:"course"`
 	}
 	mustDecode(t, w, &rec)
-	if rec.Course.Plan.ID != done.Job.CourseID || rec.Course.Status != ai.StatusActive {
+	if rec.Course.Plan.ID != done.Job.CourseID || rec.Course.Status != schema.StatusActive {
 		t.Fatalf("stored course = %+v, want the active plan %s", rec.Course.Status, done.Job.CourseID)
 	}
 	exercises := 0
@@ -319,13 +322,13 @@ func TestAGenerationJobIsSubmittedPolledAndReadBack(t *testing.T) {
 	// A finished job stays readable: a client that was away when the run ended
 	// still learns what happened.
 	again := pollJob(t, s, token, submitted.Job.ID)
-	if again.Job.Status != ai.StatusActive || again.Job.CourseID != done.Job.CourseID {
+	if again.Job.Status != schema.StatusActive || again.Job.CourseID != done.Job.CourseID {
 		t.Fatalf("polling a finished job changed the answer: %+v", again.Job)
 	}
 
 	// The run is counted where the blocking route counts it, and no generation
 	// is left running.
-	if got, ok := s.Registry().Value(metricGenerations, metrics.Labels{"kind": "course", "status": ai.StatusActive, "code": ""}); !ok || got < 1 {
+	if got, ok := s.Registry().Value(metricGenerations, metrics.Labels{"kind": "course", "status": schema.StatusActive, "code": ""}); !ok || got < 1 {
 		t.Fatalf("querycraft_generations_total{status=active} = %v (present = %v), want at least 1", got, ok)
 	}
 	if got, ok := s.Registry().Value(metricGenerationJobs, metrics.Labels{"state": "running"}); !ok || got != 0 {
@@ -352,7 +355,7 @@ func TestAGenerationJobIsSubmittedPolledAndReadBack(t *testing.T) {
 		Kind   string `json:"kind"`
 	}
 	mustDecode(t, w, &out)
-	if out.Status != ai.StatusActive || out.Kind != "course" {
+	if out.Status != schema.StatusActive || out.Kind != "course" {
 		t.Fatalf("blocking submit answered %+v, want an active course", out)
 	}
 }
@@ -409,7 +412,7 @@ func TestGenerationJobPollingIsOffWithAI(t *testing.T) {
 		} `json:"error"`
 	}
 	mustDecode(t, w, &off)
-	if off.Status != ai.StatusUnavailable || off.Error == nil || off.Error.Code != ai.CodeUnavailable {
+	if off.Status != schema.StatusUnavailable || off.Error == nil || off.Error.Code != ai.CodeUnavailable {
 		t.Fatalf("AI-off async submit answered %+v", off)
 	}
 }
@@ -446,7 +449,7 @@ func TestACourseIsReadableWhileLaterChaptersAreStillBeingWritten(t *testing.T) {
 	deadline := time.Now().Add(60 * time.Second)
 	for {
 		view := pollJob(t, s, token, submitted.Job.ID)
-		if view.Job.Status != ai.JobRunning {
+		if view.Job.Status != jobs.JobRunning {
 			t.Fatalf("the run reached %q before a chapter could be read mid-run", view.Job.Status)
 		}
 		if view.Job.ChaptersVerified > 0 && view.Job.CourseID != "" {
@@ -467,8 +470,8 @@ func TestACourseIsReadableWhileLaterChaptersAreStillBeingWritten(t *testing.T) {
 	// The stored row is the record the finished run will carry, still being
 	// written: same id, the whole planned shape, and only the chapters that
 	// already passed carrying content.
-	if seen.Course.Status != ai.StatusBuilding {
-		t.Fatalf("the course read mid-run is %q, want %q", seen.Course.Status, ai.StatusBuilding)
+	if seen.Course.Status != schema.StatusBuilding {
+		t.Fatalf("the course read mid-run is %q, want %q", seen.Course.Status, schema.StatusBuilding)
 	}
 	if seen.Course.Plan.ID != courseID {
 		t.Fatalf("the mid-run course has id %q, want %q", seen.Course.Plan.ID, courseID)
@@ -502,7 +505,7 @@ func TestACourseIsReadableWhileLaterChaptersAreStillBeingWritten(t *testing.T) {
 	// The same id is the active course once the run is over, with every
 	// chapter carrying content.
 	done := waitJob(t, s, token, submitted.Job.ID)
-	if done.Job.Status != ai.StatusActive || done.Job.CourseID != courseID {
+	if done.Job.Status != schema.StatusActive || done.Job.CourseID != courseID {
 		t.Fatalf("the finished job = %+v, want the course it was building (%s)", done.Job, courseID)
 	}
 	w = doAs(t, s, token, http.MethodGet, "/courses/"+courseID, "")
@@ -511,8 +514,8 @@ func TestACourseIsReadableWhileLaterChaptersAreStillBeingWritten(t *testing.T) {
 	}
 	var final courseEnvelope
 	mustDecode(t, w, &final)
-	if final.Course.Status != ai.StatusActive {
-		t.Fatalf("the finished course is %q, want %q", final.Course.Status, ai.StatusActive)
+	if final.Course.Status != schema.StatusActive {
+		t.Fatalf("the finished course is %q, want %q", final.Course.Status, schema.StatusActive)
 	}
 	if final.written() != len(final.Course.Plan.Chapters) || final.written() == 0 {
 		t.Fatalf("the active course carries content for %d of %d chapter(s)", final.written(), len(final.Course.Plan.Chapters))
@@ -523,11 +526,11 @@ func TestACourseIsReadableWhileLaterChaptersAreStillBeingWritten(t *testing.T) {
 // it is asked to save so the cross-check cannot agree with the reference. The
 // gateway must refuse the run instead of storing it, because a course with an
 // unverified exercise in it is worse than no course at all.
-type crossCheckBreaker struct{ inner ai.Provider }
+type crossCheckBreaker struct{ inner provider.Provider }
 
-func (a *crossCheckBreaker) Descriptor() ai.ProviderDescriptor { return a.inner.Descriptor() }
+func (a *crossCheckBreaker) Descriptor() provider.ProviderDescriptor { return a.inner.Descriptor() }
 
-func (a *crossCheckBreaker) Complete(ctx context.Context, req ai.ProviderRequest) (ai.ProviderResponse, error) {
+func (a *crossCheckBreaker) Complete(ctx context.Context, req provider.ProviderRequest) (provider.ProviderResponse, error) {
 	resp, err := a.inner.Complete(ctx, req)
 	if err != nil {
 		return resp, err
@@ -536,7 +539,7 @@ func (a *crossCheckBreaker) Complete(ctx context.Context, req ai.ProviderRequest
 		if call.Function.Name != "save_chapter" {
 			continue
 		}
-		var ch ai.CourseChapter
+		var ch schema.CourseChapter
 		if json.Unmarshal([]byte(call.Function.Arguments), &ch) != nil {
 			continue
 		}
@@ -570,8 +573,8 @@ func TestARefusedCourseLeavesNoRowBehind(t *testing.T) {
 	mustDecode(t, w, &submitted)
 
 	done := waitJob(t, s, token, submitted.Job.ID)
-	if done.Job.Status != ai.StatusRejected {
-		t.Fatalf("terminal status = %q, want %q (error = %+v)", done.Job.Status, ai.StatusRejected, done.Job.Error)
+	if done.Job.Status != schema.StatusRejected {
+		t.Fatalf("terminal status = %q, want %q (error = %+v)", done.Job.Status, schema.StatusRejected, done.Job.Error)
 	}
 	if done.Job.CourseID != "" {
 		t.Fatalf("a refused run named a record: %s", done.Job.CourseID)
@@ -634,8 +637,8 @@ func TestAPausedCourseIsApprovedOverTheRealRoutes(t *testing.T) {
 	mustDecode(t, w, &submitted)
 
 	paused := waitJob(t, s, token, submitted.Job.ID)
-	if paused.Job.Status != ai.StatusAwaitingApproval {
-		t.Fatalf("the run stopped at %q, want %q (error = %+v)", paused.Job.Status, ai.StatusAwaitingApproval, paused.Job.Error)
+	if paused.Job.Status != schema.StatusAwaitingApproval {
+		t.Fatalf("the run stopped at %q, want %q (error = %+v)", paused.Job.Status, schema.StatusAwaitingApproval, paused.Job.Error)
 	}
 	if paused.Job.CourseID == "" {
 		t.Fatal("a paused run must name the course it stored, because that is the index to approve")
@@ -657,8 +660,8 @@ func TestAPausedCourseIsApprovedOverTheRealRoutes(t *testing.T) {
 		} `json:"run"`
 	}
 	mustDecode(t, w, &run)
-	if run.Run.Status != ai.StatusAwaitingApproval {
-		t.Fatalf("the paused run's transcript says %q, want %q", run.Run.Status, ai.StatusAwaitingApproval)
+	if run.Run.Status != schema.StatusAwaitingApproval {
+		t.Fatalf("the paused run's transcript says %q, want %q", run.Run.Status, schema.StatusAwaitingApproval)
 	}
 	// The transcript validates against the shared run contract, which is where
 	// the new status had to be admitted: a response carrying a status the
@@ -677,8 +680,8 @@ func TestAPausedCourseIsApprovedOverTheRealRoutes(t *testing.T) {
 	}
 	var index courseEnvelope
 	mustDecode(t, w, &index)
-	if index.Course.Status != ai.StatusBuilding {
-		t.Fatalf("the stored course is %q, want %q", index.Course.Status, ai.StatusBuilding)
+	if index.Course.Status != schema.StatusBuilding {
+		t.Fatalf("the stored course is %q, want %q", index.Course.Status, schema.StatusBuilding)
 	}
 	if len(index.Course.Plan.Chapters) == 0 {
 		t.Fatal("the stored outline has no chapters to approve")
@@ -700,13 +703,13 @@ func TestAPausedCourseIsApprovedOverTheRealRoutes(t *testing.T) {
 	}
 	var built jobEnvelope
 	mustDecode(t, w, &built)
-	if built.Job.Kind != "course" || built.Job.Status != ai.JobRunning {
+	if built.Job.Kind != "course" || built.Job.Status != jobs.JobRunning {
 		t.Fatalf("build job = %+v, want a running course", built.Job)
 	}
 
 	done := waitJob(t, s, token, built.Job.ID)
-	if done.Job.Status != ai.StatusActive {
-		t.Fatalf("the approval ended at %q, want %q (error = %+v)", done.Job.Status, ai.StatusActive, done.Job.Error)
+	if done.Job.Status != schema.StatusActive {
+		t.Fatalf("the approval ended at %q, want %q (error = %+v)", done.Job.Status, schema.StatusActive, done.Job.Error)
 	}
 	if done.Job.CourseID != paused.Job.CourseID {
 		t.Fatalf("the approval produced course %q, want the paused one %q", done.Job.CourseID, paused.Job.CourseID)
@@ -719,8 +722,8 @@ func TestAPausedCourseIsApprovedOverTheRealRoutes(t *testing.T) {
 	}
 	var final courseEnvelope
 	mustDecode(t, w, &final)
-	if final.Course.Status != ai.StatusActive {
-		t.Fatalf("the approved course is %q, want %q", final.Course.Status, ai.StatusActive)
+	if final.Course.Status != schema.StatusActive {
+		t.Fatalf("the approved course is %q, want %q", final.Course.Status, schema.StatusActive)
 	}
 	if final.written() != len(final.Course.Plan.Chapters) || final.written() == 0 {
 		t.Fatalf("the approved course carries content for %d of %d chapter(s)", final.written(), len(final.Course.Plan.Chapters))
@@ -735,7 +738,7 @@ func TestAPausedCourseIsApprovedOverTheRealRoutes(t *testing.T) {
 
 	// Counting happens where the blocking route counts it, and the paused run
 	// is counted under its own status.
-	if got, ok := s.Registry().Value(metricGenerations, metrics.Labels{"kind": "course", "status": ai.StatusAwaitingApproval, "code": ""}); !ok || got < 1 {
+	if got, ok := s.Registry().Value(metricGenerations, metrics.Labels{"kind": "course", "status": schema.StatusAwaitingApproval, "code": ""}); !ok || got < 1 {
 		t.Fatalf("querycraft_generations_total{status=awaiting_approval} = %v (present = %v), want at least 1", got, ok)
 	}
 }
@@ -754,7 +757,7 @@ func TestAPausedCourseCanBeDiscarded(t *testing.T) {
 	var submitted jobEnvelope
 	mustDecode(t, w, &submitted)
 	paused := waitJob(t, s, token, submitted.Job.ID)
-	if paused.Job.Status != ai.StatusAwaitingApproval || paused.Job.CourseID == "" {
+	if paused.Job.Status != schema.StatusAwaitingApproval || paused.Job.CourseID == "" {
 		t.Fatalf("the run did not pause: %+v", paused.Job)
 	}
 
@@ -773,14 +776,14 @@ func TestAPausedCourseCanBeDiscarded(t *testing.T) {
 
 	// The run the learner was watching says it was discarded.
 	after := pollJob(t, s, token, submitted.Job.ID)
-	if after.Job.Status != ai.StatusDiscarded {
-		t.Fatalf("the discarded run reports %q, want %q", after.Job.Status, ai.StatusDiscarded)
+	if after.Job.Status != schema.StatusDiscarded {
+		t.Fatalf("the discarded run reports %q, want %q", after.Job.Status, schema.StatusDiscarded)
 	}
 
 	// The list is empty: the outline row is gone, not left as a course.
 	w = doAs(t, s, token, http.MethodGet, "/courses", "")
 	var list struct {
-		Courses []ai.CourseRecord `json:"courses"`
+		Courses []schema.CourseRecord `json:"courses"`
 	}
 	mustDecode(t, w, &list)
 	if len(list.Courses) != 0 {
@@ -833,7 +836,7 @@ func TestBuildingAFinishedCourseIsRefused(t *testing.T) {
 	var submitted jobEnvelope
 	mustDecode(t, w, &submitted)
 	done := waitJob(t, s, token, submitted.Job.ID)
-	if done.Job.Status != ai.StatusActive || done.Job.CourseID == "" {
+	if done.Job.Status != schema.StatusActive || done.Job.CourseID == "" {
 		t.Fatalf("the setup run = %+v, want an active course", done.Job)
 	}
 
@@ -860,8 +863,8 @@ func TestTheDefaultCourseRunIsUnchanged(t *testing.T) {
 		} `json:"plan"`
 	}
 	mustDecode(t, w, &out)
-	if out.Status != ai.StatusActive {
-		t.Fatalf("status = %q, want %q", out.Status, ai.StatusActive)
+	if out.Status != schema.StatusActive {
+		t.Fatalf("status = %q, want %q", out.Status, schema.StatusActive)
 	}
 	if out.Plan == nil || out.Plan.ID == "" {
 		t.Fatal("the default run must return the activated plan")

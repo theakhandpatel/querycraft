@@ -14,6 +14,7 @@ package metrics
 import (
 	"fmt"
 	"io"
+	"slices"
 	"sort"
 	"strconv"
 	"strings"
@@ -253,8 +254,8 @@ func (r *Registry) WritePrometheus(w io.Writer) error {
 			help, k = group[0].help, group[0].kind
 		}
 		fmt.Fprintf(&b, "# HELP %s %s\n# TYPE %s %s\n", name, escapeHelp(help), name, k)
-		sort.Slice(group, func(i, j int) bool {
-			return seriesKey(group[i].name, group[i].labels) < seriesKey(group[j].name, group[j].labels)
+		slices.SortFunc(group, func(a, b series) int {
+			return strings.Compare(seriesKey(a.name, a.labels), seriesKey(b.name, b.labels))
 		})
 		for _, s := range group {
 			switch s.kind {
@@ -300,12 +301,19 @@ func formatFloat(v float64) string {
 	return strconv.FormatFloat(v, 'g', -1, 64)
 }
 
+// The replacers are package-level: strings.Replacer is safe for concurrent use,
+// and building one per call allocated on every rendered metric.
+var (
+	helpEscaper  = strings.NewReplacer("\\", "\\\\", "\n", "\\n")
+	labelEscaper = strings.NewReplacer("\\", "\\\\", "\"", "\\\"", "\n", "\\n")
+)
+
 func escapeHelp(s string) string {
-	return strings.NewReplacer("\\", "\\\\", "\n", "\\n").Replace(s)
+	return helpEscaper.Replace(s)
 }
 
 func escapeLabel(s string) string {
-	return strings.NewReplacer("\\", "\\\\", "\"", "\\\"", "\n", "\\n").Replace(s)
+	return labelEscaper.Replace(s)
 }
 
 // labelsOnly renders `{a="b"}` or the empty string when there are no labels.

@@ -3,8 +3,9 @@ package ai
 import (
 	"fmt"
 	"strings"
-	"time"
 	"unicode/utf8"
+
+	"github.com/querycraft/sqlquery/backend/internal/schema"
 )
 
 /* M7 — course generation.
@@ -50,133 +51,13 @@ const (
 	maxSectionBytes        = 16 * 1024
 )
 
-/* ---------- the plan ---------- */
-
-// CoursePlan is a whole course as the service will store it. ID, Version and
-// Provenance are the service's to stamp; a provider that sends them is ignored
-// and overwritten, exactly like Artifact.
-type CoursePlan struct {
-	ID         string          `json:"id"`
-	Version    int             `json:"version"`
-	Title      string          `json:"title"`
-	Subtitle   string          `json:"subtitle"`
-	Level      string          `json:"level"`
-	Dialect    string          `json:"dialect,omitempty"`
-	Objectives []string        `json:"objectives"`
-	Setup      SetupPlan       `json:"setup"`
-	Chapters   []CourseChapter `json:"chapters"`
-	Provenance Provenance      `json:"provenance"`
-}
-
-// CourseChapter is one chapter: markdown to read, exercises to pass.
-type CourseChapter struct {
-	ID         string           `json:"id"`
-	N          int              `json:"n"`
-	Title      string           `json:"title"`
-	Summary    string           `json:"summary"`
-	Kind       string           `json:"kind,omitempty"`
-	Minutes    int              `json:"minutes,omitempty"`
-	Objectives []string         `json:"objectives"`
-	Sections   []CourseSection  `json:"sections"`
-	Exercises  []CourseExercise `json:"exercises"`
-}
-
-// CourseSection is authored prose. Body is markdown; the client renders it with
-// the same renderer the authored courses use, so a generated chapter can carry
-// a table or a mermaid diagram without a second pipeline.
-type CourseSection struct {
-	Title string `json:"title"`
-	Body  string `json:"body"`
-}
-
-// CourseExercise is one exercise in a chapter. It is verified by building the
-// Artifact the challenge pipeline already understands, so every rule that
-// applies to a generated challenge applies here unchanged.
-type CourseExercise struct {
-	ID                 string         `json:"id"`
-	Title              string         `json:"title"`
-	Prompt             string         `json:"prompt"`
-	Difficulty         Difficulty     `json:"difficulty"`
-	Type               string         `json:"type,omitempty"`
-	Objectives         []string       `json:"objectives"`
-	Hints              []string       `json:"hints"`
-	ReferenceSolution  string         `json:"reference_solution"`
-	CrossCheckSolution string         `json:"cross_check_solution"`
-	ResultContract     ResultContract `json:"result_contract"`
-	Checks             []Check        `json:"checks,omitempty"`
-	// Expected is the engine's own answer for ReferenceSolution, measured while
-	// the course was verified. Never returned by a provider.
-	Expected *ExpectedResult `json:"expected,omitempty"`
-}
-
-// ExpectedResult is a result set as the engine returned it: the columns in
-// order, and every row. It is what a learner's answer is compared against.
-type ExpectedResult struct {
-	Columns []string `json:"columns"`
-	Rows    [][]any  `json:"rows"`
-}
-
-/* ---------- the report ---------- */
-
-// ChapterResult is what verification measured for one chapter. It is reported
-// whether the course was activated or rejected, because "which exercise failed
-// and why" is the useful part of a rejection.
-//
-// Status is the chapter's own verdict and is not the same statement as its
-// exercises': a chapter is verified only when every exercise in it passed,
-// dropped when it could not be repaired, and skipped when the run ended before
-// it was written. A chapter is never partly verified — verification is what
-// decides whether it is kept at all.
-type ChapterResult struct {
-	ID        string           `json:"id"`
-	Title     string           `json:"title"`
-	Status    string           `json:"status,omitempty"`
-	Exercises []ExerciseResult `json:"exercises"`
-	Error     *Error           `json:"error,omitempty"`
-}
-
-// ExerciseResult is the per-exercise evidence. Zero means the check did not
-// run, exactly as in Evidence.
-type ExerciseResult struct {
-	ID             string  `json:"id"`
-	Title          string  `json:"title"`
-	Status         string  `json:"status"`
-	ReferenceRows  int     `json:"reference_rows,omitempty"`
-	CrossCheckRows int     `json:"cross_check_rows,omitempty"`
-	FixturesPassed int     `json:"fixtures_rejected,omitempty"`
-	FixturesTotal  int     `json:"fixtures_total,omitempty"`
-	MS             float64 `json:"ms,omitempty"`
-	Error          *Error  `json:"error,omitempty"`
-}
-
-// CourseRecord is a stored course plus the outcome that admitted it.
-type CourseRecord struct {
-	Plan      CoursePlan `json:"plan"`
-	Outcome   Outcome    `json:"outcome"`
-	Status    string     `json:"status"`
-	OwnerID   string     `json:"owner_id,omitempty"`
-	CreatedAt time.Time  `json:"created_at"`
-	// Request is the generation request that produced the plan. It is kept
-	// because a course can pause after its outline (StatusAwaitingApproval) and
-	// be continued by a later request, and the chapter phase rebuilds its own
-	// prompt from the request (`courseAgentPrompt`): the goal, the scenario, the
-	// difficulty, the topics and the exercise budget all live there, and none of
-	// them is derivable from the plan alone.
-	//
-	// A record stored before this field existed carries none, which is legal:
-	// the resume path reconstructs what the plan itself knows (the goal from
-	// the plan's title and its planned exercise count) and omits the rest, so an
-	// old row is still readable and cannot be mistaken for a fresh one.
-	Request *GenerationRequest `json:"request,omitempty"`
-}
-
 /* ---------- derived shapes ---------- */
 
 // exerciseArtifact renders one plan exercise in the shape the policy gate and
 // the SQL stages already understand. This is the whole reason a course needs no
 // second verifier: the exercise becomes an Artifact and is checked by the code
 // that checks artifacts.
-func (c *CoursePlan) exerciseArtifact(ch CourseChapter, ex CourseExercise) Artifact {
+func exerciseArtifact(c *schema.CoursePlan, ch schema.CourseChapter, ex schema.CourseExercise) schema.Artifact {
 	title := strings.TrimSpace(ex.Title)
 	if title == "" {
 		title = ch.Title
@@ -185,7 +66,7 @@ func (c *CoursePlan) exerciseArtifact(ch CourseChapter, ex CourseExercise) Artif
 	if dialect == "" {
 		dialect = "postgresql"
 	}
-	return Artifact{
+	return schema.Artifact{
 		ID:                 ex.ID,
 		Dialect:            dialect,
 		Type:               ex.Type,
@@ -203,7 +84,7 @@ func (c *CoursePlan) exerciseArtifact(ch CourseChapter, ex CourseExercise) Artif
 }
 
 // exerciseCount is the number of exercises across every chapter.
-func (c *CoursePlan) exerciseCount() int {
+func exerciseCount(c *schema.CoursePlan) int {
 	n := 0
 	for _, ch := range c.Chapters {
 		n += len(ch.Exercises)
@@ -212,7 +93,7 @@ func (c *CoursePlan) exerciseCount() int {
 }
 
 // sectionCount is the number of authored sections across every chapter.
-func (c *CoursePlan) sectionCount() int {
+func sectionCount(c *schema.CoursePlan) int {
 	n := 0
 	for _, ch := range c.Chapters {
 		n += len(ch.Sections)
@@ -225,7 +106,7 @@ func (c *CoursePlan) sectionCount() int {
 // validateCoursePlan is the gate a course passes before anything runs. It
 // bounds the plan's own shape and then hands each exercise to validateArtifact,
 // so a rule added to the exercise gate is a rule the course gate has too.
-func validateCoursePlan(c *CoursePlan, l Limits) *Error {
+func validateCoursePlan(c *schema.CoursePlan, l Limits) *schema.Error {
 	if c == nil {
 		return coursePlanError("plan", "no plan")
 	}
@@ -277,7 +158,7 @@ func validateCoursePlan(c *CoursePlan, l Limits) *Error {
 // are the plan-wide facts a single chapter cannot check by itself (the
 // duplicate-id rule and the per-course exercise budget), so they are carried
 // across calls rather than re-derived.
-func validateCourseChapter(plan *CoursePlan, ci int, seen map[string]int, total *int, l Limits) *Error {
+func validateCourseChapter(plan *schema.CoursePlan, ci int, seen map[string]int, total *int, l Limits) *schema.Error {
 	ch := &plan.Chapters[ci]
 	field := fmt.Sprintf("chapters[%d]", ci)
 	if strings.TrimSpace(ch.Title) == "" {
@@ -328,7 +209,7 @@ func validateCourseChapter(plan *CoursePlan, ci int, seen map[string]int, total 
 			return coursePlanError(ef+".id", fmt.Sprintf("duplicate exercise id %q (first at exercise %d)", ex.ID, first))
 		}
 		seen[ex.ID] = *total + 1
-		if verr := validateArtifact(plan.exerciseArtifact(*ch, *ex), l); verr != nil {
+		if verr := validateArtifact(exerciseArtifact(plan, *ch, *ex), l); verr != nil {
 			return nestArtifactError(*ch, ci, ei, verr)
 		}
 		*total = *total + 1
@@ -337,7 +218,7 @@ func validateCourseChapter(plan *CoursePlan, ci int, seen map[string]int, total 
 }
 
 // validateCourseSetup bounds the one setup plan every exercise runs against.
-func validateCourseSetup(setup SetupPlan, l Limits) *Error {
+func validateCourseSetup(setup schema.SetupPlan, l Limits) *schema.Error {
 	if strings.TrimSpace(setup.Dataset) == "" {
 		return coursePlanError("setup.dataset", "required and must be non-empty")
 	}
@@ -362,7 +243,7 @@ func validateCourseSetup(setup SetupPlan, l Limits) *Error {
 // from. validateArtifact names a field the way an artifact has it
 // ("reference_solution"); a reader of a rejected course needs to know which
 // exercise to look at, so the path is prefixed rather than replaced.
-func nestArtifactError(ch CourseChapter, ci, ei int, err *Error) *Error {
+func nestArtifactError(ch schema.CourseChapter, ci, ei int, err *schema.Error) *schema.Error {
 	field, detail := splitFieldDetail(err.Detail)
 	return coursePlanError(fmt.Sprintf("chapters[%d].exercises[%d].%s", ci, ei, field), detail)
 }
@@ -376,8 +257,8 @@ func splitFieldDetail(detail string) (string, string) {
 	return detail, "failed"
 }
 
-func coursePlanError(field, detail string) *Error {
-	return newError(CodeInvalidArtifact, StageValidateArtifact,
+func coursePlanError(field, detail string) *schema.Error {
+	return NewError(CodeInvalidArtifact, schema.StageValidateArtifact,
 		"The generated course did not pass validation.", field+": "+detail)
 }
 
@@ -403,7 +284,7 @@ const coursePromptMarker = "Design one complete course"
 // chapter count is therefore settled where both are known — the outline gate
 // (validateCourseOutline) — and the floor here only keeps the ask at a number a
 // course can be a course at.
-func courseExerciseBudget(req GenerationRequest) int {
+func courseExerciseBudget(req schema.GenerationRequest) int {
 	return clampInt(req.ExerciseCount, 2, maxCourseExerciseTotal)
 }
 
@@ -411,7 +292,7 @@ func courseExerciseBudget(req GenerationRequest) int {
 // words and the same dataset brief the challenge prompt uses, because a course
 // that invents a column name fails at the first exercise and spends the repair
 // budget on a fact the server already knew.
-func coursePrompt(req GenerationRequest) string {
+func coursePrompt(req schema.GenerationRequest) string {
 	var b strings.Builder
 	b.WriteString(coursePromptMarker + ", not one exercise. The learner asked for:\n")
 	if strings.TrimSpace(req.Title) != "" {

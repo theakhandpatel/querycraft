@@ -1,4 +1,4 @@
-# ADR 0001 — Keep Go for the backend; Bun is an optional frontend accelerator
+# ADR 0001: Keep Go for the backend; Bun is an optional frontend accelerator
 
 - **Status:** accepted
 - **Date:** 2026-10-14
@@ -8,7 +8,7 @@
 ## Decision
 
 Keep **Go** as the backend runtime. Treat **Bun** as an *optional, additive*
-frontend toolchain (package manager, test runner, TS script runner) — **npm stays
+frontend toolchain (package manager, test runner, TS script runner): **npm stays
 the default** so `make build` / `make verify` stay reproducible.
 
 ## Why the two languages are not actually competing
@@ -17,8 +17,8 @@ Bun and Go occupy different layers, so this is not either/or:
 
 | Layer | Who owns it | Bun can replace it? |
 | --- | --- | --- |
-| Learner UI (React 18 + TS + Vite + Effect) | `web/`, Node/npm today | **Yes** — install/test/scripts |
-| SPA bundling | Vite (and TanStack Start, in a worktree) | No — the bundler is already JS-native |
+| Learner UI (React 18 + TS + Vite + Effect) | `web/`, Node/npm today | **Yes**: install/test/scripts |
+| SPA bundling | Vite (and TanStack Start, in a worktree) | No, the bundler is already JS-native |
 | HTTP gateway + SQL execution + grading | `backend/`, Go | **No** |
 | Single-binary distribution (`go:embed`) | `backend/`, Go | **No** |
 | Embedded PostgreSQL supervision | `backend/internal/localdb` | **No** |
@@ -29,7 +29,7 @@ Bun and Go occupy different layers, so this is not either/or:
 1. **One artifact.** `make build` compiles the SPA, embeds it, and emits a single
    ~20 MB binary that serves the API and the UI and boots PostgreSQL itself.
    Bun can produce a compiled binary too, but it would still need a PostgreSQL
-   server *and* a rewrite of the hardened executor — a new risk surface for no
+   server *and* a rewrite of the hardened executor: a new risk surface for no
    functional gain.
 2. **Untrusted input is the product.** The gateway runs learner-authored SQL.
    Go's `pgx` path already enforces read-only transactions, `statement_timeout`,
@@ -56,7 +56,7 @@ Benched in the `chore/bun-toolchain` worktree. If it wins clearly, it is adopted
 ## Reconsider if
 
 The frontend grows a server-rendered surface (e.g. TanStack Start deployed as a
-single JS process) — then Bun becomes the natural runtime *for that surface*.
+single JS process), then Bun becomes the natural runtime *for that surface*.
 The SQL execution/grading service should still stay Go for the isolation reasons
 above, regardless.
 

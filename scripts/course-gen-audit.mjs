@@ -40,7 +40,7 @@
  *      no record, and GET /courses lists nothing.
  *
  * Clauses 5–7 are driven by a stub provider: a small HTTP server the gateway is
- * pointed at with QC_AI_PROVIDER=openai-compatible, QC_AI_BASE_URL and a dummy
+ * pointed at with the ai_provider, ai_base_url and ai_key config keys and a dummy
  * key. The stub speaks the tool-calling protocol — an outline when the gateway
  * asks for one, a `save_chapter` call per chapter, `finish_course` at the end —
  * so the wire the real endpoint uses is the wire this audit exercises. Nothing
@@ -420,7 +420,7 @@ async function main() {
 
   try {
     /* ---------- clauses 1, 2, 3, 4: the deterministic provider ---------- */
-    gw = await startGateway(bin, { ...env, QC_AI_PROVIDER: 'fake' });
+    gw = await startGateway(bin, { ...env, ai_provider: 'fake' });
     const headers = auth(await signup(gw.base, `course-gen-audit-${process.pid}@querycraft.local`));
 
     const caps = await getJSON(`${gw.base}/capabilities`);
@@ -559,10 +559,10 @@ async function main() {
       const cluster = await liveEnv(tag);
       const gateway = await startGateway(bin, {
         ...cluster,
-        QC_AI_PROVIDER: 'openai-compatible',
-        QC_AI_BASE_URL: provider.base,
-        QC_AI_MODEL: 'stub-v1',
-        QC_AI_KEY: 'course-gen-audit-key',
+        ai_provider: 'openai-compatible',
+        ai_base_url: provider.base,
+        ai_model: 'stub-v1',
+        ai_key: 'course-gen-audit-key',
       });
       return { provider, gateway };
     };

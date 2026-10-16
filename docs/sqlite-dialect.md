@@ -11,7 +11,7 @@ The machine-readable half of this document is the dialect profile:
 | --- | --- |
 | `contracts/dialects/sqlite.json` | The language-neutral profile: capabilities, the affinity algorithm, the value-encoding rules, and the ordered message-to-code table. It is the file both languages read, like `contracts/fixtures/` is for the evaluator. |
 | `backend/internal/dialect/sqlite.json` | The Go side's embedded copy. `go:embed` cannot reference a path outside its package directory, so the Go package embeds a byte-identical mirror and `TestEmbeddedProfileMatchesContract` fails the build's tests if the two ever differ. Copy the contract file over the mirror; never edit one alone. |
-| `backend/internal/dialect/dialect.go`, `sqlite.go` | `Profile`/`ByName`, `ClassifyError`, `Affinity`, `EncodeValue` — the reader. |
+| `backend/internal/dialect/dialect.go`, `sqlite.go` | `Profile`/`ByName`, `ClassifyError`, `Affinity`, `EncodeValue`: the reader. |
 | `backend/internal/dialect/dialect_test.go` | The table tests. One case per contract code and one per affinity class, plus the shape checks on the profile itself. |
 | `backend/internal/dataset/mapping.json` | Column-by-column mapping of the commerce dataset between the dialects, with a reason on every row where they diverge. |
 | `scripts/dataset-map-audit.mjs` | The audit of that mapping: `node scripts/dataset-map-audit.mjs` (`make audit-dataset-map`). It recomputes each column's affinity from SQLite's algorithm rather than trusting the manifest, and fails on a missing column, an unmapped column, a type or affinity disagreement, a mismatch without a reason, a row-count drift, or a missing §7.1 edge case. |
@@ -28,7 +28,7 @@ what that means, because the difference matters:
 - Where the claim is about **the engine's own behaviour** (what SQLite does with
   `LIKE`, or what `EXPLAIN ANALYZE` does), no test in this step executes a
   SQLite engine: the adapters arrive in steps 4–6. Those claims were measured
-  with the local `sqlite3` CLI — **version 3.31.1** — and the probes are quoted
+  with the local `sqlite3` CLI, **version 3.31.1**, and the probes are quoted
   so they can be re-run. Their permanent home is step 8's per-dialect
   adapter-parity audit, which runs the same statements through the wasm and
   gateway SQLite adapters.
@@ -37,12 +37,12 @@ what that means, because the difference matters:
   behaviour matches it. A profile entry is a contract, not a proof of the
   engine; the parity audit is the proof.
 
-## Table 1 — the error map (there is no SQLSTATE)
+## Table 1: the error map (there is no SQLSTATE)
 
 PostgreSQL reports a five-character SQLSTATE (`42P01`, `42703`, …) and
 `web/src/api/pglite.ts` and the gateway both switch on it. SQLite has no
-SQLSTATE: it reports a **primary result code** — mostly an integer, exposed by
-the C API as `SQLITE_CONSTRAINT(19)`, `SQLITE_BUSY(5)`, … — plus a message.
+SQLSTATE: it reports a **primary result code**: mostly an integer, exposed by
+the C API as `SQLITE_CONSTRAINT(19)`, `SQLITE_BUSY(5)`, …: plus a message.
 Several distinct primary codes and most extended codes share one message
 prefix, so the message is what separates "you wrote it wrong" from "the table
 does not exist".
@@ -91,7 +91,7 @@ than transcriptions:
   fault.** Contention spends the learner's deadline, which is exactly how the
   PostgreSQL pool-saturation path already reports a timeout. Reporting
   `ENVIRONMENT_UNAVAILABLE` would tell the learner the engine is down when it is
-  merely busy — and the message names the writer when SQLite knows it.
+  merely busy, and the message names the writer when SQLite knows it.
 - **Constant-contention semantics.** `SQLITE_BUSY` is matched with `equals` so
   the shorter `SQLITE_LOCKED` message (`database table is locked`) is not
   swallowed by the `is locked` rule; the ordering of the two rules is part of
@@ -109,7 +109,7 @@ two are not engine errors at all. The profile cannot name a code outside the
 closed `QueryResult` enum, and the classifier cannot return one of those three
 for any message.
 
-**Verified by:** `dialect_test.go` — `TestClassifyError` (a case per message
+**Verified by:** `dialect_test.go`: `TestClassifyError` (a case per message
 family), `TestClassifyCasesCoverEveryReachableCode` (a code with no case fails
 the suite), `TestReachableCodesAreTheEngineOnes` (the five reachable codes and
 the three that must never appear), `TestClassifyErrorNeverEmitsExecutorCodes`
@@ -119,12 +119,12 @@ shape, ordering, and the catch-all position) and `TestErrorCodesAreClosed`
 (the closed enum), and
 `TestEmbeddedProfileMatchesContract` (the Go mirror is the contract file).
 
-## Table 2 — value encoding
+## Table 2: value encoding
 
 SQLite reports a value's **storage class**, and there are five: `NULL`,
 `INTEGER`, `REAL`, `TEXT`, `BLOB`. There is no boolean class and no date class.
 The adapter must encode the storage class it received, never the declared type
-of the column it came from — re-applying the declaration would report a value
+of the column it came from: re-applying the declaration would report a value
 the engine never stored.
 
 Both adapters read that class from the engine itself, so the declared type is
@@ -141,8 +141,8 @@ column therefore arrives as its stored text on both sides.
 | `TEXT` | string | Verbatim. No ISO-8601 parsing, no numeric coercion: a date stays the same text it was stored as, and a numeric-looking string in a TEXT column stays a string. |
 | `BLOB` | string | `\x` + lowercase hex, which is PostgreSQL `bytea`'s text form and the convention `pglite.ts` already uses. |
 | `NULL` | `null` | SQL NULL, never the empty string and never zero. |
-| *(a boolean handed over as a `bool`)* | number | A `BOOLEAN`-declared column stores `1`/`0`; it is reported as an integer and is never coerced to `true`/`false`. Neither adapter produces a boolean — the storage class is `INTEGER` — so this is the encoder's defensive answer for a driver that hands one over. |
-| *(a date handed over as a `time.Time`)* | string | A `DATE`/`TIMESTAMP`-declared column stores ISO-8601 text and is reported **verbatim** by both adapters; the stored text is what a lesson compares. Neither side materialises a `time.Time`/`Date` (see the read-path note above), so the RFC3339 rule is only the encoder's defensive answer for a driver that hands one over — a version that reported a host `Date` instead would reintroduce the timezone shift the adapter-parity audit already found against PGlite. |
+| *(a boolean handed over as a `bool`)* | number | A `BOOLEAN`-declared column stores `1`/`0`; it is reported as an integer and is never coerced to `true`/`false`. Neither adapter produces a boolean: the storage class is `INTEGER`, so this is the encoder's defensive answer for a driver that hands one over. |
+| *(a date handed over as a `time.Time`)* | string | A `DATE`/`TIMESTAMP`-declared column stores ISO-8601 text and is reported **verbatim** by both adapters; the stored text is what a lesson compares. Neither side materialises a `time.Time`/`Date` (see the read-path note above), so the RFC3339 rule is only the encoder's defensive answer for a driver that hands one over: a version that reported a host `Date` instead would reintroduce the timezone shift the adapter-parity audit already found against PGlite. |
 
 **Column labels.** A result column's `type` label is the *declared* type
 verbatim (`sqlite3_column_decltype`: `INTEGER`, `TEXT`, `NUMERIC`, `VARCHAR(20)`)
@@ -150,7 +150,7 @@ and the fallback label `expression` for a column that never had one, such as
 `COUNT(*)` or `price * 2`. The two must not be confused: a `DATE` column labels
 `DATE` while every value in it is `TEXT`. A label is not a type.
 
-**Verified by:** `dialect_test.go` — `TestEncodeValue` (a case per storage class
+**Verified by:** `dialect_test.go`: `TestEncodeValue` (a case per storage class
 and per edge: the 2^53−1 boundary, `uint64` overflow, NaN, ±Infinity, an empty
 BLOB, and the defensive `time.Time`/`bool` fallbacks),
 `TestEncodeValueIgnoresAffinity` (the same value encodes identically under all
@@ -207,7 +207,7 @@ affinity" case the mapping calls out, and it is a required row in
 What a course must teach: the declared type is a hint to the engine, not a
 promise to the reader. `SELECT typeof(x)` is the dialect's own answer to "what
 is this, really", and `STRICT` tables (3.37+) are how you ask for the promise
-back — one table at a time, and this dataset does not, so that the dynamic
+back, one table at a time, and this dataset does not, so that the dynamic
 behaviour is visible.
 
 *Verified by:* `dialect_test.go::TestAffinity` (a case per class, plus
@@ -234,7 +234,7 @@ $ sqlite3 qc.db "SELECT price FROM products WHERE id = 1"
 The mapping records this as a divergence with a reason, including the
 alternative that was **rejected**: declaring the column `TEXT` would preserve
 `59.00` exactly, but a TEXT-affinity money column turns `WHERE price > 100`
-into a lexicographic comparison — measured, it returns `'59.00'` and `'9.99'` —
+into a lexicographic comparison: measured, it returns `'59.00'` and `'9.99'`, 
 which would break every filtering lesson. NUMERIC keeps comparisons numeric and
 gives up the scale; a course prints money with `printf('%.2f', price)`.
 
@@ -250,7 +250,7 @@ that needs exact scale needs a cast, a tolerance, or a different storage plan
 ### 4. `LIKE` is case-insensitive for ASCII
 
 `LIKE` in SQLite is case-insensitive for ASCII by default, so `'ADA' LIKE 'ada'`
-is true — and `ILIKE` does not exist. `GLOB` is the case-sensitive one.
+is true, and `ILIKE` does not exist. `GLOB` is the case-sensitive one.
 
 ```sh
 $ sqlite3 :memory: "SELECT 'ADA' LIKE 'ada', 'ADA' GLOB 'ada'"
@@ -287,8 +287,8 @@ $ sqlite3 :memory: "SELECT date('2025-11-02','start of month')"
 A date is ISO-8601 text with functions over it (`date()`, `strftime()`,
 `julianday()`); the dialect's `DATE_TRUNC('month', d)` is
 `strftime('%Y-%m-01', d)` or `date(d, 'start of month')`. The dataset stores
-`2025-11-02` and `2026-01-04 10:12` verbatim — the same characters PostgreSQL
-prints — so that a lesson comparing the two dialects compares text to text.
+`2025-11-02` and `2026-01-04 10:12` verbatim, the same characters PostgreSQL
+prints, so that a lesson comparing the two dialects compares text to text.
 
 What a course must teach: date arithmetic is string-or-number arithmetic with
 named modifiers, month ends are not special, and a "timestamp" is text that
@@ -300,7 +300,7 @@ sorts correctly only because ISO-8601 sorts lexicographically in this form.
 "dynamic typing: ISO-8601 text in a NUMERIC-affinity column"; and
 `engine.TestSQLiteDateDeclaredColumnsArriveAsTheStoredText`
 (`backend/internal/engine/sqlite_test.go`), which reads a `DATE`- and a
-`TIMESTAMP`-declared column through the gateway and asserts the stored text —
+`TIMESTAMP`-declared column through the gateway and asserts the stored text: 
 the adapter-parity audit compares the same two probes cell by cell.
 
 ### 6. No roles and no schemas
@@ -308,7 +308,7 @@ the adapter-parity audit compares the same two probes cell by cell.
 There is no `CREATE ROLE`, no `GRANT`, no `current_user`, no schema namespace
 and no `search_path`. A SQLite database is one namespace, so the dataset tables
 are unqualified and the PostgreSQL `dataset` schema has no counterpart. The
-`app` schema's isolation — learner SQL cannot reach gateway metadata — has to be
+`app` schema's isolation, learner SQL cannot reach gateway metadata, has to be
 enforced by the host (a separate file, `query_only`, an authorizer), not by the
 engine's privilege model.
 
@@ -325,7 +325,7 @@ qualifier on the SQLite side.
 
 ### 7. No `EXPLAIN ANALYZE` and no cost-based plan output
 
-`EXPLAIN ANALYZE` does not exist — and the token sequence is not even the same
+`EXPLAIN ANALYZE` does not exist, and the token sequence is not even the same
 statement:
 
 ```sh
@@ -359,8 +359,8 @@ PostgreSQL generates identities with `GENERATED … AS IDENTITY` (or `serial`).
 SQLite's nearest spelling is `INTEGER PRIMARY KEY AUTOINCREMENT`, and it is not
 the same thing:
 
-- `INTEGER PRIMARY KEY` already generates a rowid — the id *is* the rowid
-  alias — with no keyword at all. `AUTOINCREMENT` only adds the "never reuse an
+- `INTEGER PRIMARY KEY` already generates a rowid: the id *is* the rowid
+  alias, with no keyword at all. `AUTOINCREMENT` only adds the "never reuse an
   id, even after the row is deleted" guarantee, and it pays for it with a
   `sqlite_sequence` table:
 
@@ -426,7 +426,7 @@ $ sqlite3 :memory: "CREATE TABLE w(a TEXT PRIMARY KEY) WITHOUT ROWID; SELECT row
 Error: no such column: rowid
 ```
 
-What a course must teach: `rowid` is a physical address, not a key —
+What a course must teach: `rowid` is a physical address, not a key: 
 `ORDER BY rowid` is insertion order *today*, and it is exactly the
 "answers must not depend on insertion order" rule §7.2 already states. A lesson
 that wants an identity should declare one; a lesson that wants a clustered
@@ -442,11 +442,11 @@ capabilities.
 Stated as the product decision it is (ADR 0004 records the argument in full):
 
 - **A second dialect to teach.** The point of M6 is a course that teaches
-  *where SQLite differs* — affinity, `rowid`, `PRAGMA`, text dates, the absence
+  *where SQLite differs*: affinity, `rowid`, `PRAGMA`, text dates, the absence
   of roles and plans. That course needs a real SQLite, not a simulation.
 - **A generic `SELECT`-only tutor**, where the product is
   "learn `SELECT`/`JOIN`/`GROUP BY` against a toy table": the file is the
-  database, no server, no download, no roles, no pool — strictly less machinery.
+  database, no server, no download, no roles, no pool: strictly less machinery.
 - **Anywhere the whole database should be one file.** Copy it, hand it to the
   learner, delete it. A per-learner workspace costs a file copy rather than a
   `CREATE DATABASE … TEMPLATE`, which is the one place SQLite is *cheaper* than
@@ -459,7 +459,7 @@ It is the wrong choice when the lesson *is* the PostgreSQL feature: plan
 reading with actual row counts (M5), `DATE_TRUNC`/`INTERVAL`/`TO_CHAR` date
 work, `DISTINCT ON`, `ILIKE`, schemas and roles, or column types that are
 guarantees rather than hints. That is why PostgreSQL stays the default and
-SQLite is a second dialect rather than a replacement — and why a chapter names
+SQLite is a second dialect rather than a replacement, and why a chapter names
 its dialect up front.
 
 ## What this step does not prove
@@ -473,8 +473,8 @@ its dialect up front.
 - **No value crosses an adapter.** `EncodeValue` is tested against Go values the
   driver is *expected* to hand back (`int64`, `float64`, `string`, `[]byte`,
   `time.Time`, `bool`). What a SQLite driver materialises for a DATE column is
-  now settled: neither adapter does — both report the stored text (Table 2 and
-  the read-path note above) — and the `time.Time` rule remains only the
+  now settled: neither adapter does; both report the stored text (Table 2 and
+  the read-path note above), and the `time.Time` rule remains only the
   encoder's defensive answer, so a driver that *did* materialise one could not
   silently produce a `Date`.
 - **No feature version is pinned.** `window_functions` (3.25), the aggregate

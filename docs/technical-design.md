@@ -34,7 +34,7 @@ Changes from v0.2:
 | Nine stages replaced by five milestones | Fewer infrastructure-only phases. Every milestone ends in something usable. |
 | Contracts defined as JSON Schema, not Go or JS interfaces | Two execution adapters and two evaluator implementations must agree on one source of truth. |
 | Seven-state challenge lifecycle deferred | Fixed exercises do not need it. It arrives with AI-generated challenges. |
-| SQLite metadata added as an opt-in backend | IndexedDB in browser mode; a separate Postgres database in server mode (the default). `QC_METADATA=sqlite` stores app metadata in one local file instead, with PostgreSQL still the learner's execution engine. |
+| SQLite metadata added as an opt-in backend | IndexedDB in browser mode; a separate Postgres database in server mode (the default). The `metadata` key set to `sqlite` in `querycraft.json` stores app metadata in one local file instead, with PostgreSQL still the learner's execution engine. |
 | Premise and versioning policy added (Premise, 7.3) | v0.2 assumed the reader knew why, and applied versioning everywhere before it was needed. |
 | Prototype findings added (Appendix A) | Measured behavior of PGlite replaces assumptions. |
 | Inline editors inside lessons, interleaved with explanation | Settled after prototype review. Replaces the separate workspace panel. |
@@ -85,7 +85,7 @@ A learner works through SQL topics in order. Each lesson alternates short explan
 | D3 | Browser metadata lives in IndexedDB | Decided | Plus a versioned JSON export (section 8.3). |
 | D4 | Contracts are JSON Schema in `contracts/` | Decided | Source of truth for both adapters, both evaluators and the API. |
 | D5 | Go service with native PostgreSQL arrives in M3 | Decided | Second `ExecutionService` adapter, not a rewrite. |
-| D6 | Server-mode metadata uses a separate Postgres database and role | Decided | PostgreSQL by default; an opt-in SQLite file backend (`QC_METADATA=sqlite`) stores app metadata locally. Learner SQL still runs on PostgreSQL. |
+| D6 | Server-mode metadata uses a separate Postgres database and role | Decided | PostgreSQL by default; an opt-in SQLite file backend (the `metadata` key set to `sqlite`) stores app metadata locally. Learner SQL still runs on PostgreSQL. |
 | D7 | AI work starts only after M3 | Decided | Keys are held server-side. |
 | D8 | Lesson authoring format is Markdown with front matter, compiled to JSON | Decided | Section 9. |
 | D9 | Inline editors per example and exercise, plus a schema drawer | Decided | Section 10. |
@@ -323,9 +323,9 @@ Schema and seed share one `dataset_version`. See 7.3 for what is versioned and w
 separate database on one server. Every learner statement runs with
 `search_path = dataset, public`, so unqualified table names resolve to the
 dataset and `app.*` stays out of reach. PGlite mirrors the same split in the
-browser. The full layout — cluster → database → schema, why the dataset is
+browser. The full layout, cluster → database → schema, why the dataset is
 isolated (a restricted role can be granted SELECT on `dataset` only), and how to
-point the gateway at a container — is in
+point the gateway at a container: is in
 [database-layout.md](database-layout.md).
 
 ### 7.2 Exercise rules
@@ -570,11 +570,11 @@ Exit gate:
 - Plans are reproducible on pinned fixtures.
 - Results report engine version, scale and indexes, and do not overstate timing precision.
 
-### M6: Second dialect — SQLite
+### M6: Second dialect, SQLite
 
 Plan of record: [`docs/m6-implementation-plan.md`](m6-implementation-plan.md).
 
-Scope: SQLite as a **second dialect**, alongside PostgreSQL — not a replacement for it
+Scope: SQLite as a **second dialect**, alongside PostgreSQL, not a replacement for it
 (ADR 0004 explains why the app is PostgreSQL-first). The learner can take a course that
 teaches SQLite, run it on a real SQLite engine in both adapters, and be graded the same
 way. This is the milestone that turns "SQL" from one engine into a dialect dimension.
@@ -597,7 +597,7 @@ Concretely:
 
 Exit gate:
 - A learner cannot accidentally run a SQLite chapter against PostgreSQL, or the reverse,
-  without the UI saying which dialect they are on — and the refusal is actionable.
+  without the UI saying which dialect they are on, and the refusal is actionable.
 - Both dialects run the same *shape* of question (SELECT, JOIN, GROUP BY, window, CTE,
   recursive CTE) and pass the same result contracts.
 - Error classification is dialect-specific and documented, with a test per code.
@@ -615,11 +615,11 @@ Exit gate:
 | Writing exercises (INSERT, UPDATE, DDL) | Not in M1 to M2 | Before M3 limits are finalized |
 | Public demo | Not hosted. `docker compose up` plus a recorded demo. | Before any hosted deployment, with container isolation |
 | Challenge delete semantics | Delete challenge data after confirmation. Attempts exported first by default. | Before the delete UI |
-| AI provider and SDK | Provider-neutral interface + OpenAI-compatible HTTP transport; deterministic fake provider default | M4 spike — settled by ADR `0005` |
+| AI provider and SDK | Provider-neutral interface + OpenAI-compatible HTTP transport; deterministic fake provider default | M4 spike: settled by ADR `0005` |
 | Desktop packaging | Not planned | After real install friction evidence |
-| D12: SQLite engine in the browser | `@sqlite.org/sqlite-wasm` 3.53.4 in a Worker, declared-type labels from `sqlite3_column_decltype`, deadline from `sqlite3_progress_handler` | Settled — ADR `docs/adr/0007-browser-sqlite-engine.md` (the only candidate that can label a column, so the only one the parity audit can compare) |
-| D13: SQLite engine on the gateway | `modernc.org/sqlite` (pure Go, no cgo) | Settled in M6 step 4 — `backend/internal/engine/sqlite.go`, proved cgo-free by `make check-cgo` |
-| D14: How SQLite isolates a learner's writes | Per-learner database file, reset by copy | Settled — ADR `docs/adr/0006-sqlite-learner-isolation.md` (measured: copy-create ≈2 ms, reset ≈2 ms) |
+| D12: SQLite engine in the browser | `@sqlite.org/sqlite-wasm` 3.53.4 in a Worker, declared-type labels from `sqlite3_column_decltype`, deadline from `sqlite3_progress_handler` | Settled: ADR `docs/adr/0007-browser-sqlite-engine.md` (the only candidate that can label a column, so the only one the parity audit can compare) |
+| D13: SQLite engine on the gateway | `modernc.org/sqlite` (pure Go, no cgo) | Settled in M6 step 4: `backend/internal/engine/sqlite.go`, proved cgo-free by `make check-cgo` |
+| D14: How SQLite isolates a learner's writes | Per-learner database file, reset by copy | Settled: ADR `docs/adr/0006-sqlite-learner-isolation.md` (measured: copy-create ≈2 ms, reset ≈2 ms) |
 | D15: One dialect per chapter, or dialect-neutral chapters with per-dialect solutions | One dialect per chapter | Before the first SQLite course |
 
 ## 16. First backlog

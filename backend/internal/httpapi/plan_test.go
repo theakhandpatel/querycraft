@@ -16,7 +16,7 @@ import (
 /* The plan route is exercised against a fake that answers the four questions a
    plan capture asks (the EXPLAIN, the row counts, the index list, the planner
    settings), so the handler's routing and its refusals are tested without a
-   database. The engine's own plan parsing is tested in internal/engine. */
+   database. The plan parsing is tested in internal/perf. */
 
 const httpSamplePlan = `[{"Plan":{
   "Node Type":"Aggregate","Plan Rows":1,"Total Cost":57.02,
@@ -65,7 +65,13 @@ func (f *planHTTPFake) Version(ctx context.Context) (string, error) {
 }
 func (f *planHTTPFake) Stats() engine.PoolStats                  { return engine.PoolStats{} }
 func (f *planHTTPFake) Ready(ctx context.Context) (bool, string) { return true, "" }
-func (f *planHTTPFake) Close() error                             { return nil }
+func (f *planHTTPFake) Dialect() string                          { return engine.DialectPostgres }
+func (f *planHTTPFake) EngineLabel() string                      { return engine.EngineName }
+func (f *planHTTPFake) ClassifyError(err error) (string, bool)   { return "", false }
+func (f *planHTTPFake) Diagnostics(ctx context.Context) map[string]any {
+	return nil
+}
+func (f *planHTTPFake) Close() error { return nil }
 
 func (f *planHTTPFake) ranExplain() []string {
 	f.mu.Lock()

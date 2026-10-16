@@ -53,6 +53,12 @@ web: ## Build the frontend into web/dist.
 typecheck: ## Type-check the frontend (tsc --noEmit, strict).
 	cd $(WEB_DIR) && npx tsc --noEmit
 
+lint: ## Lint the frontend with oxlint and the vendored anti-slop rules.
+	cd $(WEB_DIR) && npm run lint
+
+doctor: ## Report React Doctor diagnostics for web/src. Informational; a non-zero exit means it found issues.
+	cd $(WEB_DIR) && npm run doctor
+
 embed: ## Copy web/dist into the gateway's embedded FS (keeps .gitkeep).
 	@if [ ! -f $(WEB_DIR)/dist/index.html ]; then \
 		echo "embed: $(WEB_DIR)/dist/index.html not found — run 'make web' first" >&2; \
@@ -73,7 +79,7 @@ backend: ## Compile the gateway to backend/bin/querycraft, stamping BuildVersion
 
 build: web embed backend ## Produce the single deployable binary (web + embed + backend).
 
-test: typecheck check-cgo audit-lessons audit-content audit-courses audit-storage audit-search audit-progress audit-export audit-import audit-fixtures audit-metrics audit-adversarial audit-parity audit-dataset-map audit-sqlite-errors audit-perf audit-perf-fixtures audit-perf-content audit-perf-seam audit-ai-adapters audit-course-store audit-course-gen audit-shell audit-boot ## Run the Go test suite, the frontend type-check and the audit suites.
+test: typecheck lint check-cgo audit-lessons audit-content audit-courses audit-storage audit-search audit-progress audit-export audit-import audit-fixtures audit-metrics audit-adversarial audit-parity audit-dataset-map audit-sqlite-errors audit-perf audit-perf-fixtures audit-perf-content audit-perf-seam audit-ai-adapters audit-course-store audit-course-gen audit-shell audit-boot ## Run the Go test suite, the frontend type-check, the linter and the audit suites.
 	cd $(BACKEND_DIR) && $(GO) test ./...
 
 check-cgo: ## Prove the single binary stays cgo-free (CGO_ENABLED=0 build + a cgo dependency scan).
@@ -93,6 +99,7 @@ check-cgo: ## Prove the single binary stays cgo-free (CGO_ENABLED=0 build + a cg
 
 verify: build test ## build + test + smoke-test the binary on an isolated embedded PostgreSQL.
 	@set -eu; \
+	cfg=$$(mktemp); \
 	root=$$(mktemp); log=$$(mktemp); \
 	rm -rf "$(SMOKE_PG_DIR)"; \
 	port="$(SMOKE_PG_PORT)"; \
@@ -109,14 +116,11 @@ verify: build test ## build + test + smoke-test the binary on an isolated embedd
 		done; \
 	fi; \
 	if [ -z "$$addr" ]; then echo "verify: no free HTTP port for the smoke server" >&2; exit 1; fi; \
-	QC_ADDR=$$addr \
-	QC_PG_PORT="$$port" \
-	QC_PG_DATA="$(SMOKE_PG_DIR)/pg/data" \
-	QC_PG_RUNTIME="$(SMOKE_PG_DIR)/pg/runtime" \
-	QC_PG_BINARIES="$(PG_BINARIES_DIR)" \
-	$(BIN) >"$$log" 2>&1 & \
+	printf '{"addr":"%s","pg_port":%s,"pg_data":"%s","pg_runtime":"%s","pg_binaries":"%s"}\n' \
+		"$$addr" "$$port" "$(SMOKE_PG_DIR)/pg/data" "$(SMOKE_PG_DIR)/pg/runtime" "$(PG_BINARIES_DIR)" >"$$cfg"; \
+	$(BIN) --config "$$cfg" >"$$log" 2>&1 & \
 	pid=$$!; \
-	cleanup() { kill "$$pid" 2>/dev/null || true; wait "$$pid" 2>/dev/null || true; rm -f "$$root" "$$log"; rm -rf "$(SMOKE_PG_DIR)"; }; \
+	cleanup() { kill "$$pid" 2>/dev/null || true; wait "$$pid" 2>/dev/null || true; rm -f "$$root" "$$log" "$$cfg"; rm -rf "$(SMOKE_PG_DIR)"; }; \
 	trap cleanup EXIT INT TERM; \
 	echo "verify: starting $(BIN) on $$addr with embedded PostgreSQL on :$$port (pid $$pid)"; \
 	up=0; \
@@ -204,9 +208,11 @@ verify-mock: build test ## Smoke-test the binary with no embedded database (degr
 		done; \
 	fi; \
 	if [ -z "$$addr" ]; then echo "verify-mock: no free HTTP port for the smoke server" >&2; exit 1; fi; \
-	QC_ADDR=$$addr QC_NO_LOCAL_DB=1 $(BIN) >"$$log" 2>&1 & \
+	cfg=$$(mktemp); \
+	printf '{"addr":"%s","no_local_db":true}\n' "$$addr" >"$$cfg"; \
+	$(BIN) --config "$$cfg" >"$$log" 2>&1 & \
 	pid=$$!; \
-	cleanup() { kill "$$pid" 2>/dev/null || true; wait "$$pid" 2>/dev/null || true; rm -f "$$log"; rm -rf "$$scratch"; }; \
+	cleanup() { kill "$$pid" 2>/dev/null || true; wait "$$pid" 2>/dev/null || true; rm -f "$$log" "$$cfg"; rm -rf "$$scratch"; }; \
 	trap cleanup EXIT INT TERM; \
 	up=0; \
 	for _ in $$(seq 1 60); do \
@@ -241,7 +247,8 @@ verify-mock: build test ## Smoke-test the binary with no embedded database (degr
 	echo "verify-mock: OK (no database, honest degradation, auth still enforced)"
 
 db-reset: ## Delete the dev and smoke PostgreSQL clusters (fresh dataset next boot).
-	rm -rf $(SMOKE_PG_DIR) $(BACKEND_DIR)/.data/pg/data
+	@if [ -x $(BIN) ]; then $(BIN) db reset; else rm -rf $(BACKEND_DIR)/.data/pg/data; fi
+	rm -rf $(SMOKE_PG_DIR)
 	@echo "db-reset: clusters removed; the next boot re-applies the commerce dataset"
 
 serve: ## Run the built binary (warns if you still need to 'make build').
@@ -355,7 +362,7 @@ audit-course-store: ## Check the M8 stored-course seam: a stored record parses w
 audit-ai: ## Run the M4 exit gate against a freshly booted gateway with the deterministic provider (design 11, 14).
 	QC_GO=$(GO) QC_BACKEND=$(BACKEND_DIR) node scripts/ai-audit.mjs
 
-audit-ai-live: ## Drive the M4 pipeline with a real OpenAI-compatible model (set QC_AI_BASE_URL / QC_AI_MODEL / QC_AI_KEY_FILE).
+audit-ai-live: ## Drive the M4 pipeline with a real OpenAI-compatible model (set AI_BASE_URL / AI_MODEL / AI_KEY_FILE).
 	node scripts/ai-live-audit.mjs
 
 audit-shell: ## Check the app shell's two layout rules: the clipping container is a containing block, and the 64px rail still names its controls (see the UI pass in progress.md).

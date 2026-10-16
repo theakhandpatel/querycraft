@@ -48,7 +48,28 @@ const DECLARED_METRICS = [
 
 const r = new Reporter('metrics-audit');
 
-async function auditHermetic(base, live) {
+/**
+ * signInLearner creates a throwaway account and returns its bearer token.
+ *
+ * /diagnostics reports pool state and the learner's privileges, so the route
+ * needs a session. The account lives only for the run: a gateway booted with
+ * The no_local_db config key keeps it in memory, and a live run drops it with the cluster.
+ */
+async function signInLearner(base) {
+  const email = 'metrics-' + Date.now() + '-' + Math.floor(Math.random() * 1e6) + '@metrics.test';
+  const res = await postJSON(base + '/auth/signup', {
+    email,
+    name: 'Metrics Audit',
+    password: 'metrics-audit-password',
+  });
+  const token = res.json?.token;
+  if (!token) {
+    throw new Error('could not sign up a learner for the metrics audit: HTTP ' + res.status + ' ' + String(res.body).slice(0, 200));
+  }
+  return { email, token };
+}
+
+async function auditHermetic(base, live, token) {
   console.log(`gateway: ${base}${live ? ' (live PostgreSQL)' : ' (no database)'}`);
 
   r.section('request instrumentation');
@@ -123,7 +144,7 @@ async function auditHermetic(base, live) {
   }
 
   r.section('diagnostics');
-  const diag = await getJSON(`${base}/diagnostics`);
+  const diag = await getJSON(`${base}/diagnostics`, 15_000, { authorization: 'Bearer ' + token });
   r.check('/diagnostics answers 200', diag.status === 200, diag.status);
   const d = diag.json || {};
   r.check('engine readiness is measured', d.engine?.ready === live, d.engine?.ready);
@@ -149,11 +170,11 @@ async function auditHermetic(base, live) {
     r.check('the learner section reports unavailability', d.learner?.unavailable === true, d.learner);
   }
 
-  r.section('no secrets in the anonymous surface');
+  r.section('no secrets in a response body');
   const secretish = ['password', '://', 'user=', 'sslmode'];
   for (const page of [diag.body, m.body, (await getText(`${base}/capabilities`)).body]) {
     const hit = secretish.find((s) => page.toLowerCase().includes(s));
-    r.check(`no ${hit ?? 'secret'} in the anonymous surface`, !hit, page.slice(0, 200));
+    r.check(`no ${hit ?? 'secret'} in the response body`, !hit, page.slice(0, 200));
   }
 
   r.section('progress version matches the frontend');
@@ -210,20 +231,26 @@ async function auditLiveOutcomes(base) {
 
 let child = null;
 try {
+  let base = '';
+  let live = process.env.QC_LIVE === '1';
   if (process.env.QC_GATEWAY) {
-    const base = process.env.QC_GATEWAY.replace(/\/$/, '');
-    const diag = await getJSON(`${base}/diagnostics`);
-    const live = diag.json?.engine?.ready === true;
-    await auditHermetic(base, live);
-    if (live) await auditLiveOutcomes(base);
+    base = process.env.QC_GATEWAY.replace(/\/$/, '');
   } else {
     const bin = process.env.QC_BIN || buildGateway('metrics-audit');
-    const live = process.env.QC_LIVE === '1';
-    const started = await startGateway(bin, live ? await liveEnv('metrics-audit') : { QC_NO_LOCAL_DB: '1' });
+    const started = await startGateway(bin, live ? await liveEnv('metrics-audit') : { no_local_db: true });
     child = started.child;
-    await auditHermetic(started.base, live);
-    if (live) await auditLiveOutcomes(started.base);
+    base = started.base;
   }
+  /* /diagnostics needs a session, so the audit signs in before it reads the
+     report. Signup works in every mode: a gateway with no database keeps its
+     accounts in memory. */
+  const learner = await signInLearner(base);
+  if (process.env.QC_GATEWAY) {
+    const diag = await getJSON(`${base}/diagnostics`, 15_000, { authorization: 'Bearer ' + learner.token });
+    live = diag.json?.engine?.ready === true;
+  }
+  await auditHermetic(base, live, learner.token);
+  if (live) await auditLiveOutcomes(base);
 } catch (err) {
   r.failed++;
   console.log(`  FAIL   audit harness — ${err.message}`);

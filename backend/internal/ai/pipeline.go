@@ -6,9 +6,12 @@ import (
 	"strings"
 	"time"
 
+	"github.com/querycraft/sqlquery/backend/internal/ai/provider"
+	"github.com/querycraft/sqlquery/backend/internal/ai/transcript"
 	"github.com/querycraft/sqlquery/backend/internal/dataset"
 	"github.com/querycraft/sqlquery/backend/internal/engine"
 	"github.com/querycraft/sqlquery/backend/internal/eval"
+	"github.com/querycraft/sqlquery/backend/internal/schema"
 )
 
 // The §11.1 pipeline. Nothing becomes visible to a learner before activate, and
@@ -24,27 +27,39 @@ import (
 // declared position but runs whenever a stage fails, which is why the reported
 // slice is a fixed layout rather than an append log.
 var stageOrder = []string{
-	StageValidateRequest,
-	StageRequestBundle,
-	StageValidateArtifact,
-	StageScratchEnvironment,
-	StageReferenceContract,
-	StageCrossCheck,
-	StageAdversarialFixtures,
-	StageRepair,
-	StageActivate,
+	schema.StageValidateRequest,
+	schema.StageRequestBundle,
+	schema.StageValidateArtifact,
+	schema.StageScratchEnvironment,
+	schema.StageReferenceContract,
+	schema.StageCrossCheck,
+	schema.StageAdversarialFixtures,
+	schema.StageRepair,
+	schema.StageActivate,
+}
+
+// QueuedStages returns the pipeline's whole shape with every stage queued, in
+// order. Callers that show a run before it starts (the job registry builds a
+// view the moment a submission is accepted) carry the plan rather than an empty
+// list, which would read as a run that checked nothing.
+func QueuedStages() []schema.Stage {
+	stages := make([]schema.Stage, 0, len(stageOrder))
+	for _, name := range stageOrder {
+		stages = append(stages, schema.Stage{Name: name, State: schema.StateQueued, Detail: "queued"})
+	}
+	return stages
 }
 
 // pipeline carries the run's mutable state. One pipeline serves one generation
 // request; it is not shared and needs no locking.
 type pipeline struct {
 	svc      *Service
-	req      GenerationRequest
+	req      schema.GenerationRequest
 	limits   Limits
-	stages   []Stage
+	stages   []schema.Stage
 	index    map[string]int
-	attempts []Attempt
-	evidence Evidence
+	attempts []schema.Attempt
+	evidence schema.Evidence
 	repairs  int
 	// lastExpected is the reference result of the most recent verifyInEnv, in
 	// the shape the evaluator compares against. The challenge path ignores it
@@ -73,16 +88,62 @@ type pipeline struct {
 	report func(Progress)
 	// chapters is the course agent's resolved chapter report so far, in the
 	// course's order. A challenge run never sets it and publishes an empty list.
-	chapters []ChapterResult
+	chapters []schema.ChapterResult
 }
 
-func newPipeline(svc *Service, req GenerationRequest, limits Limits) *pipeline {
+func newPipeline(svc *Service, req schema.GenerationRequest, limits Limits) *pipeline {
 	p := &pipeline{svc: svc, req: req, limits: limits, index: make(map[string]int, len(stageOrder))}
 	for _, name := range stageOrder {
 		p.index[name] = len(p.stages)
-		p.stages = append(p.stages, Stage{Name: name, State: StateSkipped})
+		p.stages = append(p.stages, schema.Stage{Name: name, State: schema.StateSkipped})
 	}
 	return p
+}
+
+// Progress is a live snapshot of a run in flight, taken from the pipeline.
+//
+// The course fields are what makes a long run legible: a course is written one
+// chapter at a time, so "which chapter is being written" and "how many have
+// verified" are the two facts a poller needs and neither is a stage. A
+// challenge run leaves them zero and publishes an empty chapter list.
+type Progress struct {
+	Stages   []schema.Stage
+	Attempts []schema.Attempt
+	// Planned is how many chapters the outline planned, Verified how many have
+	// passed, and Current the chapter the gateway started verifying most
+	// recently — it keeps that name until the next chapter is handed in, so a
+	// poller reads which chapter the run is on rather than a blank.
+	Planned        int
+	Verified       int
+	CurrentChapter string
+	// CourseID is the stored row's id, set as soon as the outline is stored.
+	// A client can open it mid-run and see the chapters that already verified.
+	CourseID string
+	// Chapters is the resolved per-chapter report so far, in course order.
+	Chapters []schema.ChapterResult
+}
+
+// progressKey carries the run's reporter to the pipeline. It travels in the
+// context rather than in the Service because it belongs to one run, not to the
+// configuration that serves every run.
+type progressKey struct{}
+
+// WithProgress attaches a reporter for one run. A pipeline with no reporter
+// behaves exactly as it did before this existed: the live view is derived from
+// the pipeline, never required by it.
+func WithProgress(ctx context.Context, report func(Progress)) context.Context {
+	if report == nil {
+		return ctx
+	}
+	return context.WithValue(ctx, progressKey{}, report)
+}
+
+// progressFrom returns the run's reporter, or nil when nobody is watching.
+func progressFrom(ctx context.Context) func(Progress) {
+	if report, ok := ctx.Value(progressKey{}).(func(Progress)); ok {
+		return report
+	}
+	return nil
 }
 
 // mark records what actually happened in one stage, updating it in place so a
@@ -140,8 +201,8 @@ func (p *pipeline) setVerified(n int) {
 // stored mid-run carries the live picture; finalize() would write "the run
 // stopped before this stage" into stages that simply have not happened yet,
 // which is a claim about a run that is still going.
-func (p *pipeline) snapshotStages() []Stage {
-	out := make([]Stage, len(p.stages))
+func (p *pipeline) snapshotStages() []schema.Stage {
+	out := make([]schema.Stage, len(p.stages))
 	copy(out, p.stages)
 	return out
 }
@@ -153,25 +214,25 @@ func (p *pipeline) notify() {
 	if p.report == nil {
 		return
 	}
-	stages := make([]Stage, len(p.stages))
+	stages := make([]schema.Stage, len(p.stages))
 	copy(stages, p.stages)
 	for i := range stages {
 		switch {
 		case stages[i].Name != "" && stages[i].Name == p.current:
-			stages[i].State = StateRunning
+			stages[i].State = schema.StateRunning
 			stages[i].Detail = "running"
 			stages[i].MS = engine.RoundMS(time.Since(p.currentStart))
-		case stages[i].State == StateSkipped && stages[i].Detail == "":
+		case stages[i].State == schema.StateSkipped && stages[i].Detail == "":
 			// Not reached yet: the run has not stopped before this stage, it
 			// simply has not got there. "skipped" would be a lie a poller would
 			// read as a final verdict.
-			stages[i].State = StateQueued
+			stages[i].State = schema.StateQueued
 			stages[i].Detail = "queued"
 		}
 	}
-	attempts := make([]Attempt, len(p.attempts))
+	attempts := make([]schema.Attempt, len(p.attempts))
 	copy(attempts, p.attempts)
-	chapters := make([]ChapterResult, len(p.chapters))
+	chapters := make([]schema.ChapterResult, len(p.chapters))
 	copy(chapters, p.chapters)
 	p.report(Progress{
 		Stages:         stages,
@@ -192,19 +253,19 @@ func (p *pipeline) timed(name, state, detail string, start time.Time) {
 	}
 }
 
-func (p *pipeline) outcome(status string, artifact *Artifact, err *Error) Outcome {
+func (p *pipeline) outcome(status string, artifact *schema.Artifact, err *schema.Error) schema.Outcome {
 	p.finalize()
 	// An empty slice, never nil: contracts/ai.schema.json requires `stages` and
 	// `attempts` to be arrays, and encoding/json writes a nil slice as `null`.
 	stages := p.stages
 	if stages == nil {
-		stages = []Stage{}
+		stages = []schema.Stage{}
 	}
 	attempts := p.attempts
 	if attempts == nil {
-		attempts = []Attempt{}
+		attempts = []schema.Attempt{}
 	}
-	return Outcome{
+	return schema.Outcome{
 		Status:   status,
 		Kind:     p.req.Kind,
 		Artifact: artifact,
@@ -226,7 +287,7 @@ func (p *pipeline) outcome(status string, artifact *Artifact, err *Error) Outcom
 func (p *pipeline) finalize() {
 	stopped := ""
 	for _, st := range p.stages {
-		if st.State == StateFailed && stopped == "" {
+		if st.State == schema.StateFailed && stopped == "" {
 			stopped = st.Name
 		}
 	}
@@ -235,13 +296,13 @@ func (p *pipeline) finalize() {
 			continue
 		}
 		switch {
-		case p.stages[i].State == StateSkipped && stopped != "":
+		case p.stages[i].State == schema.StateSkipped && stopped != "":
 			p.stages[i].Detail = "skipped: " + stopped + " failed"
-		case p.stages[i].Name == StageRepair && p.stages[i].State == StateSkipped:
+		case p.stages[i].Name == schema.StageRepair && p.stages[i].State == schema.StateSkipped:
 			p.stages[i].Detail = "not needed: no stage failed"
-		case p.stages[i].State == StateSkipped:
+		case p.stages[i].State == schema.StateSkipped:
 			p.stages[i].Detail = "skipped: the run stopped before this stage"
-		case p.stages[i].State == StateDone:
+		case p.stages[i].State == schema.StateDone:
 			p.stages[i].Detail = "ran"
 		default:
 			p.stages[i].Detail = "failed"
@@ -251,7 +312,7 @@ func (p *pipeline) finalize() {
 
 // failedOutcome is the shape of every status that is not "active": an artifact
 // is never returned, and an error is always present.
-func (p *pipeline) failedOutcome(status string, err *Error) Outcome {
+func (p *pipeline) failedOutcome(status string, err *schema.Error) schema.Outcome {
 	return p.outcome(status, nil, err)
 }
 
@@ -263,13 +324,13 @@ func (p *pipeline) failedOutcome(status string, err *Error) Outcome {
 // run leaves a record, including one that failed validation before it reached
 // the model, because "the request was refused and here is why" is the same
 // class of fact.
-func (s *Service) generate(ctx context.Context, req GenerationRequest) Outcome {
+func (s *Service) generate(ctx context.Context, req schema.GenerationRequest) schema.Outcome {
 	avail := s.Available()
 	if !avail.Available {
 		return s.unavailable(req.Kind, avail)
 	}
-	rec := newTranscriptRecorder(kindOf(req), runIDFrom(ctx), providerRedactor(s.cfg.Provider))
-	ctx = WithTranscript(ctx, rec)
+	rec := transcript.NewRecorder(kindOf(req), transcript.RunIDFrom(ctx), transcript.Redactor(s.cfg.Provider))
+	ctx = transcript.WithRecorder(ctx, rec)
 	out := s.generateRecorded(ctx, req)
 	s.saveTranscript(ctx, rec, out)
 	return out
@@ -277,28 +338,28 @@ func (s *Service) generate(ctx context.Context, req GenerationRequest) Outcome {
 
 // kindOf names the run's kind from the request, defaulting to challenge, the
 // same default the stored records use.
-func kindOf(req GenerationRequest) string {
-	if req.Kind == RunKindCourse {
-		return RunKindCourse
+func kindOf(req schema.GenerationRequest) string {
+	if req.Kind == schema.RunKindCourse {
+		return schema.RunKindCourse
 	}
-	return RunKindChallenge
+	return schema.RunKindChallenge
 }
 
 // saveTranscript stores the run's record. A failure here is logged and dropped:
 // the transcript is evidence about a run, never the thing the run produces, so
 // a store that cannot keep it must not turn a generated course into a failure.
-func (s *Service) saveTranscript(ctx context.Context, rec *transcriptRecorder, out Outcome) {
+func (s *Service) saveTranscript(ctx context.Context, rec *transcript.Recorder, out schema.Outcome) {
 	if rec == nil || s == nil || s.cfg.Depot == nil {
 		return
 	}
-	if err := s.cfg.Depot.SaveRun(context.WithoutCancel(ctx), rec.finish(out.Status, out.Error)); err != nil && s.cfg.Logger != nil {
-		s.cfg.Logger.Warn("the generation transcript could not be stored", "err", engine.RedactSecrets(err.Error()), "run", rec.id)
+	if err := s.cfg.Depot.SaveRun(context.WithoutCancel(ctx), rec.Finish(out.Status, out.Error)); err != nil && s.cfg.Logger != nil {
+		s.cfg.Logger.Warn("the generation transcript could not be stored", "err", engine.RedactSecrets(err.Error()), "run", rec.ID())
 	}
 }
 
 // generateRecorded is the pipeline proper, run with the transcript recorder
 // already attached.
-func (s *Service) generateRecorded(ctx context.Context, req GenerationRequest) Outcome {
+func (s *Service) generateRecorded(ctx context.Context, req schema.GenerationRequest) schema.Outcome {
 	// A course is a different sequence of work over the same stages: one plan,
 	// one environment, every exercise verified in order. It shares the
 	// pipeline's state, its repair budget and its evidence rather than
@@ -314,17 +375,17 @@ func (s *Service) generateRecorded(ctx context.Context, req GenerationRequest) O
 	p.watch(ctx)
 
 	start := time.Now()
-	p.begin(StageValidateRequest)
+	p.begin(schema.StageValidateRequest)
 	if verr := validateRequest(req, limits); verr != nil {
-		p.timed(StageValidateRequest, StateFailed, verr.Detail, start)
-		return p.failedOutcome(StatusFailed, verr)
+		p.timed(schema.StageValidateRequest, schema.StateFailed, verr.Detail, start)
+		return p.failedOutcome(schema.StatusFailed, verr)
 	}
 	req = normalizeRequest(req, limits)
-	p.timed(StageValidateRequest, StateDone, requestSummary(req), start)
+	p.timed(schema.StageValidateRequest, schema.StateDone, requestSummary(req), start)
 
 	prompt := requestPrompt(req)
-	p.begin(StageRequestBundle)
-	raw, perr := s.complete(runCtx, ProviderRequest{
+	p.begin(schema.StageRequestBundle)
+	raw, perr := s.complete(runCtx, provider.ProviderRequest{
 		Kind:           kindOrChallenge(req.Kind),
 		System:         systemPrompt(),
 		Prompt:         prompt,
@@ -332,13 +393,13 @@ func (s *Service) generateRecorded(ctx context.Context, req GenerationRequest) O
 		MaxOutputBytes: limits.MaxOutputBytes,
 	})
 	if perr != nil {
-		return p.failedOutcome(StatusFailed, perr)
+		return p.failedOutcome(schema.StatusFailed, perr)
 	}
-	p.timed(StageRequestBundle, StateDone, "candidate bundle received", start)
+	p.timed(schema.StageRequestBundle, schema.StateDone, "candidate bundle received", start)
 
 	var (
-		artifact Artifact
-		lastErr  *Error
+		artifact schema.Artifact
+		lastErr  *schema.Error
 	)
 	for {
 		if lastErr != nil {
@@ -349,18 +410,18 @@ func (s *Service) generateRecorded(ctx context.Context, req GenerationRequest) O
 				// The engine, not the content, is the problem. Spending a
 				// repair on it would be a claim that the model can fix a
 				// database, which is not true.
-				return p.failedOutcome(StatusFailed, lastErr)
+				return p.failedOutcome(schema.StatusFailed, lastErr)
 			}
 			if p.repairs >= limits.MaxRepairs {
 				return p.exhausted(lastErr)
 			}
-			p.attempts = append(p.attempts, Attempt{
+			p.attempts = append(p.attempts, schema.Attempt{
 				Number: p.repairs + 1,
 				Stage:  lastErr.Stage,
 				Detail: strings.TrimSpace(lastErr.Message + " " + lastErr.Detail),
 			})
-			p.begin(StageRepair)
-			repaired, rerr := s.complete(runCtx, ProviderRequest{
+			p.begin(schema.StageRepair)
+			repaired, rerr := s.complete(runCtx, provider.ProviderRequest{
 				Kind:           "repair",
 				System:         systemPrompt(),
 				Prompt:         prompt + "\n\nA previous bundle failed at the " + lastErr.Stage + " stage.",
@@ -370,11 +431,11 @@ func (s *Service) generateRecorded(ctx context.Context, req GenerationRequest) O
 				Failure:        lastErr.Stage + ": " + lastErr.Message + "; " + lastErr.Detail,
 			})
 			if rerr != nil {
-				return p.failedOutcome(StatusFailed, rerr)
+				return p.failedOutcome(schema.StatusFailed, rerr)
 			}
 			p.repairs++
 			raw = repaired
-			p.mark(StageRepair, StateDone, fmt.Sprintf("attempt %d requested after %s failed", p.repairs, lastErr.Stage))
+			p.mark(schema.StageRepair, schema.StateDone, fmt.Sprintf("attempt %d requested after %s failed", p.repairs, lastErr.Stage))
 			lastErr = nil
 		}
 
@@ -390,42 +451,35 @@ func (s *Service) generateRecorded(ctx context.Context, req GenerationRequest) O
 	}
 }
 
-// complete performs one provider call. A provider that is configured but
-// unreachable is AI_UNAVAILABLE: that is not a content problem and no repair
-// can fix it. The detail is redacted because a provider error can quote a URL
-// or a credential.
 // completeRaw performs one provider call and maps a transport failure onto the
 // envelope. It is the tool-calling counterpart of complete: the reply is
 // returned whole, because a tool-calling turn carries its answer in ToolCalls
 // and has no text to return.
-func (s *Service) completeRaw(ctx context.Context, req ProviderRequest) (ProviderResponse, *Error) {
-	rec := transcriptFrom(ctx)
-	rec.recordRequestMessages(req)
+//
+// A provider that is configured but unreachable is AI_UNAVAILABLE: that is not a
+// content problem and no repair can fix it. The detail is redacted because a
+// provider error can quote a URL or a credential.
+func (s *Service) completeRaw(ctx context.Context, req provider.ProviderRequest) (provider.ProviderResponse, *schema.Error) {
+	rec := transcript.From(ctx)
+	rec.RecordRequestMessages(req)
 	resp, err := s.cfg.Provider.Complete(ctx, req)
 	if err != nil {
-		rec.recordError(err)
-		return ProviderResponse{}, newError(CodeUnavailable, "",
+		rec.RecordError(err)
+		return provider.ProviderResponse{}, NewError(CodeUnavailable, "",
 			"The AI provider could not produce a bundle.", engine.RedactSecrets(err.Error()))
 	}
-	rec.recordResponse(resp)
+	rec.RecordResponse(resp)
 	if req.MaxOutputBytes > 0 && len(resp.Text) > req.MaxOutputBytes {
-		return ProviderResponse{}, artifactError("bundle", fmt.Sprintf("reply of %d bytes exceeds the %d-byte limit", len(resp.Text), req.MaxOutputBytes))
+		return provider.ProviderResponse{}, artifactError("bundle", fmt.Sprintf("reply of %d bytes exceeds the %d-byte limit", len(resp.Text), req.MaxOutputBytes))
 	}
 	return resp, nil
 }
 
-func (s *Service) complete(ctx context.Context, req ProviderRequest) (string, *Error) {
-	rec := transcriptFrom(ctx)
-	rec.recordRequestMessages(req)
-	resp, err := s.cfg.Provider.Complete(ctx, req)
+// complete performs one provider call and returns the reply text.
+func (s *Service) complete(ctx context.Context, req provider.ProviderRequest) (string, *schema.Error) {
+	resp, err := s.completeRaw(ctx, req)
 	if err != nil {
-		rec.recordError(err)
-		return "", newError(CodeUnavailable, "",
-			"The AI provider could not produce a bundle.", engine.RedactSecrets(err.Error()))
-	}
-	rec.recordResponse(resp)
-	if req.MaxOutputBytes > 0 && len(resp.Text) > req.MaxOutputBytes {
-		return "", artifactError("bundle", fmt.Sprintf("reply of %d bytes exceeds the %d-byte limit", len(resp.Text), req.MaxOutputBytes))
+		return "", err
 	}
 	return resp.Text, nil
 }
@@ -433,21 +487,18 @@ func (s *Service) complete(ctx context.Context, req ProviderRequest) (string, *E
 // agentTimeout is the run-level timeout as an error, so the course agent can
 // hand it back up and the run publishes it through the same failedOutcome the
 // challenge path uses. It says the same thing timeout() says.
-func (p *pipeline) agentTimeout(last *Error) *Error {
-	stage := StageRequestBundle
+func (p *pipeline) agentTimeout(last *schema.Error) *schema.Error {
+	stage := schema.StageRequestBundle
 	if last != nil {
 		stage = last.Stage
 	}
-	return newError(CodeUnavailable, stage,
+	return NewError(CodeUnavailable, stage,
 		fmt.Sprintf("Generation exceeded the %s time limit.", p.limits.Timeout),
 		"the run was stopped before it could finish; nothing was activated")
 }
 
-func (p *pipeline) timeout(last *Error) Outcome {
-	e := newError(CodeUnavailable, last.Stage,
-		fmt.Sprintf("Generation exceeded the %s time limit.", p.limits.Timeout),
-		"the run was stopped before it could finish; nothing was activated")
-	return p.failedOutcome(StatusFailed, e)
+func (p *pipeline) timeout(last *schema.Error) schema.Outcome {
+	return p.failedOutcome(schema.StatusFailed, p.agentTimeout(last))
 }
 
 // exhausted turns the last content failure into the rejected outcome. The code
@@ -456,30 +507,30 @@ func (p *pipeline) timeout(last *Error) Outcome {
 // actionable fact, and only a bundle that never became runnable is reported as
 // an exhausted repair budget. Either way the message names the stage that
 // refused and why, so a human can act on it.
-func (p *pipeline) exhausted(last *Error) Outcome {
+func (p *pipeline) exhausted(last *schema.Error) schema.Outcome {
 	code := CodeRepairExhausted
 	switch last.Stage {
-	case StageCrossCheck:
+	case schema.StageCrossCheck:
 		code = CodeCrossCheckFailed
-	case StageReferenceContract:
+	case schema.StageReferenceContract:
 		code = CodeReferenceFailed
 	}
-	e := newError(code, last.Stage,
+	e := NewError(code, last.Stage,
 		fmt.Sprintf("Repairs exhausted after %d attempt(s); the challenge was rejected at the %s stage: %s",
 			p.repairs, last.Stage, last.Message),
 		last.Detail)
 	p.evidence.Repairs = p.repairs
-	return p.failedOutcome(StatusRejected, e)
+	return p.failedOutcome(schema.StatusRejected, e)
 }
 
 // decodeBundle parses one provider reply. Provider output is untrusted input,
 // so a malformed reply is a policy failure with the field named, never a panic.
-func decodeBundle(raw string, a *Artifact) *Error {
+func decodeBundle(raw string, a *schema.Artifact) *schema.Error {
 	if strings.TrimSpace(raw) == "" {
 		return artifactError("bundle", "the provider returned an empty reply")
 	}
 	if err := decodeJSON(raw, a); err != nil {
-		return newError(CodeInvalidArtifact, StageRequestBundle,
+		return NewError(CodeInvalidArtifact, schema.StageRequestBundle,
 			"The provider's reply is not a usable bundle.", "bundle: "+err.Error())
 	}
 	return nil
@@ -487,28 +538,28 @@ func decodeBundle(raw string, a *Artifact) *Error {
 
 // verify runs every stage that executes SQL and returns the first failure. It
 // creates one throwaway environment for the attempt and always releases it.
-func (p *pipeline) verify(ctx context.Context, art Artifact) *Error {
+func (p *pipeline) verify(ctx context.Context, art schema.Artifact) *schema.Error {
 	start := time.Now()
-	p.begin(StageValidateArtifact)
+	p.begin(schema.StageValidateArtifact)
 	if verr := validateArtifact(art, p.limits); verr != nil {
-		p.timed(StageValidateArtifact, StateFailed, verr.Detail, start)
+		p.timed(schema.StageValidateArtifact, schema.StateFailed, verr.Detail, start)
 		return verr
 	}
-	p.timed(StageValidateArtifact, StateDone, fmt.Sprintf("%d hints, %d setup statement(s)", len(art.Hints), len(art.Setup.Statements)), start)
+	p.timed(schema.StageValidateArtifact, schema.StateDone, fmt.Sprintf("%d hints, %d setup statement(s)", len(art.Hints), len(art.Setup.Statements)), start)
 
 	if p.svc.cfg.Runner == nil {
-		e := newError(CodeEnvironmentDown, StageScratchEnvironment, "No database is available to verify against.", "")
-		p.mark(StageScratchEnvironment, StateFailed, e.Message)
+		e := NewError(CodeEnvironmentDown, schema.StageScratchEnvironment, "No database is available to verify against.", "")
+		p.mark(schema.StageScratchEnvironment, schema.StateFailed, e.Message)
 		return e
 	}
 	start = time.Now()
-	p.begin(StageScratchEnvironment)
+	p.begin(schema.StageScratchEnvironment)
 	scratch := scratchName(art)
 	ex, release, err := p.svc.cfg.Runner.Scratch(ctx, scratch)
 	if err != nil {
-		e := newError(CodeEnvironmentDown, StageScratchEnvironment,
+		e := NewError(CodeEnvironmentDown, schema.StageScratchEnvironment,
 			"A throwaway environment could not be created.", engine.RedactSecrets(err.Error()))
-		p.timed(StageScratchEnvironment, StateFailed, e.Detail, start)
+		p.timed(schema.StageScratchEnvironment, schema.StateFailed, e.Detail, start)
 		return e
 	}
 	defer release()
@@ -519,10 +570,10 @@ func (p *pipeline) verify(ctx context.Context, art Artifact) *Error {
 	p.evidence.ScratchDatabase = scratch
 
 	if serr := p.prepare(ctx, ex, art); serr != nil {
-		p.timed(StageScratchEnvironment, StateFailed, serr.Detail, start)
+		p.timed(schema.StageScratchEnvironment, schema.StateFailed, serr.Detail, start)
 		return serr
 	}
-	p.timed(StageScratchEnvironment, StateDone, fmt.Sprintf("%d setup statement(s) applied; dataset %q readable", len(art.Setup.Statements), art.Setup.Dataset), start)
+	p.timed(schema.StageScratchEnvironment, schema.StateDone, fmt.Sprintf("%d setup statement(s) applied; dataset %q readable", len(art.Setup.Statements), art.Setup.Dataset), start)
 
 	return p.verifyInEnv(ctx, ex, art)
 }
@@ -532,56 +583,56 @@ func (p *pipeline) verify(ctx context.Context, art Artifact) *Error {
 // and records what they measured in p.evidence. It is split out of verify
 // because a course verifies many exercises in one environment: the challenge
 // path creates that environment, and the course path creates it once.
-func (p *pipeline) verifyInEnv(ctx context.Context, ex engine.Executor, art Artifact) *Error {
+func (p *pipeline) verifyInEnv(ctx context.Context, ex engine.Executor, art schema.Artifact) *schema.Error {
 	start := time.Now()
 	contract := evalContract(art.ResultContract)
 	start = time.Now()
-	p.begin(StageReferenceContract)
+	p.begin(schema.StageReferenceContract)
 	refQR, refErr := p.runReference(ctx, ex, art)
 	if refErr != nil {
-		p.timed(StageReferenceContract, StateFailed, refErr.Detail, start)
+		p.timed(schema.StageReferenceContract, schema.StateFailed, refErr.Detail, start)
 		return refErr
 	}
 	expected := eval.ExpectedResult{Columns: contract.Columns, Rows: refQR.Rows}
 	p.lastExpected = &expected
 	cmp := eval.CompareDetailed(expected, contract, refQR)
 	if !cmp.OK || !cmp.ColumnsOK {
-		e := newError(CodeReferenceFailed, StageReferenceContract,
+		e := NewError(CodeReferenceFailed, schema.StageReferenceContract,
 			"The reference solution does not satisfy its own result contract.",
 			"columns or rows did not match: "+strings.Join(cmp.Codes, ", "))
-		p.timed(StageReferenceContract, StateFailed, e.Detail, start)
+		p.timed(schema.StageReferenceContract, schema.StateFailed, e.Detail, start)
 		return e
 	}
 	p.evidence.ReferenceRows = refQR.RowCount
-	p.timed(StageReferenceContract, StateDone, fmt.Sprintf("reference returned %d row(s)", refQR.RowCount), start)
+	p.timed(schema.StageReferenceContract, schema.StateDone, fmt.Sprintf("reference returned %d row(s)", refQR.RowCount), start)
 
 	// Cross-check: a second, independently produced solution must agree with
 	// the first under the same contract. This catches some contract errors. It
 	// is not proof of correctness, because both solutions can share a mistake.
 	start = time.Now()
-	p.begin(StageCrossCheck)
-	crossQR, crossErr := p.runStatement(ctx, ex, art.CrossCheckSolution, StageCrossCheck, CodeCrossCheckFailed, "cross-check solution")
+	p.begin(schema.StageCrossCheck)
+	crossQR, crossErr := p.runStatement(ctx, ex, art.CrossCheckSolution, schema.StageCrossCheck, CodeCrossCheckFailed, "cross-check solution")
 	if crossErr != nil {
-		p.timed(StageCrossCheck, StateFailed, crossErr.Detail, start)
+		p.timed(schema.StageCrossCheck, schema.StateFailed, crossErr.Detail, start)
 		return crossErr
 	}
 	if crossCmp := eval.CompareDetailed(expected, contract, crossQR); !crossCmp.OK {
-		e := newError(CodeCrossCheckFailed, StageCrossCheck,
+		e := NewError(CodeCrossCheckFailed, schema.StageCrossCheck,
 			"The two solutions disagree under the result contract.",
 			"codes: "+strings.Join(crossCmp.Codes, ", "))
-		p.timed(StageCrossCheck, StateFailed, e.Detail, start)
+		p.timed(schema.StageCrossCheck, schema.StateFailed, e.Detail, start)
 		return e
 	}
 	p.evidence.CrossCheckRows = crossQR.RowCount
-	p.timed(StageCrossCheck, StateDone, fmt.Sprintf("cross-check agreed on %d row(s)", crossQR.RowCount), start)
+	p.timed(schema.StageCrossCheck, schema.StateDone, fmt.Sprintf("cross-check agreed on %d row(s)", crossQR.RowCount), start)
 
 	start = time.Now()
-	p.begin(StageAdversarialFixtures)
+	p.begin(schema.StageAdversarialFixtures)
 	if ferr := p.fixtures(ctx, ex, art, expected, contract); ferr != nil {
-		p.timed(StageAdversarialFixtures, StateFailed, ferr.Detail, start)
+		p.timed(schema.StageAdversarialFixtures, schema.StateFailed, ferr.Detail, start)
 		return ferr
 	}
-	p.timed(StageAdversarialFixtures, StateDone,
+	p.timed(schema.StageAdversarialFixtures, schema.StateDone,
 		fmt.Sprintf("%d/%d wrong queries were rejected", p.evidence.FixturesRejected, p.evidence.FixturesTotal), start)
 	return nil
 }
@@ -590,11 +641,11 @@ func (p *pipeline) verifyInEnv(ctx context.Context, ex engine.Executor, art Arti
 // challenge over the sealed dataset the statement list is empty, and the check
 // is the point: a bundle that names a dataset this build does not ship must
 // fail before anything runs.
-func (p *pipeline) prepare(ctx context.Context, ex engine.Executor, art Artifact) *Error {
+func (p *pipeline) prepare(ctx context.Context, ex engine.Executor, art schema.Artifact) *schema.Error {
 	for i, stmt := range art.Setup.Statements {
 		res := engine.Execute(ctx, ex, stmt, engine.DefaultLimits())
 		if res.Status != "succeeded" || res.Truncated {
-			return newError(CodeInvalidArtifact, StageScratchEnvironment,
+			return NewError(CodeInvalidArtifact, schema.StageScratchEnvironment,
 				"The setup plan could not be applied.",
 				fmt.Sprintf("setup.statements: statement %d failed: %s", i, queryErrorText(res)))
 		}
@@ -607,7 +658,7 @@ func (p *pipeline) prepare(ctx context.Context, ex engine.Executor, art Artifact
 // matches what the bundle claims, and that every table in the dataset schema is
 // readable. The table list comes from the server rather than a hardcoded list,
 // so this package does not need to know the dataset's contents.
-func (p *pipeline) checkDataset(ctx context.Context, ex engine.Executor, setup SetupPlan) *Error {
+func (p *pipeline) checkDataset(ctx context.Context, ex engine.Executor, setup schema.SetupPlan) *schema.Error {
 	versions, err := probeStrings(ctx, ex,
 		`SELECT "version" FROM "dataset"."dataset_meta" WHERE "dataset" = $1`, setup.Dataset)
 	if err != nil {
@@ -637,8 +688,8 @@ func (p *pipeline) checkDataset(ctx context.Context, ex engine.Executor, setup S
 	return nil
 }
 
-func datasetError(dataset, detail string) *Error {
-	return newError(CodeInvalidArtifact, StageScratchEnvironment,
+func datasetError(dataset, detail string) *schema.Error {
+	return NewError(CodeInvalidArtifact, schema.StageScratchEnvironment,
 		"The dataset the challenge expects is not available.",
 		fmt.Sprintf("setup.dataset: %s: %s", dataset, detail))
 }
@@ -646,13 +697,13 @@ func datasetError(dataset, detail string) *Error {
 // runReference executes the reference solution and enforces the execution
 // properties the rest of the pipeline relies on: it ran, it finished, and it
 // returned something.
-func (p *pipeline) runReference(ctx context.Context, ex engine.Executor, art Artifact) (engine.QueryResult, *Error) {
-	res, qerr := p.runStatement(ctx, ex, art.ReferenceSolution, StageReferenceContract, CodeReferenceFailed, "reference solution")
+func (p *pipeline) runReference(ctx context.Context, ex engine.Executor, art schema.Artifact) (engine.QueryResult, *schema.Error) {
+	res, qerr := p.runStatement(ctx, ex, art.ReferenceSolution, schema.StageReferenceContract, CodeReferenceFailed, "reference solution")
 	if qerr != nil {
 		return res, qerr
 	}
 	if res.RowCount == 0 {
-		return res, newError(CodeReferenceFailed, StageReferenceContract,
+		return res, NewError(CodeReferenceFailed, schema.StageReferenceContract,
 			"The reference solution returned no rows.", "an empty reference is not a usable challenge")
 	}
 	return res, nil
@@ -662,13 +713,13 @@ func (p *pipeline) runReference(ctx context.Context, ex engine.Executor, art Art
 // code are parameters because the same execution failure means different things
 // depending on which solution produced it: a reference that does not run is a
 // contract failure, a cross-check that does not run is a disagreement.
-func (p *pipeline) runStatement(ctx context.Context, ex engine.Executor, sql, stage, code, what string) (engine.QueryResult, *Error) {
+func (p *pipeline) runStatement(ctx context.Context, ex engine.Executor, sql, stage, code, what string) (engine.QueryResult, *schema.Error) {
 	res := engine.Execute(ctx, ex, sql, engine.DefaultLimits())
 	if res.Status != "succeeded" {
-		return res, newError(code, stage, "The "+what+" did not run.", queryErrorText(res))
+		return res, NewError(code, stage, "The "+what+" did not run.", queryErrorText(res))
 	}
 	if res.Truncated {
-		return res, newError(code, stage, "The "+what+" returned a truncated result.",
+		return res, NewError(code, stage, "The "+what+" returned a truncated result.",
 			fmt.Sprintf("truncated at %d row(s)", res.RowCount))
 	}
 	return res, nil
@@ -678,7 +729,7 @@ func (p *pipeline) runStatement(ctx context.Context, ex engine.Executor, sql, st
 // fail; a fixture that passes means the evaluator would accept an answer that
 // is not the reference, which is a reason to reject the bundle rather than a
 // reason to keep it.
-func (p *pipeline) fixtures(ctx context.Context, ex engine.Executor, art Artifact, expected eval.ExpectedResult, contract eval.Contract) *Error {
+func (p *pipeline) fixtures(ctx context.Context, ex engine.Executor, art schema.Artifact, expected eval.ExpectedResult, contract eval.Contract) *schema.Error {
 	fixtures := p.defaultFixtures(art, expected)
 	if p.svc.cfg.AdversarialFixtures != nil {
 		if custom := p.svc.cfg.AdversarialFixtures(art); len(custom) > 0 {
@@ -697,14 +748,14 @@ func (p *pipeline) fixtures(ctx context.Context, ex engine.Executor, art Artifac
 			},
 		})
 		if resp.Passed {
-			return newError(CodeInvalidArtifact, StageAdversarialFixtures,
+			return NewError(CodeInvalidArtifact, schema.StageAdversarialFixtures,
 				"A wrong query was accepted by the evaluator.",
 				fmt.Sprintf("adversarial_fixtures: the query %q passed", fx.Name))
 		}
 		p.evidence.FixturesRejected++
 	}
 	if len(fixtures) == 0 {
-		return newError(CodeInvalidArtifact, StageAdversarialFixtures,
+		return NewError(CodeInvalidArtifact, schema.StageAdversarialFixtures,
 			"No adversarial fixtures were available to run.", "adversarial_fixtures: none")
 	}
 	return nil
@@ -714,7 +765,7 @@ func (p *pipeline) fixtures(ctx context.Context, ex engine.Executor, art Artifac
 // reject. They are composed here, from the contract and the reference text,
 // because a wrong query that depends on the bundle's own wording would not be a
 // property of the evaluator.
-func (p *pipeline) defaultFixtures(art Artifact, expected eval.ExpectedResult) []Fixture {
+func (p *pipeline) defaultFixtures(art schema.Artifact, expected eval.ExpectedResult) []Fixture {
 	fixtures := []Fixture{
 		{Name: "wrong_columns", SQL: `SELECT 1 AS "ai_fixture_wrong_column"`},
 		{Name: "constant_answer", SQL: constantFixture(art.ResultContract.Columns)},
@@ -741,12 +792,27 @@ func constantFixture(columns []string) string {
 	return "SELECT " + strings.Join(parts, ", ")
 }
 
+// provenance attributes an artifact or a reply to the provider that produced it.
+// Every stamp site shares the constructor, so a new field lands in one place.
+func provenance(desc provider.ProviderDescriptor, datasetVersion, repairs int) schema.Provenance {
+	return schema.Provenance{
+		Provider:         desc.Name,
+		Model:            desc.Model,
+		ProviderVersion:  desc.Version,
+		PipelineVersion:  schema.PipelineVersion,
+		EvaluatorVersion: eval.EvaluatorVersion,
+		DatasetVersion:   datasetVersion,
+		CreatedAt:        time.Now().UTC(),
+		Repairs:          repairs,
+	}
+}
+
 // activate is step 9: stamp provenance, store the artifact as active, and only
 // then tell the caller. A bundle that never reaches this function is never
 // written to the depot as active.
-func (p *pipeline) activate(ctx context.Context, art Artifact) Outcome {
+func (p *pipeline) activate(ctx context.Context, art schema.Artifact) schema.Outcome {
 	start := time.Now()
-	p.begin(StageActivate)
+	p.begin(schema.StageActivate)
 	desc := p.svc.cfg.Provider.Descriptor()
 	if art.ID == "" {
 		art.ID = fmt.Sprintf("gen-%016x", hashPrompt(art.ReferenceSolution))
@@ -767,31 +833,22 @@ func (p *pipeline) activate(ctx context.Context, art Artifact) Outcome {
 		// honest number available, and validateArtifact has already bounded it.
 		datasetVersion = art.Setup.SchemaVersion
 	}
-	art.Provenance = Provenance{
-		Provider:         desc.Name,
-		Model:            desc.Model,
-		ProviderVersion:  desc.Version,
-		PipelineVersion:  PipelineVersion,
-		EvaluatorVersion: eval.EvaluatorVersion,
-		DatasetVersion:   datasetVersion,
-		CreatedAt:        time.Now().UTC(),
-		Repairs:          p.repairs,
-	}
+	art.Provenance = provenance(desc, datasetVersion, p.repairs)
 	p.evidence.Repairs = p.repairs
 
-	out := p.outcome(StatusActive, &art, nil)
-	if err := p.svc.cfg.Depot.SaveChallenge(ctx, Record{
+	out := p.outcome(schema.StatusActive, &art, nil)
+	if err := p.svc.cfg.Depot.SaveChallenge(ctx, schema.Record{
 		Artifact:  art,
 		Outcome:   out,
-		Status:    StatusActive,
+		Status:    schema.StatusActive,
 		CreatedAt: art.Provenance.CreatedAt,
 	}); err != nil {
-		e := newError(CodeUnavailable, StageActivate,
+		e := NewError(CodeUnavailable, schema.StageActivate,
 			"The challenge passed every check but could not be stored.", engine.RedactSecrets(err.Error()))
-		p.timed(StageActivate, StateFailed, e.Message, start)
-		return p.failedOutcome(StatusFailed, e)
+		p.timed(schema.StageActivate, schema.StateFailed, e.Message, start)
+		return p.failedOutcome(schema.StatusFailed, e)
 	}
-	p.timed(StageActivate, StateDone, "stored as active", start)
+	p.timed(schema.StageActivate, schema.StateDone, "stored as active", start)
 	return out
 }
 
@@ -800,7 +857,7 @@ func (p *pipeline) activate(ctx context.Context, art Artifact) Outcome {
 // requestPrompt renders the validated request for a provider. It is plain text
 // on purpose: the provider interface has no structured request, and a
 // human-readable brief is the same thing a person would be handed.
-func requestPrompt(req GenerationRequest) string {
+func requestPrompt(req schema.GenerationRequest) string {
 	var b strings.Builder
 	fmt.Fprintf(&b, "Kind: %s\n", kindOrChallenge(req.Kind))
 	if req.Title != "" {
@@ -859,7 +916,7 @@ func datasetBrief() string {
 	return b.String()
 }
 
-func requestSummary(req GenerationRequest) string {
+func requestSummary(req schema.GenerationRequest) string {
 	if req.Title != "" {
 		return fmt.Sprintf("%s (%s, %d exercises)", req.Title, req.Difficulty, req.ExerciseCount)
 	}
@@ -877,11 +934,11 @@ func systemPrompt() string {
 	return "You design SQL exercises over a fixed PostgreSQL commerce dataset. Reply with one JSON object and no prose. Solutions must be single read-only SELECT or WITH statements."
 }
 
-func scratchName(art Artifact) string {
+func scratchName(art schema.Artifact) string {
 	return fmt.Sprintf("ai_%016x", hashPrompt(art.ReferenceSolution))
 }
 
-func evalContract(rc ResultContract) eval.Contract {
+func evalContract(rc schema.ResultContract) eval.Contract {
 	return eval.Contract{
 		Columns:          rc.Columns,
 		ColumnOrder:      rc.ColumnOrder,

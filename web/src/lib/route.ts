@@ -89,7 +89,7 @@ export const AUTHORING_SCREENS: Screen[] = ['create', 'building', 'review'];
 function segment(raw: string): string {
   try {
     return decodeURIComponent(raw);
-  } catch (e) {
+  } catch {
     return raw;
   }
 }

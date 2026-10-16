@@ -5,9 +5,24 @@ import type { PromptRequest } from '../../types';
 
 const INPUT_ID = 'prompt-dialog-input';
 
+/** Everything the dialog can put a focus ring on. */
+const FOCUSABLE =
+  'a[href], button:not([disabled]), input:not([disabled]), select:not([disabled]), textarea:not([disabled]), [tabindex]:not([tabindex="-1"])';
+
+/**
+ * Whether an element would receive focus from the browser.
+ *
+ * `offsetParent` is null for anything inside a `position: fixed` panel, so it
+ * drops real controls. Client rects plus `visibility` is what the browser uses.
+ */
+function focusable(el: HTMLElement): boolean {
+  return el.getClientRects().length > 0 && getComputedStyle(el).visibility !== 'hidden';
+}
+
 function PromptForm({ req, onCancel }: { req: PromptRequest; onCancel: () => void }) {
   const [value, setValue] = useState(req.defaultValue ?? '');
   const inputRef = useRef<HTMLInputElement>(null);
+  const formRef = useRef<HTMLFormElement>(null);
 
   useEffect(() => {
     setValue(req.defaultValue ?? '');
@@ -17,6 +32,34 @@ function PromptForm({ req, onCancel }: { req: PromptRequest; onCancel: () => voi
       input.select();
     }
   }, [req]);
+
+  useEffect(() => {
+    /* The prompt covers the page, so Tab has to cycle inside it. A Tab that
+       walks into the shell behind would move focus to a control the learner
+       cannot see. Escape and the backdrop are the exits. */
+    function onKeyDown(e: KeyboardEvent) {
+      if (e.key !== 'Tab') return;
+      const root = formRef.current;
+      if (!root) return;
+      const items = Array.from(root.querySelectorAll<HTMLElement>(FOCUSABLE)).filter(focusable);
+      if (items.length === 0) return;
+      const firstEl = items[0];
+      const lastEl = items[items.length - 1];
+      const current = document.activeElement as HTMLElement | null;
+      const inside = !!current && root.contains(current);
+      if (e.shiftKey && (!inside || current === firstEl)) {
+        e.preventDefault();
+        lastEl.focus();
+      } else if (!e.shiftKey && (!inside || current === lastEl)) {
+        e.preventDefault();
+        firstEl.focus();
+      }
+    }
+    /* Capture phase: the trap has to see the key before the form's Escape
+       handler and before the browser moves focus on its own. */
+    document.addEventListener('keydown', onKeyDown, true);
+    return () => document.removeEventListener('keydown', onKeyDown, true);
+  }, []);
 
   const trimmed = value.trim();
   const blocked = req.required !== false && trimmed === '';
@@ -28,11 +71,17 @@ function PromptForm({ req, onCancel }: { req: PromptRequest; onCancel: () => voi
   }
 
   return (
+    /* Deliberate deferral: the native `<dialog>` element would give the modal
+       semantics for free, but this app renders four modals from one pattern and
+       migrating one of them is a redesign, not a fix. */
     <div
       className="modalback open"
       onClick={(e) => { if (e.target === e.currentTarget) onCancel(); }}
+      /* The backdrop click is a pointer convenience. Escape and the Close button
+         are the keyboard path, and the form below traps Tab. */
     >
       <form
+        ref={formRef}
         className="modal"
         role="dialog"
         aria-modal="true"

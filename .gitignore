@@ -27,3 +27,6 @@ backend/internal/webui/dist/*
 .opencode/
 .impeccable/
 .tmp-perf-probe.mjs
+
+# Generated code-graph output (graphify).
+graphify-out/

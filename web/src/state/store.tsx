@@ -113,14 +113,14 @@ function loadJSON<T>(k: string, fallback: T): T {
   try {
     const v = localStorage.getItem(k);
     return v == null ? fallback : JSON.parse(v);
-  } catch (e) {
+  } catch {
     return fallback;
   }
 }
 function saveJSON(k: string, v: unknown): void {
   try {
     localStorage.setItem(k, JSON.stringify(v));
-  } catch (e) {}
+  } catch {}
 }
 
 /** A short course blurb the draft owns, derived from the learner's own goal.
@@ -175,7 +175,7 @@ export interface StoreValue {
   setLibraryFilter: (f: string) => void;
 
   /* Accounts. `session` is null when signed out (the app then shows the auth
-     screen in gateway/mock mode); `role` gates the authoring surfaces. */
+     screen in gateway mode); `role` gates the authoring surfaces. */
   session: AuthSession | null;
   authReady: boolean;
   authNotice: string | null;
@@ -466,8 +466,8 @@ export function StoreProvider({ children }: { children: React.ReactNode }) {
   /* Restore the session once, before the app decides what to render.
    *
    * The offline engine has no auth server, so it runs as a local workspace. The
-   * gateway (and the mock adapter, which fakes the same surface locally) reports
-   * the current account from the stored token; no account means the auth screen.
+   * gateway reports the current account from the stored token; no account means
+   * the auth screen.
    * `me()` resolves to null rather than failing on a missing/expired token, so
    * this is a plain "who am I" check. */
   useEffect(() => {

@@ -72,8 +72,15 @@ func (f *fakeExecutor) Ready(ctx context.Context) (bool, string) {
 	return true, ""
 }
 
-// Diagnostics makes the fake a Diagnostician so the /diagnostics test covers
-// the learner subsection without a live database.
+// The capability answers are explicit on Executor now. This fake stands in for
+// the default dialect, declines to classify, and reports a learner block, which
+// is the answer /diagnostics publishes.
+func (f *fakeExecutor) Dialect() string                        { return engine.DialectPostgres }
+func (f *fakeExecutor) EngineLabel() string                    { return engine.EngineName }
+func (f *fakeExecutor) ClassifyError(err error) (string, bool) { return "", false }
+
+// Diagnostics gives the fake a learner block so the /diagnostics test covers
+// the subsection without a live database.
 func (f *fakeExecutor) Diagnostics(ctx context.Context) map[string]any {
 	return map[string]any{
 		"current_user": "querycraft_learner",
@@ -457,7 +464,13 @@ func (nonFiniteExecutor) Ping(ctx context.Context) error              { return n
 func (nonFiniteExecutor) Version(ctx context.Context) (string, error) { return "PostgreSQL test", nil }
 func (nonFiniteExecutor) Stats() engine.PoolStats                     { return engine.PoolStats{} }
 func (nonFiniteExecutor) Ready(ctx context.Context) (bool, string)    { return true, "" }
-func (nonFiniteExecutor) Close() error                                { return nil }
+func (nonFiniteExecutor) Dialect() string                             { return engine.DialectPostgres }
+func (nonFiniteExecutor) EngineLabel() string                         { return engine.EngineName }
+func (nonFiniteExecutor) ClassifyError(err error) (string, bool)      { return "", false }
+func (nonFiniteExecutor) Diagnostics(ctx context.Context) map[string]any {
+	return nil
+}
+func (nonFiniteExecutor) Close() error { return nil }
 
 // An executor value with no JSON representation must still produce a well-formed
 // JSON body with a stable error code — never the headers-only 200 that the
@@ -492,7 +505,13 @@ func (bigExecutor) Ping(ctx context.Context) error              { return nil }
 func (bigExecutor) Version(ctx context.Context) (string, error) { return "PostgreSQL test", nil }
 func (bigExecutor) Stats() engine.PoolStats                     { return engine.PoolStats{} }
 func (bigExecutor) Ready(ctx context.Context) (bool, string)    { return true, "" }
-func (bigExecutor) Close() error                                { return nil }
+func (bigExecutor) Dialect() string                             { return engine.DialectPostgres }
+func (bigExecutor) EngineLabel() string                         { return engine.EngineName }
+func (bigExecutor) ClassifyError(err error) (string, bool)      { return "", false }
+func (bigExecutor) Diagnostics(ctx context.Context) map[string]any {
+	return nil
+}
+func (bigExecutor) Close() error { return nil }
 
 // A request may lower a cap but never raise it: asking for max_rows beyond the
 // server's cap must not let the gateway return more than the cap.
@@ -509,12 +528,55 @@ func TestQueryCannotRaiseServerCap(t *testing.T) {
 	}
 }
 
+// A request may lower a cap but never raise it: asking for max_rows beyond the
+// server's cap must not let the grader return more than the cap. This is the
+// /answers/evaluate half of TestQueryCannotRaiseServerCap.
+func TestEvaluateCannotRaiseServerCap(t *testing.T) {
+	body := `{"sql":"select n from t","limits":{"max_rows":100000,"max_bytes":100000000,"timeout_ms":100000000},"exercise":{"id":"ex.1","result_contract":{"columns":["n"],"row_order":"exact"}}}`
+	w := do(t, newTestServer(bigExecutor{}), http.MethodPost, "/answers/evaluate", body)
+	if w.Code != http.StatusOK {
+		t.Fatalf("status = %d, body = %s", w.Code, w.Body.String())
+	}
+	var resp struct {
+		Passed bool `json:"passed"`
+		QR     engine.QueryResult
+	}
+	mustDecode(t, w, &resp)
+	if resp.QR.RowCount > 100 || !resp.QR.Truncated {
+		t.Fatalf("row_count = %d truncated = %v, want the server cap (100) to win", resp.QR.RowCount, resp.QR.Truncated)
+	}
+}
+
 func TestGenerateCourseRequiresASession(t *testing.T) {
 	// Generation is owner-scoped like every other write, so an anonymous caller
 	// is refused before any work starts.
 	w := do(t, newTestServer(&fakeExecutor{}), http.MethodPost, "/courses/generate", `{"title":"SQL Joins"}`)
 	if w.Code != http.StatusUnauthorized {
 		t.Fatalf("status=%d, want 401", w.Code)
+	}
+}
+
+// A route added to the mux without a table entry is still closed: the gate
+// treats a pattern the table does not declare as required, so an anonymous
+// caller cannot reach it.
+func TestRouteOutsideTheTableIsClosed(t *testing.T) {
+	s := newTestServer(&fakeExecutor{})
+	routes := s.routes()
+	mux := http.NewServeMux()
+	for _, rt := range routes {
+		mux.Handle(rt.pattern(), rt.handler)
+	}
+	mux.HandleFunc("GET /undeclared", func(http.ResponseWriter, *http.Request) {
+		t.Error("a route outside the table reached its handler")
+	})
+
+	w := httptest.NewRecorder()
+	withRouteAuth(mux, routes).ServeHTTP(w, httptest.NewRequest(http.MethodGet, "/undeclared", nil))
+	if w.Code != http.StatusUnauthorized {
+		t.Fatalf("status = %d, want 401; body = %s", w.Code, w.Body.String())
+	}
+	if !strings.Contains(w.Body.String(), "AUTH_REQUIRED") {
+		t.Fatalf("missing AUTH_REQUIRED: %s", w.Body.String())
 	}
 }
 

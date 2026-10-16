@@ -10,6 +10,7 @@ import (
 	"github.com/querycraft/sqlquery/backend/internal/engine"
 	"github.com/querycraft/sqlquery/backend/internal/envdb"
 	"github.com/querycraft/sqlquery/backend/internal/pgtest"
+	"github.com/querycraft/sqlquery/backend/internal/schema"
 	"github.com/querycraft/sqlquery/backend/internal/store"
 )
 
@@ -42,21 +43,21 @@ var courseScratchStatements = []string{
 
 // seedSetupCourse stores a course for its owner through the same owner-scoped
 // wrapper the pipeline uses, so the reset handler reads really stored state.
-func seedSetupCourse(t *testing.T, depot ai.Depot, owner, id string) {
+func seedSetupCourse(t *testing.T, depot schema.Depot, owner, id string) {
 	t.Helper()
-	err := ownerScopedDepot{Depot: depot, owner: owner}.SaveCourse(context.Background(), ai.CourseRecord{
-		Plan: ai.CoursePlan{
+	err := ownerScopedDepot{Depot: depot, owner: owner}.SaveCourse(context.Background(), schema.CourseRecord{
+		Plan: schema.CoursePlan{
 			ID:    id,
 			Title: "Scratch tables",
-			Setup: ai.SetupPlan{
+			Setup: schema.SetupPlan{
 				Dataset:       "commerce",
 				SchemaVersion: 1,
 				SeedVersion:   1,
 				Statements:    courseScratchStatements,
 			},
 		},
-		Outcome:   ai.Outcome{Status: ai.StatusActive, Kind: "course"},
-		Status:    ai.StatusActive,
+		Outcome:   schema.Outcome{Status: schema.StatusActive, Kind: "course"},
+		Status:    schema.StatusActive,
 		CreatedAt: time.Now().UTC(),
 	})
 	if err != nil {

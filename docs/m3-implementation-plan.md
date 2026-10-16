@@ -1,4 +1,4 @@
-# M3 implementation plan — "Execution gateway (Go and native PostgreSQL)"
+# M3 implementation plan: "Execution gateway (Go and native PostgreSQL)"
 
 Design source: `docs/technical-design.md` §14 (M3), §5.4 (Adapter B), §12
 (security), §13.1 (observability), §13.2 (test matrix), §13.3 (adversarial
@@ -20,14 +20,14 @@ green.
 
 ## Where we are today (measured, not assumed)
 
-Most of Adapter B already exists — M1/M2 built it because `make verify` needed a
+Most of Adapter B already exists: M1/M2 built it because `make verify` needed a
 real server to smoke-test against. The gaps are observability and proof, not
 plumbing.
 
 | M3 scope item | State | Evidence |
 | --- | --- | --- |
 | Adapter B behind the same contracts | Done | `backend/internal/engine/`, `backend/internal/httpapi/`; `make verify` drives `/query` on embedded PostgreSQL |
-| Restricted role | Done | `dataset/roles.go` — `querycraft_learner`, `NOSUPERUSER NOCREATEDB NOCREATEROLE NOREPLICATION NOBYPASSRLS`, `temp_file_limit=64MB`, `search_path=dataset`; `TestLearnerRoleCannotEscapeTheSandbox` |
+| Restricted role | Done | `dataset/roles.go`: `querycraft_learner`, `NOSUPERUSER NOCREATEDB NOCREATEROLE NOREPLICATION NOBYPASSRLS`, `temp_file_limit=64MB`, `search_path=dataset`; `TestLearnerRoleCannotEscapeTheSandbox` |
 | Limits | Done | `engine/engine.go` `Limits{MaxRows:500, MaxBytes, TimeoutMS}` + `Merge` clamping; `execute.go` truncates while reading |
 | Streaming caps | Done | caps applied row-by-row during `rows.Next()`, not after materialising |
 | Cancellation | Done | context deadline → `SET LOCAL statement_timeout`; `context.Canceled`/`DeadlineExceeded` → `QUERY_TIMEOUT` |
@@ -45,7 +45,7 @@ plumbing.
 
 | # | Step | Ships | Depends on |
 | --- | --- | --- | --- |
-| 1 | Metrics + diagnostics view | `GET /metrics`, `GET /diagnostics`; `make audit-metrics` | — |
+| 1 | Metrics + diagnostics view | `GET /metrics`, `GET /diagnostics`; `make audit-metrics` | (none) |
 | 2 | Structured request logs completed | every request logs operation, duration, status, error code | 1 |
 | 3 | Adversarial suite (§13.3) | `make audit-adversarial` + `docs/adversarial-suite.md` | 1 |
 | 4 | Load test (§13.2) | `make audit-load` + `docs/load-test.md` with recorded numbers | 1 |
@@ -65,10 +65,10 @@ would not be the product.
 
 ---
 
-## Step 1 — Metrics and the diagnostics view (§13.1)
+## Step 1: Metrics and the diagnostics view (§13.1)
 
 The design asks for counters for query duration, timeouts, caps hit, pool usage,
-environment create/reset time, evaluator errors and persistence errors — and a
+environment create/reset time, evaluator errors and persistence errors, and a
 diagnostics view for engine readiness, versions and migration state.
 
 1. `backend/internal/metrics/`: a small registry (counter, gauge, histogram) with
@@ -77,7 +77,7 @@ diagnostics view for engine readiness, versions and migration state.
    timeouts, row/byte cap hits), `store/` (persistence errors), `eval/`
    (evaluator errors), `localdb/` (cluster start, schema/role ensure time),
    `httpapi` (requests by route and status).
-3. `GET /metrics` — Prometheus text. `GET /diagnostics` — JSON:
+3. `GET /metrics`: Prometheus text. `GET /diagnostics`: JSON:
    engine readiness, PostgreSQL version, dataset version, progress version,
    learner-role present, migration state, pool stats.
 4. `scripts/metrics-audit.mjs` + `make audit-metrics`: boot the gateway on an
@@ -87,7 +87,7 @@ diagnostics view for engine readiness, versions and migration state.
 **Done when:** `make audit-metrics` is green and `/diagnostics` names the version
 of every moving part.
 
-## Step 2 — Structured logging, completed
+## Step 2: Structured logging, completed
 
 `slog` already carries `request_id`. Add `operation`, `duration_ms`, `status`
 and `error_code` to the request log line, and make sure no DSN or password can
@@ -96,7 +96,7 @@ reach it (`docs/technical-design.md` §13.1: no secrets or connection strings).
 **Done when:** a Go test asserts the field set for a successful and a failing
 request, and a test asserts a DSN-like string is redacted.
 
-## Step 3 — The adversarial suite (§13.3)
+## Step 3: The adversarial suite (§13.3)
 
 The ten named cases, each ending in a bounded reported outcome with a healthy
 service afterwards:
@@ -120,7 +120,7 @@ still ok afterwards. `make audit-adversarial` wraps it.
 **Done when:** `make audit-adversarial` is green and `docs/adversarial-suite.md`
 publishes the table, *including what is not protected*.
 
-## Step 4 — Load test (§13.2)
+## Step 4: Load test (§13.2)
 
 Concurrent `/query` load with timeouts and pool metrics recorded.
 
@@ -133,7 +133,7 @@ Record the result and the machine in `docs/load-test.md`.
 doc says plainly what the test does *not* prove (it is loopback, single host,
 not a capacity plan).
 
-## Step 5 — Template environments (D11)
+## Step 5: Template environments (D11)
 
 Settle §15 D11: *database or schema per challenge*.
 
@@ -146,13 +146,13 @@ create/drop times from `/metrics`.
 **Done when:** the ADR records a decision with numbers, and a Go test proves a
 learner statement in one environment cannot see another's tables.
 
-## Step 6 — Exit-gate proof
+## Step 6: Exit-gate proof
 
 1. **Both adapters unchanged**: run one lesson's query text through Adapter A
-   (PGlite) and Adapter B and assert the same `QueryResult` shape and rows —
+   (PGlite) and Adapter B and assert the same `QueryResult` shape and rows: 
    `scripts/adapter-parity-audit.mjs`, `make audit-parity`.
-2. **No admin path**: a Go test that greps the execution path for the admin pool
-   — or better, one that proves it by behaviour: the learner session cannot
+2. **No admin path**: a Go test that greps the execution path for the admin pool,
+or better, one that proves it by behaviour: the learner session cannot
    `SET ROLE`, cannot `SELECT` from `app.progress`, cannot read `pg_read_file`.
    Extend `TestLearnerRoleCannotEscapeTheSandbox` to cover the admin-DSN path
    end-to-end through `POST /query`.
@@ -160,13 +160,13 @@ learner statement in one environment cannot see another's tables.
    (`make db-reset` then `make serve`) and record it in `docs/technical-design.md`
    §0 or the README.
 
-## Step 7 — Writable learner workspaces (owner request)
+## Step 7: Writable learner workspaces (owner request)
 
 A course that cannot teach `INSERT`/`UPDATE`/`DELETE`, DDL or transactions is not
 a course, so the owner asked for writable learner workspaces. Settled by ADR
 `docs/adr/0003-writable-learner-workspaces.md`: one database per account, copied
 from the sealed `qc_template` (the step-5 mechanism), reset or dropped on demand.
-Anonymous visitors keep the shared read-only dataset — no stable identity, no
+Anonymous visitors keep the shared read-only dataset: no stable identity, no
 private workspace.
 
 Ships `GET /environment`, `POST /environment/reset`, `internal/envdb` (manager +
@@ -178,9 +178,9 @@ an anonymous caller is refused with `QUERY_RUNTIME_ERROR` naming the read-only
 transaction, `POST /environment/reset` restores the seeded counts, and the build
 stays green (`make test`, `make verify`).
 
-## Step 8 — M3 release
+## Step 8: M3 release
 
-Release checklist — the owner's go-ahead is required before the tag (the "do not
+Release checklist: the owner's go-ahead is required before the tag (the "do not
 commit or tag without asking" constraint holds):
 
 1. `make verify` green (it runs `make test`: typecheck + every audit + all Go

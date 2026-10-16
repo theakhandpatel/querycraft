@@ -57,7 +57,7 @@ function load(): ChoiceMap {
         }
       }
     }
-  } catch (e) {
+  } catch {
     /* storage unavailable or holding junk: no choice is the honest default */
   }
   cache = map;
@@ -71,7 +71,7 @@ function save(next: ChoiceMap): void {
     if (typeof window !== 'undefined' && window.localStorage) {
       window.localStorage.setItem(CHOICE_KEY, JSON.stringify(next));
     }
-  } catch (e) {
+  } catch {
     /* the choice still applies for this session; it just will not survive */
   }
   for (const listener of listeners) listener();

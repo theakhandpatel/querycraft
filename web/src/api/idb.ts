@@ -1,6 +1,6 @@
 /* A small, dependency-free IndexedDB key/value store.
 
-   The offline adapters (mock and PGlite) keep learner data here: `progress` is
+   The offline adapter (PGlite) keeps learner data here: `progress` is
    keyed by course id and holds one snapshot per course, `events` is keyed by
    event id and only ever grows. The gateway is still the authoritative store
    whenever a server is present; this is what lets the offline workspace

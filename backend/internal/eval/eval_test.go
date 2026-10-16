@@ -3,6 +3,7 @@ package eval
 import (
 	"context"
 	"encoding/json"
+	"slices"
 	"testing"
 
 	"github.com/querycraft/sqlquery/backend/internal/engine"
@@ -62,7 +63,13 @@ func (e *fakeExec) Ping(ctx context.Context) error              { return nil }
 func (e *fakeExec) Version(ctx context.Context) (string, error) { return "test", nil }
 func (e *fakeExec) Stats() engine.PoolStats                     { return engine.PoolStats{} }
 func (e *fakeExec) Ready(ctx context.Context) (bool, string)    { return true, "" }
-func (e *fakeExec) Close() error                                { return nil }
+func (e *fakeExec) Dialect() string                             { return engine.DialectPostgres }
+func (e *fakeExec) EngineLabel() string                         { return engine.EngineName }
+func (e *fakeExec) ClassifyError(err error) (string, bool)      { return "", false }
+func (e *fakeExec) Diagnostics(ctx context.Context) map[string]any {
+	return nil
+}
+func (e *fakeExec) Close() error { return nil }
 
 func colsOf(names ...string) []engine.Column {
 	out := make([]engine.Column, len(names))
@@ -95,7 +102,7 @@ func mustFail(t *testing.T, ok bool, codes []string, wantCode string) {
 	if ok {
 		t.Fatalf("expected comparison to fail")
 	}
-	if wantCode != "" && !contains(codes, wantCode) {
+	if wantCode != "" && !slices.Contains(codes, wantCode) {
 		t.Fatalf("codes = %v, want to contain %s", codes, wantCode)
 	}
 }
@@ -383,6 +390,40 @@ func TestEvaluateExecutionError(t *testing.T) {
 	}
 	if resp.Checks[0].OK {
 		t.Fatalf("checks must be not ok on execution failure")
+	}
+}
+
+// TestEvaluateLimitAboveDefaultSurvives pins the double-merge bug in
+// Evaluate: it re-merged DefaultLimits(), which clamps DOWN, so a gateway
+// configured with QC_MAX_ROWS=2000 silently ran at the compiled default of
+// 500. A limit above the default must survive to the executor.
+func TestEvaluateLimitAboveDefaultSurvives(t *testing.T) {
+	// 600 rows: more than DefaultMaxRows (500), fewer than the raised cap.
+	rows := make([][]any, 600)
+	for i := range rows {
+		rows[i] = []any{i + 1}
+	}
+	ex := &fakeExec{def: &frows{cols: colsOf("n"), rows: rows}}
+	req := Request{
+		SQL:    "SELECT n FROM big",
+		Limits: engine.Limits{MaxRows: 2000, MaxBytes: 8 << 20, TimeoutMS: 20_000},
+		Exercise: Exercise{
+			Contract: baseContract("n"),
+			Result:   &ExpectedResult{Columns: []string{"n"}, Rows: rows},
+		},
+	}
+	resp := Evaluate(context.Background(), ex, req)
+	if resp.QR.Error != nil {
+		t.Fatalf("Evaluate error = %+v", resp.QR.Error)
+	}
+	if resp.QR.RowCount != 600 {
+		t.Errorf("RowCount = %d, want 600; the raised cap was clamped to the compiled default", resp.QR.RowCount)
+	}
+	if resp.QR.Truncated {
+		t.Errorf("Truncated = true at 600 rows under a 2000-row cap")
+	}
+	if !resp.Passed {
+		t.Errorf("expected the full result to pass, got %+v", resp.Checks)
 	}
 }
 

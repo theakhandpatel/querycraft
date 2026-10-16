@@ -1,4 +1,4 @@
-# M6 implementation plan — "Second dialect: SQLite"
+# M6 implementation plan: "Second dialect: SQLite"
 
 Design source: `docs/technical-design.md` §14 (M6), §15 D12–D15 (settled by the
 M6 spikes); ADR `docs/adr/0004-postgresql-not-sqlite.md` (why PostgreSQL stays
@@ -7,13 +7,13 @@ the default dialect and why this is a second dialect, not a replacement); ADR
 its reset, which the SQLite isolation in step 5 must map onto).
 
 Steps are ordered so the shared seam lands first, then the two tracks proceed in
-parallel — **Track B** (Go gateway) and **Track F** (browser) — and meet at one
+parallel, **Track B** (Go gateway) and **Track F** (browser), and meet at one
 per-dialect parity audit. PostgreSQL remains the default dialect throughout; no
 existing lesson, contract or adapter changes behaviour in M6.
 
 ## What M6 is
 
-> Scope: SQLite as a **second dialect**, alongside PostgreSQL — not a replacement for it
+> Scope: SQLite as a **second dialect**, alongside PostgreSQL, not a replacement for it
 > (ADR 0004 explains why the app is PostgreSQL-first). The learner can take a course that
 > teaches SQLite, run it on a real SQLite engine in both adapters, and be graded the same
 > way. This is the milestone that turns "SQL" from one engine into a dialect dimension.
@@ -37,7 +37,7 @@ existing lesson, contract or adapter changes behaviour in M6.
 ### Exit gate (verbatim from §14 M6)
 
 > - A learner cannot accidentally run a SQLite chapter against PostgreSQL, or the reverse,
->   without the UI saying which dialect they are on — and the refusal is actionable.
+>   without the UI saying which dialect they are on, and the refusal is actionable.
 > - Both dialects run the same *shape* of question (SELECT, JOIN, GROUP BY, window, CTE,
 >   recursive CTE) and pass the same result contracts.
 > - Error classification is dialect-specific and documented, with a test per code.
@@ -65,8 +65,8 @@ The dialect seam does not exist yet. Everything below is the current state.
 | SQLite on the gateway (Adapter B) | **Missing** | one executor, `backend/internal/engine/pgx.go`; `engine.EngineName = "postgresql"`; `/health` hard-codes `"engine": "postgresql"` |
 | SQLite in the browser (Adapter A) | **Missing** | `web/src/api/pglite.ts` is the only real engine; `execution.ts` picks `mock` / `pglite` / `http` |
 | SQLite dataset | **Missing** | one dataset, `backend/internal/dataset/schema.sql` + `seed.sql`, imported by the web app via `?raw` (`web/src/api/dataset.ts`) |
-| Dialect-aware error classification | **Missing** | `web/src/api/pglite.ts` `mapError` and `backend/internal/engine/pgx.go` `classify` both switch on PostgreSQL SQLSTATE — a table with no SQLite rows |
-| Dialect-aware value encoding | **Missing** | `pglite.ts` `OID_TYPE` / `TEXT_VALUE_OIDS`; `backend/internal/engine/normalize.go` `textOIDs` — both are PostgreSQL OIDs |
+| Dialect-aware error classification | **Missing** | `web/src/api/pglite.ts` `mapError` and `backend/internal/engine/pgx.go` `classify` both switch on PostgreSQL SQLSTATE: a table with no SQLite rows |
+| Dialect-aware value encoding | **Missing** | `pglite.ts` `OID_TYPE` / `TEXT_VALUE_OIDS`; `backend/internal/engine/normalize.go` `textOIDs`: both are PostgreSQL OIDs |
 | Per-dialect parity audit | **Missing** | `scripts/adapter-parity-audit.mjs` compares PGlite vs gateway only; `make audit-parity` has one dialect |
 | cgo-free guard | **Missing** | nothing asserts the binary did not acquire a cgo dependency |
 | Writable-workspace reset (ADR 0003) | Done, PostgreSQL | `internal/envdb` per-account database; `GET /environment`, `POST /environment/reset`; PGlite `resetEnvironment()` |
@@ -76,7 +76,7 @@ The dialect seam does not exist yet. Everything below is the current state.
 
 | # | Step | Track | Ships | Depends on |
 | --- | --- | --- | --- | --- |
-| 1 | Dialect in the contracts | shared | `dialect` enum on QueryResult, exercise/curriculum, `/capabilities`; `DIALECT_MISMATCH` code | — |
+| 1 | Dialect in the contracts | shared | `dialect` enum on QueryResult, exercise/curriculum, `/capabilities`; `DIALECT_MISMATCH` code | (none) |
 | 2 | SQLite dataset + checked mapping | shared | `schema.sqlite.sql` + `seed.sqlite.sql` + `mapping.json`; `make audit-dataset-map` | 1 |
 | 3 | Dialect profile: errors + value encoding | shared | `contracts/dialects/sqlite.json` + `dialect.schema.json`; a test per code on each side | 1 |
 | 4 | Gateway SQLite adapter (Track B) | backend | `internal/engine/sqlite.go` behind `POST /query`; `make check-cgo` | 1, 2, 3 |
@@ -105,7 +105,7 @@ dialect-neutral chapter.
 
 ---
 
-## Step 1 — Dialect in the contracts
+## Step 1: Dialect in the contracts
 
 The smallest change that makes a dialect expressible, so both tracks and the
 course track have something to compile against. No execution behaviour changes.
@@ -153,7 +153,7 @@ new field against the schema); `cd web && npx tsc --noEmit`;
 and the browser validation; `/capabilities` advertises `dialects`; the
 error-code enum still round-trips on both sides.
 
-## Step 2 — The SQLite dataset and its checked mapping
+## Step 2: The SQLite dataset and its checked mapping
 
 "A second dataset authored for SQLite (schema + seed), with a checked mapping to
 the commerce dataset so the two dialects answer the same questions about the
@@ -184,7 +184,7 @@ divergence is a named row with a reason rather than an omission.
    per dialect, imported by both sides, mirroring `schema.sql`.
 4. `scripts/dataset-map-audit.mjs` + `make audit-dataset-map`: apply both
    schemas+seeds to a real engine of each dialect, then assert against the
-   manifest — table set, row counts, per-column declared type, the edge-case
+   manifest: table set, row counts, per-column declared type, the edge-case
    probes, and that every PostgreSQL column has a mapped SQLite column and vice
    versa. A divergence is a failure unless the manifest names it.
 
@@ -200,11 +200,11 @@ named divergences); `make dataset` still rebuilds the PostgreSQL pair unchanged.
 accounts for every column, and the audit fails if a table, column, edge case or
 row count drifts on either side.
 
-## Step 3 — The dialect profile: error classification and value encoding
+## Step 3: The dialect profile for error classification and value encoding
 
 SQLite has no SQLSTATE, no boolean, no date type and ASCII-case-insensitive
 `LIKE`; PostgreSQL has all four. Grading must therefore be per dialect, and the
-rules must be one artifact both languages read — the same pattern as
+rules must be one artifact both languages read: the same pattern as
 `contracts/fixtures/`.
 
 1. Add `contracts/dialect.schema.json` and `contracts/dialects/sqlite.json`
@@ -235,7 +235,7 @@ rules must be one artifact both languages read — the same pattern as
      PostgreSQL `bytea`'s text form and `pglite.ts`'s `\x` convention); NULL →
      null. No booleans and no dates: a `BOOLEAN`-declared column stores `0`/`1`
      and a date column stores ISO-8601 text, and those values are emitted as
-     integers and strings — never coerced to `true`/`false` or a JS `Date`.
+     integers and strings, never coerced to `true`/`false` or a JS `Date`.
    - **Column type label.** SQLite's `sqlite3_column_decltype` is the declared
      type verbatim when present (`INTEGER`, `TEXT`, `NUMERIC`, `VARCHAR(20)`, …)
      and empty for expressions. The profile defines the fallback label for the
@@ -264,27 +264,27 @@ named producer and a passing case; the profile is a single file both languages
 load; and `docs/sqlite-dialect.md` states where SQLite's error and value
 behaviour differs from PostgreSQL's.
 
-## Step 4 — Gateway SQLite adapter (Track B)
+## Step 4: Gateway SQLite adapter (Track B)
 
 SQLite behind the same `POST /query` contract, pure Go, cgo-free.
 
 1. `backend/internal/engine/sqlite.go`: an `Executor` implementation over
    `database/sql` + `modernc.org/sqlite` (`driverName = "sqlite"`), not
    `mattn/go-sqlite3` (which requires cgo and would break the single binary).
-   It satisfies the existing `engine.Executor` interface — `Query`, `Ping`,
+   It satisfies the existing `engine.Executor` interface: `Query`, `Ping`,
    `Version` (`SELECT sqlite_version()`), `Stats` (zeroes, not invented pool
-   numbers), `Ready`, `Close` — so `engine.Execute` supplies the row cap, byte
+   numbers), `Ready`, `Close`, so `engine.Execute` supplies the row cap, byte
    cap, deadline, truncation flag and `RESULT_LIMIT_EXCEEDED` unchanged. This is
    the whole point of the seam: the caps are not reimplemented.
 2. Deadline and cancellation: build the statement with
    `context.WithTimeout`; the driver interrupts on context cancellation, and the
    resulting `SQLITE_INTERRUPT(9)` maps to `QUERY_TIMEOUT` via step 3. Whether
    the interrupt fires mid-statement for every statement shape is a **spike
-   question** for this step — record what was measured, do not assume it.
+   question** for this step, record what was measured, do not assume it.
    `modernc.org/sqlite` returns `*sqlite.Error` with an extended `Code()`; the
    classifier reads that, never a message alone where a code exists.
 3. `PRAGMA`s the executor needs are set per connection via the DSN
-   (`_pragma=foreign_keys(1)` etc.) — never inherited from a global: in SQLite
+   (`_pragma=foreign_keys(1)` etc.): never inherited from a global: in SQLite
    `foreign_keys` is **off by default**, so a chapter that teaches foreign keys
    must be explicit. The exact set (foreign_keys, busy_timeout, journal_mode,
    query_only for anonymous) is recorded in step 5's ADR; step 4 lands the
@@ -319,7 +319,7 @@ statement on the gateway with the same caps, deadline and result shape as
 PostgreSQL; a missing SQLite engine reports `ENVIRONMENT_UNAVAILABLE`; and
 `CGO_ENABLED=0 go build ./...` still produces the single binary.
 
-## Step 5 — Per-learner SQLite write isolation (Track B), settling D14
+## Step 5: Per-learner SQLite write isolation (Track B), settling D14
 
 D14: *per-learner database file, reset by copy*. This step maps that onto ADR
 0003's per-account environment and reset, so the HTTP shape a learner sees does
@@ -327,7 +327,7 @@ not change between dialects.
 
 1. **Spike (measured).** Build the SQLite template file once (schema + seed),
    seal it read-only, and measure create (copy), reset (copy over / atomic
-   rename), drop, and per-file size — the ADR 0004 figures (≈1 ms copy vs ≈35 ms
+   rename), drop, and per-file size: the ADR 0004 figures (≈1 ms copy vs ≈35 ms
    `CREATE DATABASE` for PostgreSQL) are the ADR's claim, not this repo's
    measurement, so re-measure here and record it. Also settle: journal mode
    (`DELETE` vs `WAL` and the `-wal`/`-shm` sidecars a reset must remove),
@@ -336,7 +336,7 @@ not change between dialects.
 2. Extend `backend/internal/envdb/` with a dialect-specific backend behind the
    existing interface: PostgreSQL keeps `CREATE DATABASE … TEMPLATE`; SQLite
    gives each account `<env-root>/<account>.db`, copied from the sealed template,
-   reset by re-copy (the file is the database — there is nothing to `DROP`).
+   reset by re-copy (the file is the database: there is nothing to `DROP`).
    `GET /environment` and `POST /environment/reset` keep their response shapes;
    the per-account environment's `database` name points at the file. The
    reset-by-copy path mirrors the PGlite adapter's `resetEnvironment()`
@@ -366,7 +366,7 @@ M3 step 8 recorded its table.
 survive a reload, and are undone by one reset; an anonymous write is refused;
 and the recorded copy/reset numbers are attached to the decision.
 
-## Step 6 — Browser SQLite adapter (Track F)
+## Step 6: Browser SQLite adapter (Track F)
 
 SQLite compiled to WebAssembly in a Worker, mirroring the PGlite adapter. This
 step **settles D12** (currently *Undecided*).
@@ -379,20 +379,20 @@ step **settles D12** (currently *Undecided*).
    `docs/adr/0007-browser-sqlite-engine.md` (0006 is the learner-isolation ADR),
    update §15 D12, and only then build.
    If no candidate can be pre-empted, the adapter must report `hardTimeout:
-   false` — the honest-reporting rule from `pglite.ts` applies unchanged.
+   false`: the honest-reporting rule from `pglite.ts` applies unchanged.
 2. `web/src/api/sqlite.worker.ts` + `web/src/api/sqlite.ts`: the same lifecycle
-   as `pglite.ts` — a Worker with a main-thread fallback when `new Worker` is
+   as `pglite.ts`: a Worker with a main-thread fallback when `new Worker` is
    blocked (the design Appendix A finding), `engineCapabilities()` that returns
    `null` until boot so the UI says "starting", and `placement` reported
    honestly. Same deadline kill: the worker is terminated on timeout and the
    dataset is restored, so a runaway `WITH RECURSIVE …` cannot freeze the tab.
 3. **Same caps.** Apply the PGlite row cap (`MAX_ROWS`) and the gateway's byte
-   cap before the result crosses `postMessage`, with the same `truncated` flag —
+   cap before the result crosses `postMessage`, with the same `truncated` flag: 
    the caps are the contract's, not the engine's. Note the current PGlite path
    enforces the row cap and does not separately implement the byte cap; whether
    that is a pre-existing gap to close in both adapters or a documented
    difference is a **spike question** for this step, and the answer is written
-   down either way. Row/byte caps must not be "roughly the same" — they are
+   down either way. Row/byte caps must not be "roughly the same": they are
    stated as numbers in the adapter and asserted by a test.
 4. **Same honest capability reporting**: `EngineCapabilities` gains
    `dialect: "sqlite"`; `hardTimeout` is true only where the spike proved the
@@ -421,18 +421,18 @@ a runaway statement is stopped by the host where the spike proved it can be, cap
 and truncation match the stated numbers, and `engineCapabilities()` never claims
 a capability the spike did not measure.
 
-## Step 7 — Dialect badge and an actionable mismatch refusal (Track F)
+## Step 7: Dialect badge and an actionable mismatch refusal (Track F)
 
 The gate clause a learner actually experiences. The UI must say which dialect a
 chapter is on, and a mismatch must be fixable in one action.
 
 1. **Badge.** `CourseModule.dialect` (step 1) renders as a badge on the lesson
-   header and the course card — one word, `PostgreSQL` or `SQLite`, next to the
+   header and the course card: one word, `PostgreSQL` or `SQLite`, next to the
    chapter title, using existing type scale and colour tokens (this is a port of
    an existing pattern, not a redesign; `ResultGrid.tsx` already prints the
    engine string per result).
 2. **Active-dialect truth.** The badge is compared against the active adapter's
-   dialect from `ExecutionService.capabilities()` — not a constant — so the UI
+   dialect from `ExecutionService.capabilities()`, not a constant, so the UI
    cannot say "SQLite" while `POST /query` is talking to PostgreSQL. When
    capabilities are still `null`, the badge says "starting", not a guess.
 3. **The refusal.** When a chapter's dialect ≠ the active adapter's, the Run
@@ -465,7 +465,7 @@ test runner.
 the engine, is told which is which in plain words, and can fix it in one action
 without losing their draft.
 
-## Step 8 — Per-dialect adapter-parity audit
+## Step 8: Per-dialect adapter-parity audit
 
 The gate that turns "two engines" into "one product": the audit runs **once per
 dialect** and both are green.
@@ -502,7 +502,7 @@ per-dialect tables); `node scripts/adapter-parity-audit.mjs --dialect sqlite
 PostgreSQL run is byte-for-byte the same instrument it was, and the SQLite
 section publishes its table plus what it does not compare.
 
-## Step 9 — M6 release
+## Step 9: M6 release
 
 `make verify` + `make verify-mock` + every `audit-*` (including the new
 `audit-dataset-map`, `audit-sqlite-errors`, `check-cgo`, and both
@@ -522,7 +522,7 @@ step 3; parity once per dialect → step 8; cgo-free, Docker-free → step 4.
 | --- | --- | --- | --- | --- |
 | 1 | Dialect in the contracts | shared | done | `dialect` on QueryResult/exercise/curriculum; `dialects` on `/capabilities`; `DIALECT_MISMATCH` in the closed enum; `web/src/lib/dialect.ts` is the only reader; `make audit-sqlite-errors` in `test` |
 | 2 | SQLite dataset + checked mapping | shared | done | `schema.sqlite.sql`, `seed.sqlite.sql`, `mapping.json` (22 rows, 5 named mismatches each with a reason); `make audit-dataset-map` green |
-| 3 | Dialect profile: errors + value encoding | shared | done | `contracts/dialects/sqlite.json` read by both languages (Go embeds a byte-identical mirror, the browser imports the contract itself); 30 ordered message rules, affinity, 28 capabilities; `docs/sqlite-dialect.md`. **Open defect**: the Go executor must strip the driver's `SQL logic error: … (N)` framing or the `equals`/`prefix` rules can never fire — measured, being fixed |
+| 3 | Dialect profile: errors + value encoding | shared | done | `contracts/dialects/sqlite.json` read by both languages (Go embeds a byte-identical mirror, the browser imports the contract itself); 30 ordered message rules, affinity, 28 capabilities; `docs/sqlite-dialect.md`. **Open defect**: the Go executor must strip the driver's `SQL logic error: … (N)` framing or the `equals`/`prefix` rules can never fire: measured, being fixed |
 | 4 | Gateway SQLite adapter | backend | done | `backend/internal/engine/sqlite.go` over `modernc.org/sqlite` (pure Go), 15 tests incl. a real 300 ms deadline stop; per-account files + a shared read-only `commerce.db`; optional `dialect` on `/query`/`/answers/evaluate`/`/explain`; `DIALECT_MISMATCH` names the served dialects; `make check-cgo` proves the binary stays cgo-free |
 | 5 | Per-learner SQLite isolation (D14) | backend | done | file-per-account, reset by re-copy; measured in ADR `0006` (copy-create ≈2 ms median vs PostgreSQL's 42–46 ms `CREATE DATABASE`; reset ≈2 ms vs 47–160 ms); D14 settled |
 | 6 | Browser SQLite adapter (D12) | frontend | wip | spike measured 4 candidates (`/tmp/sqlite-spike/RESULTS.json`); `web/src/api/sqliteDataset.ts` and `sqliteProfile.ts` (contract-read classifier, encoder, capabilities) have landed; the Worker + engine choice + ADR `0007` follow |
@@ -547,7 +547,7 @@ line the adapter tests must confirm (step 3), not a fact taken on faith. This is
 the same posture ADR 0004 takes when it warns that `STRICT`, `RETURNING` and
 `RIGHT`/`FULL JOIN` narrow the gap "somewhat".
 
-### Course 1 — *SQLite Essentials* (`sqlite-essentials`)
+### Course 1: *SQLite Essentials* (`sqlite-essentials`)
 
 Badge on every chapter: `SQLite`. Level: beginner → intermediate. The dialect
 course that teaches the engine on its own terms, and where a PostgreSQL reflex
@@ -555,15 +555,15 @@ produces the wrong result.
 
 | Chapter | Dialect badge | SQLite-vs-PostgreSQL difference taught |
 | --- | --- | --- |
-| s1 — *A database in a file* | SQLite | No server, no roles, no `search_path`; the file is the database; `sqlite_master` vs the PostgreSQL catalog; what "air-gapped" means here (ADR 0004). |
-| s2 — *Storage classes and type affinity* | SQLite | Five storage classes (NULL, INTEGER, REAL, TEXT, BLOB) and five affinity rules; affinity only converts when the text looks numeric, so a column declared `INT` still accepts `'abc'` and stores it as TEXT — `SELECT typeof(x)` reveals what is really stored, where PostgreSQL's `integer` rejects it with `22P02`. `CAST(x AS t)` is the only cast — there is no `::`. |
-| s3 — *`rowid`, `INTEGER PRIMARY KEY` and `AUTOINCREMENT`* | SQLite | Every ordinary table has a `rowid`; `INTEGER PRIMARY KEY` aliases it; `AUTOINCREMENT` (which uses `sqlite_sequence`) promises no reuse — plain `INTEGER PRIMARY KEY` reuses ids after deletes; PostgreSQL has no `rowid` and uses `GENERATED … AS IDENTITY`/`serial`. |
-| s4 — *Dates are not a type* | SQLite | No `DATE`/`TIMESTAMP`/`INTERVAL`; store ISO-8601 `TEXT`, Julian `REAL` or epoch `INTEGER` and compute with `date()`, `datetime()`, `strftime()`, `julianday()`, `unixepoch()` (3.38+); `DATE_TRUNC`, `TO_CHAR`, `DATE '…'` and `INTERVAL '…'` do not exist (ADR 0004 counts 30 `DATE_TRUNC` and 33 `::` uses in the current curriculum). |
-| s5 — *`LIKE`, `GLOB` and collations* | SQLite | `LIKE` is case-insensitive for ASCII **by default**; there is no `ILIKE`; `GLOB` is case-sensitive; `COLLATE NOCASE` is ASCII-only; `PRAGMA case_sensitive_like`. PostgreSQL defaults to case-*sensitive* `LIKE` and offers `ILIKE`, so the reflex teaches the wrong habit (ADR 0004: **absent** for `ILIKE`). |
-| s6 — *Reading a query plan without `EXPLAIN ANALYZE`* | SQLite | SQLite has `EXPLAIN` and `EXPLAIN QUERY PLAN` only — planner text, no actual row counts; `ANALYZE` populates `sqlite_stat1`. The M5 performance lab is built on `EXPLAIN ANALYZE`, so this chapter teaches what *can* be read here; ADR 0004 calls the PostgreSQL chapter "not portable at all". |
-| s7 — *When SQLite is the right choice — and what it cannot do* | SQLite | No roles or `GRANT`, no schemas beyond `ATTACH`, limited `ALTER TABLE`, one writer at a time, weak typing unless `STRICT`; the honest comparison with a client/server engine and with PostgreSQL specifically. |
+| s1: *A database in a file* | SQLite | No server, no roles, no `search_path`; the file is the database; `sqlite_master` vs the PostgreSQL catalog; what "air-gapped" means here (ADR 0004). |
+| s2: *Storage classes and type affinity* | SQLite | Five storage classes (NULL, INTEGER, REAL, TEXT, BLOB) and five affinity rules; affinity only converts when the text looks numeric, so a column declared `INT` still accepts `'abc'` and stores it as TEXT: `SELECT typeof(x)` reveals what is really stored, where PostgreSQL's `integer` rejects it with `22P02`. `CAST(x AS t)` is the only cast: there is no `::`. |
+| s3: *`rowid`, `INTEGER PRIMARY KEY` and `AUTOINCREMENT`* | SQLite | Every ordinary table has a `rowid`; `INTEGER PRIMARY KEY` aliases it; `AUTOINCREMENT` (which uses `sqlite_sequence`) promises no reuse: plain `INTEGER PRIMARY KEY` reuses ids after deletes; PostgreSQL has no `rowid` and uses `GENERATED … AS IDENTITY`/`serial`. |
+| s4: *Dates are not a type* | SQLite | No `DATE`/`TIMESTAMP`/`INTERVAL`; store ISO-8601 `TEXT`, Julian `REAL` or epoch `INTEGER` and compute with `date()`, `datetime()`, `strftime()`, `julianday()`, `unixepoch()` (3.38+); `DATE_TRUNC`, `TO_CHAR`, `DATE '…'` and `INTERVAL '…'` do not exist (ADR 0004 counts 30 `DATE_TRUNC` and 33 `::` uses in the current curriculum). |
+| s5: *`LIKE`, `GLOB` and collations* | SQLite | `LIKE` is case-insensitive for ASCII **by default**; there is no `ILIKE`; `GLOB` is case-sensitive; `COLLATE NOCASE` is ASCII-only; `PRAGMA case_sensitive_like`. PostgreSQL defaults to case-*sensitive* `LIKE` and offers `ILIKE`, so the reflex teaches the wrong habit (ADR 0004: **absent** for `ILIKE`). |
+| s6: *Reading a query plan without `EXPLAIN ANALYZE`* | SQLite | SQLite has `EXPLAIN` and `EXPLAIN QUERY PLAN` only: planner text, no actual row counts; `ANALYZE` populates `sqlite_stat1`. The M5 performance lab is built on `EXPLAIN ANALYZE`, so this chapter teaches what *can* be read here; ADR 0004 calls the PostgreSQL chapter "not portable at all". |
+| s7: *When SQLite is the right choice, and what it cannot do* | SQLite | No roles or `GRANT`, no schemas beyond `ATTACH`, limited `ALTER TABLE`, one writer at a time, weak typing unless `STRICT`; the honest comparison with a client/server engine and with PostgreSQL specifically. |
 
-### Course 2 — *SQLite in Production* (`sqlite-in-production`)
+### Course 2: *SQLite in Production* (`sqlite-in-production`)
 
 Badge on every chapter: `SQLite`. Level: intermediate → advanced. For a learner
 who can write SQL and wants the parts of SQLite that surprise application
@@ -571,15 +571,15 @@ developers.
 
 | Chapter | Dialect badge | SQLite-vs-PostgreSQL difference taught |
 | --- | --- | --- |
-| p1 — *One writer at a time: concurrency and `WAL`* | SQLite | `PRAGMA journal_mode=WAL` allows readers with one writer; `SQLITE_BUSY`/`SQLITE_LOCKED` and `busy_timeout`; PostgreSQL runs many writers under MVCC, so this is a different model, not a slower one. |
-| p2 — *`PRAGMA` vs `SET`* | SQLite | `PRAGMA journal_mode`, `foreign_keys`, `busy_timeout`, `cache_size`, `synchronous`, `user_version`, `application_id`, `table_info` return rows and are statements; PostgreSQL uses `SET`/`SHOW`/`pg_settings`. `PRAGMA` names are per-connection, which is why the executor sets them in the DSN (step 4). |
-| p3 — *Types that do not lie: `STRICT` tables* | SQLite | `STRICT` tables (3.37+) enforce the declared type from a fixed list (`INT`, `INTEGER`, `REAL`, `TEXT`, `BLOB`, `ANY`); ordinary tables only apply affinity. This is the chapter that makes s2 actionable; note `ANY` has no PostgreSQL equivalent and PostgreSQL has no per-table switch. |
-| p4 — *Constraints, foreign keys and `ON CONFLICT`* | SQLite | `PRAGMA foreign_keys` is **off by default** (so the constraint may exist and not fire); `RETURNING` (3.35+) and `ON CONFLICT DO NOTHING/UPDATE` (3.24+); `last_insert_rowid()` vs PostgreSQL's `RETURNING`. |
-| p5 — *JSON, generated columns and expression indexes* | SQLite | The JSON1 functions and `->`/`->>` (3.38+) exist without an extension in modern builds; generated columns (3.31+) and partial/expression indexes; `jsonb` in PostgreSQL stores a different representation — comparison is by behaviour, not by bytes. |
-| p6 — *Changing a schema with `user_version`* | SQLite | `ALTER TABLE` supports only `RENAME TO`, `RENAME COLUMN`, `ADD COLUMN` (with restrictions) and `DROP COLUMN` (3.35+, with restrictions); anything else is the documented table-rebuild dance; `PRAGMA user_version` versions the file where PostgreSQL migrations live in the server. |
-| p7 — *Backup, `ATTACH` and shipping the file* | SQLite | `.backup`/`VACUUM INTO`, `ATTACH` as the nearest thing to a schema, `PRAGMA integrity_check`, `VACUUM`; what "a backup" means when the database is a file, versus PostgreSQL's streaming/physical backups. |
+| p1: *One writer at a time: concurrency and `WAL`* | SQLite | `PRAGMA journal_mode=WAL` allows readers with one writer; `SQLITE_BUSY`/`SQLITE_LOCKED` and `busy_timeout`; PostgreSQL runs many writers under MVCC, so this is a different model, not a slower one. |
+| p2: *`PRAGMA` vs `SET`* | SQLite | `PRAGMA journal_mode`, `foreign_keys`, `busy_timeout`, `cache_size`, `synchronous`, `user_version`, `application_id`, `table_info` return rows and are statements; PostgreSQL uses `SET`/`SHOW`/`pg_settings`. `PRAGMA` names are per-connection, which is why the executor sets them in the DSN (step 4). |
+| p3: *Types that do not lie: `STRICT` tables* | SQLite | `STRICT` tables (3.37+) enforce the declared type from a fixed list (`INT`, `INTEGER`, `REAL`, `TEXT`, `BLOB`, `ANY`); ordinary tables only apply affinity. This is the chapter that makes s2 actionable; note `ANY` has no PostgreSQL equivalent and PostgreSQL has no per-table switch. |
+| p4: *Constraints, foreign keys and `ON CONFLICT`* | SQLite | `PRAGMA foreign_keys` is **off by default** (so the constraint may exist and not fire); `RETURNING` (3.35+) and `ON CONFLICT DO NOTHING/UPDATE` (3.24+); `last_insert_rowid()` vs PostgreSQL's `RETURNING`. |
+| p5: *JSON, generated columns and expression indexes* | SQLite | The JSON1 functions and `->`/`->>` (3.38+) exist without an extension in modern builds; generated columns (3.31+) and partial/expression indexes; `jsonb` in PostgreSQL stores a different representation: comparison is by behaviour, not by bytes. |
+| p6: *Changing a schema with `user_version`* | SQLite | `ALTER TABLE` supports only `RENAME TO`, `RENAME COLUMN`, `ADD COLUMN` (with restrictions) and `DROP COLUMN` (3.35+, with restrictions); anything else is the documented table-rebuild dance; `PRAGMA user_version` versions the file where PostgreSQL migrations live in the server. |
+| p7: *Backup, `ATTACH` and shipping the file* | SQLite | `.backup`/`VACUUM INTO`, `ATTACH` as the nearest thing to a schema, `PRAGMA integrity_check`, `VACUUM`; what "a backup" means when the database is a file, versus PostgreSQL's streaming/physical backups. |
 
-### Course 3 — *Porting PostgreSQL to SQLite* (`postgres-to-sqlite`)
+### Course 3: *Porting PostgreSQL to SQLite* (`postgres-to-sqlite`)
 
 Badge on every chapter: `SQLite`. Level: intermediate → advanced. A translation
 course where every chapter is authored in SQLite (so it satisfies D15 and the
@@ -589,15 +589,15 @@ and is the course that makes the existing `m1`–`m9` material portable.
 
 | Chapter | Dialect badge | PostgreSQL construct → SQLite replacement |
 | --- | --- | --- |
-| x1 — *Casts are gone: `::` → `CAST`* | SQLite | `DATE_TRUNC('month', o.ordered_at)::date` → `strftime('%Y-%m-01', o.ordered_at)` over ISO-8601 text; `CAST(x AS date)` cannot be the fix because SQLite has no `date` type. Current curriculum: 33 `::` uses, 30 `DATE_TRUNC`. |
-| x2 — *Conditional aggregation without `FILTER` assumptions* | SQLite | `COUNT(*) FILTER (WHERE …)` exists since 3.30, so teach the version gate and the `SUM(CASE WHEN … THEN 1 ELSE 0 END)` fallback; also `DISTINCT ON` is **absent** (2 uses in the curriculum) — use `GROUP BY`/window alternatives. |
-| x3 — *Windows and ordering semantics* | SQLite | `PARTITION BY`/`OVER` exist since 3.25 but the value types and the default ordering differ; `NULLS FIRST/LAST` and `FILTER` on windows need checking on the shipped SQLite version. |
-| x4 — *Dates and intervals without types* | SQLite | `DATE '2026-01-01'`, `INTERVAL '1 month'`, `TO_CHAR` do not exist; the recursive-CTE `m9` example becomes integer/logical iteration plus `datetime(...)` arithmetic; `WITH RECURSIVE` itself is present. |
-| x5 — *Booleans, numerics and the value contract* | SQLite | `boolean` → declared `BOOLEAN` holding `0`/`1` (SQLite has no boolean type); `numeric(10,2)` money keeps scale as declared `NUMERIC` with the same seed scale; the recorded value-encoding rules from step 3; this is the chapter that makes cross-dialect grading legible. |
-| x6 — *Users, schemas and permissions do not exist* | SQLite | No roles/`GRANT`, no `search_path`, no per-schema namespaces; the isolation model is the file (step 5), not a privilege grant; `ATTACH` is not a substitute for a schema. |
-| x7 — *Porting the capstone* | SQLite | The `m8` capstone rebuilt end to end: `DATE_TRUNC` → `strftime`, window totals and `ROUND`, the same result contract shape. This is the evidence that the port is a translation, not a rewrite. |
+| x1: *Casts are gone: `::` → `CAST`* | SQLite | `DATE_TRUNC('month', o.ordered_at)::date` → `strftime('%Y-%m-01', o.ordered_at)` over ISO-8601 text; `CAST(x AS date)` cannot be the fix because SQLite has no `date` type. Current curriculum: 33 `::` uses, 30 `DATE_TRUNC`. |
+| x2: *Conditional aggregation without `FILTER` assumptions* | SQLite | `COUNT(*) FILTER (WHERE …)` exists since 3.30, so teach the version gate and the `SUM(CASE WHEN … THEN 1 ELSE 0 END)` fallback; also `DISTINCT ON` is **absent** (2 uses in the curriculum): use `GROUP BY`/window alternatives. |
+| x3: *Windows and ordering semantics* | SQLite | `PARTITION BY`/`OVER` exist since 3.25 but the value types and the default ordering differ; `NULLS FIRST/LAST` and `FILTER` on windows need checking on the shipped SQLite version. |
+| x4: *Dates and intervals without types* | SQLite | `DATE '2026-01-01'`, `INTERVAL '1 month'`, `TO_CHAR` do not exist; the recursive-CTE `m9` example becomes integer/logical iteration plus `datetime(...)` arithmetic; `WITH RECURSIVE` itself is present. |
+| x5: *Booleans, numerics and the value contract* | SQLite | `boolean` → declared `BOOLEAN` holding `0`/`1` (SQLite has no boolean type); `numeric(10,2)` money keeps scale as declared `NUMERIC` with the same seed scale; the recorded value-encoding rules from step 3; this is the chapter that makes cross-dialect grading legible. |
+| x6: *Users, schemas and permissions do not exist* | SQLite | No roles/`GRANT`, no `search_path`, no per-schema namespaces; the isolation model is the file (step 5), not a privilege grant; `ATTACH` is not a substitute for a schema. |
+| x7: *Porting the capstone* | SQLite | The `m8` capstone rebuilt end to end: `DATE_TRUNC` → `strftime`, window totals and `ROUND`, the same result contract shape. This is the evidence that the port is a translation, not a rewrite. |
 
-A fourth, short course is optional and cheap once the three above exist —
+A fourth, short course is optional and cheap once the three above exist: 
 *SQLite for analysts* (read-only `SELECT`/`JOIN`/`GROUP BY`/window practice on
 the SQLite dataset with no dialect talk). It is noted here so nobody invents it
 twice; it is not part of the gate.
@@ -700,5 +700,5 @@ twice; it is not part of the gate.
 - Version a thing when something stored refers to it: `dataset_version` covers
   both datasets, and a dialect-tagged exercise keeps its own `version`.
 - No secrets, DSNs or host paths in logs, `QueryResult`, `/capabilities` or
-  `/diagnostics` — the M3 rule carries into the SQLite profile.
+  `/diagnostics`: the M3 rule carries into the SQLite profile.
 - Do not commit or tag without asking.

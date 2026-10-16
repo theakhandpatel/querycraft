@@ -1,4 +1,4 @@
-# Adversarial suite — published results (technical design §13.3)
+# Adversarial suite: published results (technical design §13.3)
 
 The design asks for ten named adversarial cases, and adds the sentence that
 makes them worth publishing: *"Each case must end in a bounded, reported outcome
@@ -70,12 +70,12 @@ learner: querycraft_learner (search_path=dataset, can_read_app=false)
 | --- | --- |
 | `pg_sleep` past the deadline | The deadline is enforced server-side by `SET LOCAL statement_timeout`, derived from the request's own budget. The statement is cancelled, not abandoned. |
 | Billion-row `generate_series` | The row cap stops the read, and the gateway *cancels* the query rather than draining it. See "Defects this suite found" below: before the fix this case took 4003 ms and held a pool connection for the whole deadline. |
-| Unbounded recursive CTE | The streaming form is cut off by the row cap in 5 ms. The aggregate form cannot be truncated, so the deadline ends it — that is the case that proves the timeout is not just a row cap in disguise. |
+| Unbounded recursive CTE | The streaming form is cut off by the row cap in 5 ms. The aggregate form cannot be truncated, so the deadline ends it: that is the case that proves the timeout is not just a row cap in disguise. |
 | Cross join explosion | An aggregate means every row must be produced, so only the deadline can end it. It does, in 608 ms against a 600 ms budget. |
 | `DO` block with a loop | No result set to cap, so the deadline is the only control. It holds. |
 | Reading `app.progress` | The app schema is a separate schema that is not on the learner's `search_path`, and the learner role holds no grant on it. `permission denied for schema app`. |
 | `COPY ... TO PROGRAM`, `pg_read_file`, `pg_ls_dir`, `CREATE EXTENSION`, `CREATE ROLE`, `CREATE DATABASE`, `ALTER SYSTEM` | Every one is a runtime error within milliseconds. The learner role is `NOSUPERUSER NOCREATEDB NOCREATEROLE NOREPLICATION NOBYPASSRLS` and the transaction is `READ ONLY`, so PostgreSQL refuses all of these before any policy code runs. |
-| `DROP TABLE` / `TRUNCATE` | Refused by the read-only transaction as well as by the missing grant — two independent controls. |
+| `DROP TABLE` / `TRUNCATE` | Refused by the read-only transaction as well as by the missing grant: two independent controls. |
 | 5 MB single value | The 1 MiB serialised-byte cap is a *hard* failure (`RESULT_LIMIT_EXCEEDED`) rather than a truncation, because a single row that does not fit cannot be represented partially. The response body stays tiny: the value is never marshalled into the response. |
 | Connection exhaustion | 24 concurrent slow statements against a cap of 8 all returned `QUERY_TIMEOUT`, none was dropped and none was a 5xx, and the pool drained to 0 acquired. Saturation is reported, not hidden. |
 | Runaway query while serving | `/health` and a real learner query both answered 200 *during* the runaway statement: one request cannot take the gateway out. |
@@ -90,13 +90,13 @@ looked like it should already pass:
    `42501 insufficient_privilege` in SQLSTATE class 42, whose name is "syntax
    error or access rule violation", and the classifier mapped the whole class to
    `QUERY_SYNTAX_ERROR`. A learner running `pg_read_file('/etc/passwd')` was told
-   their SQL had a syntax problem — the one thing that could not have helped.
+   their SQL had a syntax problem: the one thing that could not have helped.
    Class 42 still maps to a syntax error except for `42501`, which is now
    `QUERY_RUNTIME_ERROR` (`engine/execute.go`, tested in
    `engine/classify_test.go`).
 2. **Waiting for a pool connection was reported as an unreachable database.**
    `PgxExecutor.Query` wrapped every `BeginTx` failure as
-   `ErrEnvironmentUnavailable` — including a pool acquire that hit the request's
+   `ErrEnvironmentUnavailable`, including a pool acquire that hit the request's
    own deadline. Under the concurrency case, 15 of 24 requests told the learner
    "the execution environment is unavailable" when the environment was fine and
    the gateway was merely busy. Pool-wait deadlines are now `ErrPoolTimeout` and
@@ -129,7 +129,7 @@ observed in the run above; none of it is hypothetical.
   `shared_buffers`, `port` and `ssl_key_file` are visible to the learner role
   (three of the four names checked returned a value; the count of visible
   settings is 375). Host paths are not: `data_directory`, `config_file` and
-  `hba_file` are superuser-only GUCs and PostgreSQL filters them out — the suite
+  `hba_file` are superuser-only GUCs and PostgreSQL filters them out: the suite
   asserts that too, because "the catalog is readable" and "the data directory is
   exposed" are very different claims.
 - **`pg_stat_activity` is readable.** The learner can count connections and see
@@ -140,8 +140,8 @@ observed in the run above; none of it is hypothetical.
   while a statement runs. Adapter B has no reset route: the browser adapter
   resets a Worker, and on the gateway the equivalent controls are the deadline
   and, in future, a template recreate per challenge. The suite tests the
-  reachable half — a runaway statement being ended while the service keeps
-  serving — and this paragraph is here so that nobody reads a green tick as
+  reachable half: a runaway statement being ended while the service keeps
+  serving, and this paragraph is here so that nobody reads a green tick as
   proof of the other half.
 - **A cancelled statement is tested through the deadline, not through an
   operator.** `pg_terminate_backend` from an administrative connection would

@@ -88,7 +88,7 @@ async function main() {
   const env = await liveEnv('ai');
 
   /* ---------- phase 1: generation, with the deterministic provider ---------- */
-  let gw = await startGateway(bin, { ...env, QC_AI_PROVIDER: 'fake' });
+  let gw = await startGateway(bin, { ...env, ai_provider: 'fake' });
   let base = gw.base;
   let token = await signup(base, `ai-audit-${process.pid}@querycraft.local`);
 
@@ -178,7 +178,7 @@ async function main() {
   stopGateway(gw.child);
   await new Promise((r) => setTimeout(r, 500));
 
-  gw = await startGateway(bin, { ...env, QC_AI_PROVIDER: 'fake' });
+  gw = await startGateway(bin, { ...env, ai_provider: 'fake' });
   base = gw.base;
   const again = await getJSON(`${base}/challenges/${id}`, 15_000, auth(token));
   const listed = await getJSON(`${base}/challenges`, 15_000, auth(token));
@@ -223,7 +223,7 @@ async function main() {
   await new Promise((r) => setTimeout(r, 500));
 
   /* ---------- phase 4: AI off changes nothing else ---------- */
-  gw = await startGateway(bin, { ...env, QC_AI_PROVIDER: 'off' });
+  gw = await startGateway(bin, { ...env, ai_provider: 'off' });
   base = gw.base;
   report.section('gate 6 — disabling AI leaves every other feature working');
   const offCaps = await getJSON(`${base}/capabilities`);

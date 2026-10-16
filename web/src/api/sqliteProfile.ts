@@ -35,7 +35,8 @@
  */
 
 import contract from '../../../contracts/dialects/sqlite.json';
-import type { EngineCapabilities, RowValue } from '../types';
+import { isQueryErrorCode } from '../types';
+import type { EngineCapabilities, QueryErrorCode, RowValue } from '../types';
 
 /** The engine name a result row carries. The Go side reports the same string
     shape (`SQLite 3.50.3`) from the driver's own `sqlite_version()`. */
@@ -50,7 +51,7 @@ type MatchKind = (typeof MATCH_KINDS)[number];
 interface MessageRule {
   match: MatchKind;
   pattern: string;
-  code: string;
+  code: QueryErrorCode;
 }
 
 function isMatchKind(value: string): value is MatchKind {
@@ -62,6 +63,12 @@ const RULES: readonly MessageRule[] = (contract.error_classification as readonly
   .map((rule, i) => {
     if (!isMatchKind(rule.match)) {
       throw new Error(`contracts/dialects/sqlite.json error_classification[${i}] has match "${rule.match}", which is not one of ${MATCH_KINDS.join(', ')}`);
+    }
+    /* The profile is contract data, not a closed set TypeScript can see. A
+       rule code outside query-result.schema.json would compile and then crash
+       the UI's own branching, so it fails here, at import. */
+    if (!isQueryErrorCode(rule.code)) {
+      throw new Error(`contracts/dialects/sqlite.json error_classification[${i}] has code "${rule.code}", which is outside contracts/query-result.schema.json`);
     }
     return { match: rule.match, pattern: rule.pattern, code: rule.code };
   });
@@ -81,7 +88,7 @@ export function sqliteErrorRules(): readonly MessageRule[] {
  * and the profile's last rule is the catch-all, so this always returns a code —
  * the same guarantee `TestClassifyErrorNeverEmitsExecutorCodes` pins on the Go
  * side. */
-export function classifySqliteMessage(message: string): string {
+export function classifySqliteMessage(message: string): QueryErrorCode {
   const msg = message.trim();
   for (const rule of RULES) {
     if (rule.match === 'equals' && msg === rule.pattern) return rule.code;

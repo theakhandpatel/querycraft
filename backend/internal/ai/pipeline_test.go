@@ -7,6 +7,7 @@ import (
 	"testing"
 
 	"github.com/querycraft/sqlquery/backend/internal/eval"
+	"github.com/querycraft/sqlquery/backend/internal/schema"
 )
 
 func TestPipelineActivatesAPersistedChallenge(t *testing.T) {
@@ -15,14 +16,14 @@ func TestPipelineActivatesAPersistedChallenge(t *testing.T) {
 	depot := newTestDepot()
 	svc := testService(NewFakeProvider(), depot, ex)
 
-	out := svc.GenerateChallenge(ctx, GenerationRequest{
+	out := svc.GenerateChallenge(ctx, schema.GenerationRequest{
 		Title:         "Orders per customer",
 		Topics:        []string{"joins"},
-		Difficulty:    Beginner,
+		Difficulty:    schema.Beginner,
 		ExerciseCount: 3,
 	})
-	if out.Status != StatusActive {
-		t.Fatalf("status = %q, want %q (error = %v, stages = %+v)", out.Status, StatusActive, out.Error, out.Stages)
+	if out.Status != schema.StatusActive {
+		t.Fatalf("status = %q, want %q (error = %v, stages = %+v)", out.Status, schema.StatusActive, out.Error, out.Stages)
 	}
 	if out.Artifact == nil {
 		t.Fatal("an active outcome must carry the artifact")
@@ -34,9 +35,9 @@ func TestPipelineActivatesAPersistedChallenge(t *testing.T) {
 	// Every stage that ran is reported, and the repair stage is reported as
 	// skipped rather than omitted, because no repair was needed.
 	for _, name := range stageOrder {
-		want := StateDone
-		if name == StageRepair {
-			want = StateSkipped
+		want := schema.StateDone
+		if name == schema.StageRepair {
+			want = schema.StateSkipped
 		}
 		if got := stageState(out, name); got != want {
 			t.Errorf("stage %s = %q, want %q", name, got, want)
@@ -45,7 +46,7 @@ func TestPipelineActivatesAPersistedChallenge(t *testing.T) {
 			t.Errorf("stage %s has no detail; the client renders it verbatim", name)
 		}
 	}
-	if got := stageDetail(out, StageRepair); got != "not needed: no stage failed" {
+	if got := stageDetail(out, schema.StageRepair); got != "not needed: no stage failed" {
 		t.Errorf("repair detail = %q, want the reason it was skipped", got)
 	}
 
@@ -61,7 +62,7 @@ func TestPipelineActivatesAPersistedChallenge(t *testing.T) {
 
 	// Provenance is stamped by the service, not the provider.
 	p := out.Artifact.Provenance
-	if p.Provider != "fake" || p.Model != "fake-v1" || p.PipelineVersion != PipelineVersion ||
+	if p.Provider != "fake" || p.Model != "fake-v1" || p.PipelineVersion != schema.PipelineVersion ||
 		p.EvaluatorVersion != eval.EvaluatorVersion || p.DatasetVersion != 1 || p.CreatedAt.IsZero() {
 		t.Fatalf("provenance = %+v, want it stamped from the provider and the evaluator", p)
 	}
@@ -72,7 +73,7 @@ func TestPipelineActivatesAPersistedChallenge(t *testing.T) {
 	if err != nil || !found {
 		t.Fatalf("Challenge() found = %v err = %v", found, err)
 	}
-	if rec.Status != StatusActive || rec.Artifact.ReferenceSolution == "" {
+	if rec.Status != schema.StatusActive || rec.Artifact.ReferenceSolution == "" {
 		t.Fatalf("stored record = %+v, want the active artifact", rec)
 	}
 
@@ -106,22 +107,22 @@ func TestInvalidGeneratedSetupNeverBecomesActive(t *testing.T) {
 
 	tests := []struct {
 		name      string
-		mutate    func(*Artifact)
+		mutate    func(*schema.Artifact)
 		wantStage string
 	}{
 		{
 			name:      "unrunnable reference",
-			mutate:    func(a *Artifact) { a.ReferenceSolution = `SELECT * FROM "dataset"."no_such_table"` },
-			wantStage: StageReferenceContract,
+			mutate:    func(a *schema.Artifact) { a.ReferenceSolution = `SELECT * FROM "dataset"."no_such_table"` },
+			wantStage: schema.StageReferenceContract,
 		},
 		{
 			name:      "missing result columns",
-			mutate:    func(a *Artifact) { a.ResultContract.Columns = []string{} },
-			wantStage: StageValidateArtifact,
+			mutate:    func(a *schema.Artifact) { a.ResultContract.Columns = []string{} },
+			wantStage: schema.StageValidateArtifact,
 		},
 		{
 			name: "a fixture that wrongly passes",
-			mutate: func(a *Artifact) {
+			mutate: func(a *schema.Artifact) {
 				// The default wrong-columns fixture becomes a correct answer to
 				// this contract, so the evaluator would accept a query that is
 				// not the reference. The pipeline must notice.
@@ -131,16 +132,16 @@ func TestInvalidGeneratedSetupNeverBecomesActive(t *testing.T) {
 				a.ResultContract.RowOrder = "ignored"
 				a.ResultContract.Duplicates = "ignored"
 			},
-			wantStage: StageAdversarialFixtures,
+			wantStage: schema.StageAdversarialFixtures,
 		},
 	}
 	for _, tc := range tests {
 		t.Run(tc.name, func(t *testing.T) {
 			depot := newTestDepot()
 			svc := testService(mutateProvider{base: fake, mutate: tc.mutate}, depot, ex)
-			out := svc.GenerateChallenge(ctx, GenerationRequest{Title: "Broken", Topics: []string{"joins"}})
+			out := svc.GenerateChallenge(ctx, schema.GenerationRequest{Title: "Broken", Topics: []string{"joins"}})
 
-			if out.Status == StatusActive {
+			if out.Status == schema.StatusActive {
 				t.Fatal("a broken bundle was activated")
 			}
 			if out.Artifact != nil {
@@ -167,7 +168,7 @@ func TestCrossCheckDisagreementIsRejected(t *testing.T) {
 	ctx := testContext(t)
 	depot := newTestDepot()
 
-	broken := mutateProvider{base: NewFakeProvider(), mutate: func(a *Artifact) {
+	broken := mutateProvider{base: NewFakeProvider(), mutate: func(a *schema.Artifact) {
 		// Same rows, wrong counts: the two solutions genuinely disagree.
 		a.CrossCheckSolution = `SELECT c.name AS customer_name, count(o.id) + 1 AS order_count
 FROM "dataset"."customers" c
@@ -176,16 +177,16 @@ GROUP BY c.name
 ORDER BY order_count DESC, customer_name ASC`
 	}}
 	svc := testService(broken, depot, ex)
-	out := svc.GenerateChallenge(ctx, GenerationRequest{Title: "Disagreeing", Topics: []string{"joins"}})
+	out := svc.GenerateChallenge(ctx, schema.GenerationRequest{Title: "Disagreeing", Topics: []string{"joins"}})
 
-	if out.Status != StatusRejected {
-		t.Fatalf("status = %q, want %q", out.Status, StatusRejected)
+	if out.Status != schema.StatusRejected {
+		t.Fatalf("status = %q, want %q", out.Status, schema.StatusRejected)
 	}
 	if out.Error == nil || out.Error.Code != CodeCrossCheckFailed {
 		t.Fatalf("error = %+v, want code %q", out.Error, CodeCrossCheckFailed)
 	}
-	if out.Error.Stage != StageCrossCheck {
-		t.Fatalf("error stage = %q, want %q", out.Error.Stage, StageCrossCheck)
+	if out.Error.Stage != schema.StageCrossCheck {
+		t.Fatalf("error stage = %q, want %q", out.Error.Stage, schema.StageCrossCheck)
 	}
 	if n := depot.activeCount(); n != 0 {
 		t.Fatalf("depot holds %d active challenge(s), want 0", n)
@@ -204,21 +205,21 @@ func TestRepairBudgetIsBounded(t *testing.T) {
 	}
 	broken := countingProvider{
 		calls: &calls,
-		base: mutateProvider{base: NewFakeProvider(), mutate: func(a *Artifact) {
+		base: mutateProvider{base: NewFakeProvider(), mutate: func(a *schema.Artifact) {
 			a.ReferenceSolution = `DROP TABLE "dataset"."orders"`
 		}},
 	}
 	svc := testService(broken, depot, ex)
-	out := svc.GenerateChallenge(ctx, GenerationRequest{Title: "Never valid", Topics: []string{"joins"}})
+	out := svc.GenerateChallenge(ctx, schema.GenerationRequest{Title: "Never valid", Topics: []string{"joins"}})
 
-	if out.Status != StatusRejected {
-		t.Fatalf("status = %q, want %q", out.Status, StatusRejected)
+	if out.Status != schema.StatusRejected {
+		t.Fatalf("status = %q, want %q", out.Status, schema.StatusRejected)
 	}
 	if out.Error == nil || out.Error.Code != CodeRepairExhausted {
 		t.Fatalf("error = %+v, want code %q", out.Error, CodeRepairExhausted)
 	}
-	if out.Error.Stage != StageValidateArtifact {
-		t.Fatalf("error stage = %q, want %q", out.Error.Stage, StageValidateArtifact)
+	if out.Error.Stage != schema.StageValidateArtifact {
+		t.Fatalf("error stage = %q, want %q", out.Error.Stage, schema.StageValidateArtifact)
 	}
 	if len(out.Attempts) != limits.MaxRepairs {
 		t.Fatalf("attempts = %d, want exactly %d", len(out.Attempts), limits.MaxRepairs)
@@ -240,11 +241,11 @@ func TestRepairBudgetIsBounded(t *testing.T) {
 	if n := depot.activeCount(); n != 0 {
 		t.Fatalf("depot holds %d active challenge(s), want 0", n)
 	}
-	if got := stageState(out, StageActivate); got != StateSkipped {
-		t.Fatalf("activate stage = %q, want %q", got, StateSkipped)
+	if got := stageState(out, schema.StageActivate); got != schema.StateSkipped {
+		t.Fatalf("activate stage = %q, want %q", got, schema.StateSkipped)
 	}
-	if got := stageState(out, StageRepair); got != StateDone {
-		t.Fatalf("repair stage = %q, want %q (repairs were attempted)", got, StateDone)
+	if got := stageState(out, schema.StageRepair); got != schema.StateDone {
+		t.Fatalf("repair stage = %q, want %q (repairs were attempted)", got, schema.StateDone)
 	}
 }
 
@@ -261,9 +262,9 @@ func TestUnavailableEnvironmentIsReportedNotRepaired(t *testing.T) {
 		Depot:    depot,
 		Runner:   failingRunner{},
 	})
-	out := svc.GenerateChallenge(ctx, GenerationRequest{Title: "No database", Topics: []string{"joins"}})
-	if out.Status != StatusFailed {
-		t.Fatalf("status = %q, want %q", out.Status, StatusFailed)
+	out := svc.GenerateChallenge(ctx, schema.GenerationRequest{Title: "No database", Topics: []string{"joins"}})
+	if out.Status != schema.StatusFailed {
+		t.Fatalf("status = %q, want %q", out.Status, schema.StatusFailed)
 	}
 	if out.Error == nil || out.Error.Code != CodeEnvironmentDown {
 		t.Fatalf("error = %+v, want code %q", out.Error, CodeEnvironmentDown)
@@ -278,7 +279,7 @@ func TestUnavailableEnvironmentIsReportedNotRepaired(t *testing.T) {
 // requires: `stages` and `attempts` are arrays. A nil Go slice encodes as
 // `null`, which the schema rejects, so this is a contract test rather than a
 // formatting preference.
-func assertArraysNotNull(t *testing.T, out Outcome) {
+func assertArraysNotNull(t *testing.T, out schema.Outcome) {
 	t.Helper()
 	raw, err := json.Marshal(out)
 	if err != nil {
@@ -305,29 +306,29 @@ func assertArraysNotNull(t *testing.T, out Outcome) {
 // guarantee: a pipeline that never repaired and never got past its first stage
 // still reports arrays and a reason on every row.
 func TestOutcomeWithoutRepairsMarshalsArrays(t *testing.T) {
-	p := newPipeline(nil, GenerationRequest{Kind: "challenge"}, DefaultLimits())
-	out := p.outcome(StatusFailed, nil,
-		newError(CodeRepairExhausted, StageValidateArtifact, "the bundle was refused", "hints: too many"))
+	p := newPipeline(nil, schema.GenerationRequest{Kind: "challenge"}, DefaultLimits())
+	out := p.outcome(schema.StatusFailed, nil,
+		NewError(CodeRepairExhausted, schema.StageValidateArtifact, "the bundle was refused", "hints: too many"))
 
 	assertArraysNotNull(t, out)
-	if got := stageState(out, StageRepair); got != StateSkipped {
-		t.Fatalf("repair = %q, want %q", got, StateSkipped)
+	if got := stageState(out, schema.StageRepair); got != schema.StateSkipped {
+		t.Fatalf("repair = %q, want %q", got, schema.StateSkipped)
 	}
-	if got := stageDetail(out, StageRepair); got != "not needed: no stage failed" {
+	if got := stageDetail(out, schema.StageRepair); got != "not needed: no stage failed" {
 		t.Fatalf("repair detail = %q", got)
 	}
 
 	// A stage skipped because an earlier one failed says which one stopped it.
-	p = newPipeline(nil, GenerationRequest{Kind: "challenge"}, DefaultLimits())
-	p.mark(StageValidateRequest, StateFailed, "bad request")
-	out = p.outcome(StatusFailed, nil, newError(CodeInvalidRequest, StageValidateRequest, "bad request", "title"))
-	if got := stageDetail(out, StageActivate); got != "skipped: validate_request failed" {
+	p = newPipeline(nil, schema.GenerationRequest{Kind: "challenge"}, DefaultLimits())
+	p.mark(schema.StageValidateRequest, schema.StateFailed, "bad request")
+	out = p.outcome(schema.StatusFailed, nil, NewError(CodeInvalidRequest, schema.StageValidateRequest, "bad request", "title"))
+	if got := stageDetail(out, schema.StageActivate); got != "skipped: validate_request failed" {
 		t.Fatalf("activate detail = %q, want the stage that stopped the run", got)
 	}
-	if got := stageDetail(out, StageRepair); got != "skipped: validate_request failed" {
+	if got := stageDetail(out, schema.StageRepair); got != "skipped: validate_request failed" {
 		t.Fatalf("repair detail = %q, want the stage that stopped the run", got)
 	}
-	if got := stageDetail(out, StageValidateRequest); got != "bad request" {
+	if got := stageDetail(out, schema.StageValidateRequest); got != "bad request" {
 		t.Fatalf("validate_request detail = %q, want the failure detail", got)
 	}
 }

@@ -9,8 +9,8 @@ import (
 	"testing"
 	"time"
 
-	"github.com/querycraft/sqlquery/backend/internal/ai"
 	"github.com/querycraft/sqlquery/backend/internal/pgtest"
+	"github.com/querycraft/sqlquery/backend/internal/schema"
 )
 
 type storeFactory func(t *testing.T) Store
@@ -101,7 +101,7 @@ func parityRoundTrip(t *testing.T, st Store) {
 		t.Fatalf("stored course request was aliased: %+v err=%v", againCourse.Request, err)
 	}
 
-	run := sampleRun("run_deep", "u_alice", ai.StatusActive, at)
+	run := sampleRun("run_deep", "u_alice", schema.StatusActive, at)
 	if err := st.SaveRun(ctx, run); err != nil {
 		t.Fatalf("save run: %v", err)
 	}
@@ -160,7 +160,7 @@ func parityNewestFirst(t *testing.T, st Store) {
 	ctx := context.Background()
 	base := time.Date(2026, 1, 2, 3, 4, 5, 0, time.UTC)
 	for i, id := range []string{"run_old", "run_mid", "run_new"} {
-		if err := st.SaveRun(ctx, sampleRun(id, "u_alice", ai.StatusActive, base.Add(time.Duration(i)*time.Minute))); err != nil {
+		if err := st.SaveRun(ctx, sampleRun(id, "u_alice", schema.StatusActive, base.Add(time.Duration(i)*time.Minute))); err != nil {
 			t.Fatalf("save run: %v", err)
 		}
 	}
@@ -202,7 +202,7 @@ func parityNewestFirst(t *testing.T, st Store) {
 func parityOwnerCarried(t *testing.T, st Store) {
 	ctx := context.Background()
 	for _, owner := range []string{"u_alice", "u_bob"} {
-		if err := st.SaveRun(ctx, sampleRun("run_"+owner, owner, ai.StatusActive, time.Now().UTC())); err != nil {
+		if err := st.SaveRun(ctx, sampleRun("run_"+owner, owner, schema.StatusActive, time.Now().UTC())); err != nil {
 			t.Fatalf("save: %v", err)
 		}
 	}
@@ -226,11 +226,11 @@ func parityOwnerCarried(t *testing.T, st Store) {
 func parityUpsert(t *testing.T, st Store) {
 	ctx := context.Background()
 	start := time.Date(2026, 1, 2, 3, 4, 5, 123456000, time.UTC)
-	first := sampleRun("run_upsert", "u_alice", ai.StatusActive, start)
+	first := sampleRun("run_upsert", "u_alice", schema.StatusActive, start)
 	if err := st.SaveRun(ctx, first); err != nil {
 		t.Fatal(err)
 	}
-	second := sampleRun("run_upsert", "u_bob", ai.StatusFailed, start.Add(time.Hour))
+	second := sampleRun("run_upsert", "u_bob", schema.StatusFailed, start.Add(time.Hour))
 	second.Entries = second.Entries[:1]
 	second.EntryCount = 1
 	if err := st.SaveRun(ctx, second); err != nil {
@@ -261,7 +261,7 @@ func parityUpsert(t *testing.T, st Store) {
 		t.Fatalf("challenge upsert=%+v ok=%v err=%v", gotChallenge, ok, err)
 	}
 
-	proposal := ai.PatchProposal{ID: "patch_1", ChallengeID: "ch_upsert", Summary: "update contract", Changes: []ai.PatchChange{{Field: "row_order", From: "exact", To: "ignored"}}}
+	proposal := schema.PatchProposal{ID: "patch_1", ChallengeID: "ch_upsert", Summary: "update contract", Changes: []schema.PatchChange{{Field: "row_order", From: "exact", To: "ignored"}}}
 	if err := st.SavePatch(ctx, proposal); err != nil {
 		t.Fatalf("save patch: %v", err)
 	}
@@ -341,7 +341,7 @@ func TestSQLiteStoreSurvivesCloseAndReopen(t *testing.T) {
 	if err := first.SaveProgress(ctx, "u_restart", "course", json.RawMessage(`{"done":true}`)); err != nil {
 		t.Fatal(err)
 	}
-	if err := first.SaveRun(ctx, sampleRun("run_restart", "u_restart", ai.StatusActive, time.Date(2026, 1, 2, 3, 4, 5, 0, time.UTC))); err != nil {
+	if err := first.SaveRun(ctx, sampleRun("run_restart", "u_restart", schema.StatusActive, time.Date(2026, 1, 2, 3, 4, 5, 0, time.UTC))); err != nil {
 		t.Fatal(err)
 	}
 	if err := first.Close(); err != nil {

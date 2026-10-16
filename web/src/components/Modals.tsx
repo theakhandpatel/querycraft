@@ -1,5 +1,6 @@
 import React, { useEffect, useState } from 'react';
 import Icon from './ui/Icon';
+import Field from './ui/Field';
 import { useStore } from '../state/store';
 import { MODULES } from '../data/curriculum';
 import { activeModules } from '../lib/model';
@@ -10,6 +11,9 @@ function Backdrop({ id, children }: { id: string; children: React.ReactNode }) {
     <div
       className={`modalback${s.modal === id ? ' open' : ''}`}
       onClick={(e) => { if (e.target === e.currentTarget) s.closeModal(); }}
+      /* The click outside is a pointer convenience. Escape is the keyboard
+         path, and it reaches the panel from any field inside it. */
+      onKeyDown={(e) => { if (e.key === 'Escape') s.closeModal(); }}
     >
       <div className="modal">{children}</div>
     </div>
@@ -49,15 +53,17 @@ function EditCourseModal() {
   return (
     <Backdrop id="editCourse">
       <Head eyebrow="Course settings" title="Edit course context" sub="Change the course without losing the existing draft." />
-      <div className="field"><label>Course title</label><input value={title} onChange={(e) => setTitle(e.target.value)} /></div>
-      <div className="field"><label>Learning goal</label><textarea value={goal} onChange={(e) => setGoal(e.target.value)} /></div>
-      <div className="field"><label>Assumed starting point</label><input value={level} onChange={(e) => setLevel(e.target.value)} /></div>
-      <div className="field"><label>Context / business rules</label><textarea value={context} onChange={(e) => setContext(e.target.value)} /></div>
-      <div className="field"><label>Dialect</label>
-        <select value={dialect} onChange={(e) => setDialect(e.target.value)}>
-          <option>PostgreSQL</option><option>SQLite</option><option>MySQL</option><option>SQL Server</option>
-        </select>
-      </div>
+      <Field label="Course title">{(id) => <input id={id} value={title} onChange={(e) => setTitle(e.target.value)} />}</Field>
+      <Field label="Learning goal">{(id) => <textarea id={id} value={goal} onChange={(e) => setGoal(e.target.value)} />}</Field>
+      <Field label="Assumed starting point">{(id) => <input id={id} value={level} onChange={(e) => setLevel(e.target.value)} />}</Field>
+      <Field label="Context / business rules">{(id) => <textarea id={id} value={context} onChange={(e) => setContext(e.target.value)} />}</Field>
+      <Field label="Dialect">
+        {(id) => (
+          <select id={id} value={dialect} onChange={(e) => setDialect(e.target.value)}>
+            <option>PostgreSQL</option><option>SQLite</option><option>MySQL</option><option>SQL Server</option>
+          </select>
+        )}
+      </Field>
       <div className="modalfoot">
         <button onClick={() => s.closeModal()}>Cancel</button>
         <button className="primary" onClick={() => { s.setReviewGoal(goal); s.saveCourseEdits({ title, goal, context, dialect }); s.closeModal(); }}>Save changes</button>
@@ -85,9 +91,9 @@ function EditLessonModal() {
   return (
     <Backdrop id="editLesson">
       <Head eyebrow="Chapter editor" title="Edit this chapter" sub="Edit this chapter independently from the rest of the course." />
-      <div className="field"><label>Chapter title</label><input value={title || ''} onChange={(e) => setTitle(e.target.value)} /></div>
-      <div className="field"><label>Chapter page / explanation</label><textarea value={body || ''} onChange={(e) => setBody(e.target.value)} /></div>
-      <div className="field"><label>Exercise prompt</label><textarea value={prompt} onChange={(e) => setPrompt(e.target.value)} /></div>
+      <Field label="Chapter title">{(id) => <input id={id} value={title || ''} onChange={(e) => setTitle(e.target.value)} />}</Field>
+      <Field label="Chapter page / explanation">{(id) => <textarea id={id} value={body || ''} onChange={(e) => setBody(e.target.value)} />}</Field>
+      <Field label="Exercise prompt">{(id) => <textarea id={id} value={prompt} onChange={(e) => setPrompt(e.target.value)} />}</Field>
       <div className="modalfoot">
         <button onClick={() => s.closeModal()}>Cancel</button>
         <button className="primary" onClick={() => { s.saveLessonEdits({ title, summary: body }); s.closeModal(); }}>Save chapter</button>
@@ -119,10 +125,9 @@ function ExtendModal() {
           </button>
         ))}
       </div>
-      <div className="field">
-        <label>What should change? (optional)</label>
-        <textarea value={prompt} onChange={(e) => setPrompt(e.target.value)} placeholder="e.g. Make the window-function section much harder. Include date gaps, ties, NULLs, and performance trade-offs." />
-      </div>
+      <Field label="What should change? (optional)">
+        {(id) => <textarea id={id} value={prompt} onChange={(e) => setPrompt(e.target.value)} placeholder="e.g. Make the window-function section much harder. Include date gaps, ties, NULLs, and performance trade-offs." />}
+      </Field>
       <div className="modalfoot">
         <button onClick={() => s.closeModal()}>Cancel</button>
         <button className="primary" onClick={() => { s.applyExtension(kind, prompt); s.closeModal(); }}>Generate extension<Icon name="sparkles" /></button>
@@ -139,15 +144,17 @@ function AddLessonModal() {
   return (
     <Backdrop id="addLesson">
       <Head eyebrow="Chapter editor" title="Add a chapter" sub="Describe a topic or choose a useful next step." />
-      <div className="field"><label>Chapter title</label><input value={title} onChange={(e) => setTitle(e.target.value)} placeholder="e.g. Debugging row multiplication in multi-join queries" /></div>
-      <div className="field"><label>What should the learner be able to do?</label><textarea value={goal} onChange={(e) => setGoal(e.target.value)} placeholder="Describe the skill, challenge, or concept this chapter should cover." /></div>
-      <div className="field"><label>Placement</label>
-        <select value={position} onChange={(e) => setPosition(e.target.value)}>
-          <option value="end">At the end of the course</option>
-          <option value="before">Before the final challenge</option>
-          <option value="after">After the current chapter</option>
-        </select>
-      </div>
+      <Field label="Chapter title">{(id) => <input id={id} value={title} onChange={(e) => setTitle(e.target.value)} placeholder="e.g. Debugging row multiplication in multi-join queries" />}</Field>
+      <Field label="What should the learner be able to do?">{(id) => <textarea id={id} value={goal} onChange={(e) => setGoal(e.target.value)} placeholder="Describe the skill, challenge, or concept this chapter should cover." />}</Field>
+      <Field label="Placement">
+        {(id) => (
+          <select id={id} value={position} onChange={(e) => setPosition(e.target.value)}>
+            <option value="end">At the end of the course</option>
+            <option value="before">Before the final challenge</option>
+            <option value="after">After the current chapter</option>
+          </select>
+        )}
+      </Field>
       <div className="modalfoot">
         <button onClick={() => s.closeModal()}>Cancel</button>
         <button className="primary" onClick={() => { s.addLesson({ title, goal, position }); setTitle(''); setGoal(''); s.closeModal(); }}>Add to draft</button>

@@ -52,8 +52,8 @@ Answer prose.
 ## Allowed content
 
 - Markdown: paragraphs, lists, tables, blockquotes, inline code, fenced code.
-- ```sql fences — rendered as code, not run.
-- ```mermaid fences — rendered to SVG in the browser (`securityLevel: 'strict'`).
+- ```sql fences: rendered as code, not run.
+- ```mermaid fences: rendered to SVG in the browser (`securityLevel: 'strict'`).
 - Inline HTML limited to `<details>`, `<summary>` and
   `<span class="kbd-inline">…</span>`; everything is sanitised by DOMPurify.
 
@@ -80,7 +80,7 @@ being silently re-graded (technical design §7.3).
 
 Grading rules are shared by the JS evaluator (`web/src/api/compare.ts`) and the
 Go evaluator (`backend/internal/eval/compare.go`). Add a rule as cases in
-`contracts/fixtures/` first — one JSON file per case with
-`{ contract, actual_result, expected_outcome }` — then implement it so both
+`contracts/fixtures/` first: one JSON file per case with
+`{ contract, actual_result, expected_outcome }`, then implement it so both
 languages pass the same files (`make audit-fixtures`, `make test`). See
 `contracts/fixtures/README.md`.

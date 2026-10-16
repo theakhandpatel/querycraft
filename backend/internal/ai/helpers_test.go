@@ -9,8 +9,10 @@ import (
 	"testing"
 	"time"
 
+	"github.com/querycraft/sqlquery/backend/internal/ai/provider"
 	"github.com/querycraft/sqlquery/backend/internal/engine"
 	"github.com/querycraft/sqlquery/backend/internal/pgtest"
+	"github.com/querycraft/sqlquery/backend/internal/schema"
 )
 
 // Test seams.
@@ -50,50 +52,50 @@ func testContext(t *testing.T) context.Context {
 // testDepot is an in-process Depot.
 type testDepot struct {
 	mu         sync.Mutex
-	challenges map[string]Record
-	courses    map[string]CourseRecord
-	patches    map[string]PatchProposal
+	challenges map[string]schema.Record
+	courses    map[string]schema.CourseRecord
+	patches    map[string]schema.PatchProposal
 	approved   map[string]string
-	runs       map[string]RunTranscript
+	runs       map[string]schema.RunTranscript
 	saves      int
 }
 
 func newTestDepot() *testDepot {
 	return &testDepot{
-		challenges: map[string]Record{},
-		courses:    map[string]CourseRecord{},
-		patches:    map[string]PatchProposal{},
+		challenges: map[string]schema.Record{},
+		courses:    map[string]schema.CourseRecord{},
+		patches:    map[string]schema.PatchProposal{},
 		approved:   map[string]string{},
-		runs:       map[string]RunTranscript{},
+		runs:       map[string]schema.RunTranscript{},
 	}
 }
 
-func (d *testDepot) SaveRun(_ context.Context, rec RunTranscript) error {
+func (d *testDepot) SaveRun(_ context.Context, rec schema.RunTranscript) error {
 	d.mu.Lock()
 	defer d.mu.Unlock()
 	d.runs[rec.ID] = rec
 	return nil
 }
 
-func (d *testDepot) Run(_ context.Context, id string) (RunTranscript, bool, error) {
+func (d *testDepot) Run(_ context.Context, id string) (schema.RunTranscript, bool, error) {
 	d.mu.Lock()
 	defer d.mu.Unlock()
 	rec, ok := d.runs[id]
 	return rec, ok, nil
 }
 
-func (d *testDepot) Runs(_ context.Context) ([]RunSummary, error) {
+func (d *testDepot) Runs(_ context.Context) ([]schema.RunSummary, error) {
 	return d.runsFor("")
 }
 
-func (d *testDepot) RunsFor(_ context.Context, ownerID string) ([]RunSummary, error) {
+func (d *testDepot) RunsFor(_ context.Context, ownerID string) ([]schema.RunSummary, error) {
 	return d.runsFor(ownerID)
 }
 
-func (d *testDepot) runsFor(ownerID string) ([]RunSummary, error) {
+func (d *testDepot) runsFor(ownerID string) ([]schema.RunSummary, error) {
 	d.mu.Lock()
 	defer d.mu.Unlock()
-	out := make([]RunSummary, 0, len(d.runs))
+	out := make([]schema.RunSummary, 0, len(d.runs))
 	for _, rec := range d.runs {
 		if ownerID != "" && rec.OwnerID != ownerID {
 			continue
@@ -111,19 +113,19 @@ func (d *testDepot) runCount() int {
 }
 
 // runByID returns the stored transcript for a run id.
-func (d *testDepot) runByID(id string) (RunTranscript, bool) {
+func (d *testDepot) runByID(id string) (schema.RunTranscript, bool) {
 	d.mu.Lock()
 	defer d.mu.Unlock()
 	rec, ok := d.runs[id]
 	return rec, ok
 }
 
-func (d *testDepot) SaveChallenge(_ context.Context, rec Record) error {
+func (d *testDepot) SaveChallenge(_ context.Context, rec schema.Record) error {
 	if rec.Artifact.ID == "" {
 		return fmt.Errorf("challenge id is required")
 	}
 	if rec.Status == "" {
-		rec.Status = StatusActive
+		rec.Status = schema.StatusActive
 	}
 	if rec.CreatedAt.IsZero() {
 		rec.CreatedAt = time.Now().UTC()
@@ -135,25 +137,25 @@ func (d *testDepot) SaveChallenge(_ context.Context, rec Record) error {
 	return nil
 }
 
-func (d *testDepot) Challenge(_ context.Context, id string) (Record, bool, error) {
+func (d *testDepot) Challenge(_ context.Context, id string) (schema.Record, bool, error) {
 	d.mu.Lock()
 	defer d.mu.Unlock()
 	rec, ok := d.challenges[id]
 	return rec, ok, nil
 }
 
-func (d *testDepot) Challenges(_ context.Context) ([]Record, error) {
+func (d *testDepot) Challenges(_ context.Context) ([]schema.Record, error) {
 	return d.challengesFor("")
 }
 
-func (d *testDepot) ChallengesFor(_ context.Context, ownerID string) ([]Record, error) {
+func (d *testDepot) ChallengesFor(_ context.Context, ownerID string) ([]schema.Record, error) {
 	return d.challengesFor(ownerID)
 }
 
-func (d *testDepot) challengesFor(ownerID string) ([]Record, error) {
+func (d *testDepot) challengesFor(ownerID string) ([]schema.Record, error) {
 	d.mu.Lock()
 	defer d.mu.Unlock()
-	out := make([]Record, 0, len(d.challenges))
+	out := make([]schema.Record, 0, len(d.challenges))
 	for _, rec := range d.challenges {
 		if ownerID != "" && rec.OwnerID != ownerID {
 			continue
@@ -173,12 +175,12 @@ func (d *testDepot) DeleteChallenge(_ context.Context, id string) error {
 	return nil
 }
 
-func (d *testDepot) SaveCourse(_ context.Context, rec CourseRecord) error {
+func (d *testDepot) SaveCourse(_ context.Context, rec schema.CourseRecord) error {
 	if rec.Plan.ID == "" {
 		return fmt.Errorf("course id is required")
 	}
 	if rec.Status == "" {
-		rec.Status = StatusActive
+		rec.Status = schema.StatusActive
 	}
 	if rec.CreatedAt.IsZero() {
 		rec.CreatedAt = time.Now().UTC()
@@ -189,25 +191,25 @@ func (d *testDepot) SaveCourse(_ context.Context, rec CourseRecord) error {
 	return nil
 }
 
-func (d *testDepot) Course(_ context.Context, id string) (CourseRecord, bool, error) {
+func (d *testDepot) Course(_ context.Context, id string) (schema.CourseRecord, bool, error) {
 	d.mu.Lock()
 	defer d.mu.Unlock()
 	rec, ok := d.courses[id]
 	return rec, ok, nil
 }
 
-func (d *testDepot) Courses(_ context.Context) ([]CourseRecord, error) {
+func (d *testDepot) Courses(_ context.Context) ([]schema.CourseRecord, error) {
 	return d.coursesFor("")
 }
 
-func (d *testDepot) CoursesFor(_ context.Context, ownerID string) ([]CourseRecord, error) {
+func (d *testDepot) CoursesFor(_ context.Context, ownerID string) ([]schema.CourseRecord, error) {
 	return d.coursesFor(ownerID)
 }
 
-func (d *testDepot) coursesFor(ownerID string) ([]CourseRecord, error) {
+func (d *testDepot) coursesFor(ownerID string) ([]schema.CourseRecord, error) {
 	d.mu.Lock()
 	defer d.mu.Unlock()
-	out := make([]CourseRecord, 0, len(d.courses))
+	out := make([]schema.CourseRecord, 0, len(d.courses))
 	for _, rec := range d.courses {
 		if ownerID != "" && rec.OwnerID != ownerID {
 			continue
@@ -227,14 +229,14 @@ func (d *testDepot) DeleteCourse(_ context.Context, id string) error {
 	return nil
 }
 
-func (d *testDepot) SavePatch(_ context.Context, p PatchProposal) error {
+func (d *testDepot) SavePatch(_ context.Context, p schema.PatchProposal) error {
 	d.mu.Lock()
 	defer d.mu.Unlock()
 	d.patches[p.ID] = p
 	return nil
 }
 
-func (d *testDepot) Patch(_ context.Context, id string) (PatchProposal, bool, error) {
+func (d *testDepot) Patch(_ context.Context, id string) (schema.PatchProposal, bool, error) {
 	d.mu.Lock()
 	defer d.mu.Unlock()
 	p, ok := d.patches[id]
@@ -253,7 +255,7 @@ func (d *testDepot) activeCount() int {
 	defer d.mu.Unlock()
 	n := 0
 	for _, rec := range d.challenges {
-		if rec.Status == StatusActive {
+		if rec.Status == schema.StatusActive {
 			n++
 		}
 	}
@@ -276,13 +278,13 @@ func (d *testDepot) patchCount() int {
 // broken bundle without writing a second generator. Plain-text kinds (tutor,
 // critique) pass through untouched.
 type mutateProvider struct {
-	base   Provider
-	mutate func(*Artifact)
+	base   provider.Provider
+	mutate func(*schema.Artifact)
 }
 
-func (m mutateProvider) Descriptor() ProviderDescriptor { return m.base.Descriptor() }
+func (m mutateProvider) Descriptor() provider.ProviderDescriptor { return m.base.Descriptor() }
 
-func (m mutateProvider) Complete(ctx context.Context, req ProviderRequest) (ProviderResponse, error) {
+func (m mutateProvider) Complete(ctx context.Context, req provider.ProviderRequest) (provider.ProviderResponse, error) {
 	resp, err := m.base.Complete(ctx, req)
 	if err != nil {
 		return resp, err
@@ -290,7 +292,7 @@ func (m mutateProvider) Complete(ctx context.Context, req ProviderRequest) (Prov
 	if req.Kind == "tutor" || req.Kind == "critique" {
 		return resp, nil
 	}
-	var art Artifact
+	var art schema.Artifact
 	if uerr := json.Unmarshal([]byte(resp.Text), &art); uerr != nil {
 		return resp, fmt.Errorf("mutate provider: %w", uerr)
 	}
@@ -306,13 +308,13 @@ func (m mutateProvider) Complete(ctx context.Context, req ProviderRequest) (Prov
 // countingProvider counts completions, so a repair-budget test can assert the
 // loop stopped where it claims to have stopped.
 type countingProvider struct {
-	base  Provider
+	base  provider.Provider
 	calls *int32
 }
 
-func (c countingProvider) Descriptor() ProviderDescriptor { return c.base.Descriptor() }
+func (c countingProvider) Descriptor() provider.ProviderDescriptor { return c.base.Descriptor() }
 
-func (c countingProvider) Complete(ctx context.Context, req ProviderRequest) (ProviderResponse, error) {
+func (c countingProvider) Complete(ctx context.Context, req provider.ProviderRequest) (provider.ProviderResponse, error) {
 	atomic.AddInt32(c.calls, 1)
 	return c.base.Complete(ctx, req)
 }
@@ -323,12 +325,12 @@ type fixedProvider struct {
 	text string
 }
 
-func (f fixedProvider) Descriptor() ProviderDescriptor {
-	return ProviderDescriptor{Name: "fixed", Model: "fixed-v1", Version: "1", Configured: true}
+func (f fixedProvider) Descriptor() provider.ProviderDescriptor {
+	return provider.ProviderDescriptor{Name: "fixed", Model: "fixed-v1", Version: "1", Configured: true}
 }
 
-func (f fixedProvider) Complete(context.Context, ProviderRequest) (ProviderResponse, error) {
-	return ProviderResponse{Text: f.text, Provider: "fixed", Model: "fixed-v1"}, nil
+func (f fixedProvider) Complete(context.Context, provider.ProviderRequest) (provider.ProviderResponse, error) {
+	return provider.ProviderResponse{Text: f.text, Provider: "fixed", Model: "fixed-v1"}, nil
 }
 
 // failingRunner is a Scratch implementation that cannot produce an environment,
@@ -341,7 +343,7 @@ func (failingRunner) Scratch(context.Context, string) (engine.Executor, func(), 
 
 // service wires a Service for a test. Runners are always ProvidedRunner, which
 // is the documented test seam.
-func testService(p Provider, d Depot, ex engine.Executor) *Service {
+func testService(p provider.Provider, d schema.Depot, ex engine.Executor) *Service {
 	return NewService(Config{
 		Provider:       p,
 		Depot:          d,
@@ -357,7 +359,7 @@ func activeID(t *testing.T, d *testDepot) string {
 		t.Fatalf("active challenges = %d, want 1", n)
 	}
 	for id, rec := range d.challenges {
-		if rec.Status == StatusActive {
+		if rec.Status == schema.StatusActive {
 			return id
 		}
 	}
@@ -365,7 +367,7 @@ func activeID(t *testing.T, d *testDepot) string {
 	return ""
 }
 
-func stageDetail(out Outcome, name string) string {
+func stageDetail(out schema.Outcome, name string) string {
 	i := out.StageIndex(name)
 	if i < 0 {
 		return ""
@@ -373,7 +375,7 @@ func stageDetail(out Outcome, name string) string {
 	return out.Stages[i].Detail
 }
 
-func stageState(out Outcome, name string) string {
+func stageState(out schema.Outcome, name string) string {
 	i := out.StageIndex(name)
 	if i < 0 {
 		return ""

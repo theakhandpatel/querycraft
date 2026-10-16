@@ -7,6 +7,7 @@ import (
 	"testing"
 
 	"github.com/querycraft/sqlquery/backend/internal/engine"
+	"github.com/querycraft/sqlquery/backend/internal/envdb"
 )
 
 /* Dialect routing (M6 step 4): the gateway picks the executor that speaks the
@@ -20,7 +21,7 @@ import (
 // into another's.
 func sqliteTestServer(t *testing.T, exec engine.Executor) *Server {
 	t.Helper()
-	envs, err := NewSQLiteEnvironments(t.TempDir())
+	envs, err := envdb.NewSQLiteEnvironments(t.TempDir())
 	if err != nil {
 		t.Fatalf("NewSQLiteEnvironments: %v", err)
 	}

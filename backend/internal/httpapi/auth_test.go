@@ -144,9 +144,14 @@ func TestLoginAndLogout(t *testing.T) {
 	if after := doAs(t, s, token, http.MethodGet, "/auth/me", ""); after.Code != http.StatusUnauthorized {
 		t.Fatalf("revoked token still resolved: %d %s", after.Code, after.Body.String())
 	}
-	// Logout is idempotent, including for an already-anonymous caller.
-	if out := doAs(t, s, "", http.MethodPost, "/auth/logout", ""); out.Code != http.StatusOK {
-		t.Fatalf("anonymous logout status = %d", out.Code)
+	// Logout needs the session it revokes: a revoked or absent token is
+	// anonymous, and an anonymous caller gets the same 401 as on every other
+	// required route.
+	if out := doAs(t, s, token, http.MethodPost, "/auth/logout", ""); out.Code != http.StatusUnauthorized {
+		t.Fatalf("revoked-token logout status = %d, want 401; body = %s", out.Code, out.Body.String())
+	}
+	if out := doAs(t, s, "", http.MethodPost, "/auth/logout", ""); out.Code != http.StatusUnauthorized {
+		t.Fatalf("anonymous logout status = %d, want 401; body = %s", out.Code, out.Body.String())
 	}
 }
 
@@ -176,6 +181,28 @@ func TestAuthRequiredOnScopedEndpoints(t *testing.T) {
 	garbage := doAs(t, s, "not-a-real-token", http.MethodGet, "/progress/sql-analytics", "")
 	if garbage.Code != http.StatusUnauthorized {
 		t.Fatalf("bogus token status = %d, want 401", garbage.Code)
+	}
+}
+
+// Every route the table marks required refuses an anonymous caller before its
+// handler runs, with the one code the client branches on. A route that skipped
+// the table would still be closed, because the gate treats an undeclared
+// pattern as required.
+func TestRequiredRoutesRefuseAnonymousCallers(t *testing.T) {
+	s := newTestServer(&fakeExecutor{})
+	for _, rt := range s.routes() {
+		if rt.auth != authRequired {
+			continue
+		}
+		t.Run(rt.method+" "+rt.path, func(t *testing.T) {
+			w := do(t, s, rt.method, rt.path, "")
+			if w.Code != http.StatusUnauthorized {
+				t.Fatalf("status = %d, want 401 (body %s)", w.Code, w.Body.String())
+			}
+			if !containsAny(w.Body.String(), "AUTH_REQUIRED") {
+				t.Fatalf("missing AUTH_REQUIRED: %s", w.Body.String())
+			}
+		})
 	}
 }
 

@@ -105,6 +105,14 @@ func (c credentialExecutor) Ready(ctx context.Context) (bool, string) {
 	// test checks the gateway's own surfaces rather than the helper.
 	return false, engine.RedactSecrets("dial " + c.dsn + ": connection refused")
 }
+func (c credentialExecutor) Dialect() string                        { return engine.DialectPostgres }
+func (c credentialExecutor) EngineLabel() string                    { return engine.EngineName }
+func (c credentialExecutor) ClassifyError(err error) (string, bool) { return "", false }
+func (c credentialExecutor) Diagnostics(ctx context.Context) map[string]any {
+	// Nil keeps the learner block out of /diagnostics, as the old probe did for
+	// an executor with no sandbox to describe.
+	return nil
+}
 func (c credentialExecutor) Close() error { return nil }
 
 // The log must not become the place a password leaks. It records the error code
@@ -141,8 +149,9 @@ func TestLogAndResponseNeverCarryCredentials(t *testing.T) {
 		}
 	}
 
-	// The diagnostics view is anonymous, so it must be safe too.
-	diag := do(t, s, http.MethodGet, "/diagnostics", "")
+	// The diagnostics view is session-gated, so it must be safe too.
+	token := signupUser(t, s, "diagnostics-leak@example.test")
+	diag := doAs(t, s, token, http.MethodGet, "/diagnostics", "")
 	if strings.Contains(diag.Body.String(), password) {
 		t.Errorf("diagnostics leaks the password:\n%s", diag.Body.String())
 	}

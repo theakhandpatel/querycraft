@@ -1,8 +1,8 @@
-# Load test — published results (technical design §13.2)
+# Load test: published results (technical design §13.2)
 
 The design's test matrix asks for one thing here: *"`/query` under concurrent
 load with timeouts and pool metrics recorded."* That is deliberately two claims
-rather than one — what a client observes, and what the server says about itself —
+rather than one: what a client observes, and what the server says about itself, 
 recorded next to each other so the second can be checked against the first
 instead of trusted.
 
@@ -47,8 +47,8 @@ QC_GO=go QC_BACKEND=backend node scripts/load-test.mjs
 `make audit-load` is the thin Makefile wrapper added with this step; it runs the
 command above.
 
-To load a gateway that is already running (nothing is built, nothing is stopped
-— and it must have a live PostgreSQL or the test would only measure the
+To load a gateway that is already running (nothing is built, nothing is stopped,
+and it must have a live PostgreSQL or the test would only measure the
 `ENVIRONMENT_UNAVAILABLE` 400 path):
 
 ```sh
@@ -88,7 +88,7 @@ statement rather than an analytic one, so the run issues 320 requests of which
   ```
 
   It opens a transaction on the restricted learner role, plans and executes
-  across three tables, builds an aggregate and serialises the rows — the parts
+  across three tables, builds an aggregate and serialises the rows: the parts
   that can actually degrade under contention. It is cheap here (15.2 ms p50),
   which is the point: the load is a realistic mix, not a race to saturate CPU.
 
@@ -191,12 +191,12 @@ load-test: OK
 | `latency_ms deadline …` | The 32 `pg_sleep` statements: p50 123.3 ms against a 120 ms budget. The 3 ms of overshoot is return-path and scheduling, not a missed deadline. |
 | `outcomes 2xx=288 4xx=32` | 288 succeeded (all analytic), 32 failed (all deadline). No 5xx, no dropped connection, no unparsed body. |
 | `error codes (none)=288 QUERY_TIMEOUT=32` | The success half carries no code; every failure carries `QUERY_TIMEOUT`, a member of the closed enum in `contracts/query-result.schema.json`. |
-| `client in flight peak 8` | The most requests the client ever had outstanding — the worker count, not a server property. |
+| `client in flight peak 8` | The most requests the client ever had outstanding: the worker count, not a server property. |
 | `saturation refusals 0` | No main-load request was refused by the statement cap. This is expected here, and is **not** the proof that the cap works; the deterministic probe below is. See the next section. |
 | `requests_total 200=288 400=32` | The gateway's own counter, by HTTP status, over the load window. |
 | `statements_total QUERY_TIMEOUT=32 (none)=288` | The gateway's statement counter, by contract code. It agrees with the client's `error codes` line. |
 | `histogram count +320 sum +7.684s` | A real Prometheus histogram over `POST /query`: 320 observations totalling 7.684 s of server-side request time. |
-| `pool max_conns 8`, `samples 22 … acquired peak 4` | The pool can open 8 connections and was sampled 22 times during the load; it never had more than 4 checked out. The 8-connection pool was never the binding limit — the `max_concurrent=4` statement cap was. |
+| `pool max_conns 8`, `samples 22 … acquired peak 4` | The pool can open 8 connections and was sampled 22 times during the load; it never had more than 4 checked out. The 8-connection pool was never the binding limit: the `max_concurrent=4` statement cap was. |
 | the three `ok` blocks | The claims being asserted, each one a line the harness would print as `FAIL` with the observed values if it did not hold. |
 
 ## Why `saturation refusals 0` is not a contradiction
@@ -230,7 +230,7 @@ main load and is deterministic:
    "…already running its maximum of 4 statements…"), and requires the four
    slot-holders to still succeed afterwards.
 
-A client-side "nobody was refused" count cannot prove a cap exists — a broken
+A client-side "nobody was refused" count cannot prove a cap exists: a broken
 cap and an under-loaded cap look identical. The probe removes that ambiguity by
 making saturation deterministic.
 
@@ -238,7 +238,7 @@ making saturation deterministic.
 
 The point of recording both sides is that they can be compared:
 
-- `requests_total{route="/query",method="POST"}` grew by exactly **320** — the
+- `requests_total{route="/query",method="POST"}` grew by exactly **320**, the
   number of requests the client sent.
 - `querycraft_request_duration_seconds_count` for the same route grew by exactly
   **320**. The request counter and the histogram come from the *same* middleware
@@ -285,8 +285,8 @@ capacity plan.
 - **The statement cap, not the pool, was the binding limit.** The pool has 8
   connections and `max_concurrent` was 4, so at most 4 statements could ever be
   in flight and the pool was never stressed (peak `acquired_conns=4`, never
-  above 4 of 8). A run that raised the cap past the pool size — or sized the
-  pool below the cap — would exercise a different bottleneck that this run does
+  above 4 of 8). A run that raised the cap past the pool size, or sized the
+  pool below the cap, would exercise a different bottleneck that this run does
   not touch.
 - **Only two statement shapes were tested.** A representative analytic join and a
   `pg_sleep` that must time out. Pathological-but-real workloads (large sorts,

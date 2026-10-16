@@ -26,8 +26,8 @@ language in a real engine, not that a lesson was marked watched.
 
 ## Positioning
 
-**Graded on the result, not the SQL text.** An exercise declares a result contract —
-the shape of the correct answer — and any formulation that produces it passes. The
+**Graded on the result, not the SQL text.** An exercise declares a result contract: 
+the shape of the correct answer. Any formulation that produces it passes. The
 product is therefore honest in a way a text-matching tutorial cannot be: it cannot
 mark a correct query wrong for using a different join style, and it cannot pass a
 query that returns the wrong rows. Running is real execution, not simulation: the

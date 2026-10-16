@@ -1,11 +1,11 @@
-# ADR 0004 — PostgreSQL on both adapters, not SQLite
+# ADR 0004: PostgreSQL on both adapters, not SQLite
 
 - **Status:** accepted
 - **Date:** 2026-10-14
 - **Deciders:** project owner + agent session
 - **Question:** for a POC, would SQLite have been enough? It needs no server, no
-  download, no roles, no connection pool and no per-learner database — all of the
-  M3 machinery — and the file is the database. Should the app be ported to it?
+  download, no roles, no connection pool and no per-learner database: all of the
+  M3 machinery, and the file is the database. Should the app be ported to it?
 
 Raised after the M3 template-environment work, which is a large amount of
 infrastructure that SQLite would make unnecessary.
@@ -24,17 +24,17 @@ This is not a taste judgement. The repository's own content settles it.
 
 | Construct | Occurrences | SQLite |
 | --- | --- | --- |
-| `::` cast (`DATE_TRUNC('month', o.ordered_at)::date`) | 33 | **absent** — no cast operator; only `CAST(x AS t)`, and no date types |
+| `::` cast (`DATE_TRUNC('month', o.ordered_at)::date`) | 33 | **absent**: no cast operator; only `CAST(x AS t)`, and no date types |
 | `DATE_TRUNC` | 30 | **absent** |
 | `PARTITION BY` (window functions) | 25 | present since 3.25, but with different typing and ordering semantics |
-| `EXPLAIN ANALYZE` | 18 | **absent** — SQLite has only `EXPLAIN QUERY PLAN`, whose output is a quirk of the planner, not a plan tree with actual row counts |
+| `EXPLAIN ANALYZE` | 18 | **absent**: SQLite has only `EXPLAIN QUERY PLAN`, whose output is a quirk of the planner, not a plan tree with actual row counts |
 | `WITH RECURSIVE` | 10 | present |
-| `ILIKE` | 2 | **absent** — `LIKE` is also ASCII-case-insensitive by default, so the wrong habit is learned |
+| `ILIKE` | 2 | **absent**: `LIKE` is also ASCII-case-insensitive by default, so the wrong habit is learned |
 | `DISTINCT ON` | 2 | **absent** |
 | `COUNT(*) FILTER (WHERE …)` | present (m3) | present since 3.30 |
 | `DATE '2026-01-01'`, `INTERVAL '1 month'`, `TO_CHAR` | present (m9, m6, m8) | **absent** as types/functions; DATE/INTERVAL literals and `TO_CHAR` do not exist |
 
-Chapter by chapter, that is not a port — it is a rewrite:
+Chapter by chapter, that is not a port. It is a rewrite:
 
 - **m3** revenue reports: `DATE_TRUNC`, `FILTER`.
 - **m6** cohort retention: `DATE_TRUNC` twice, `::date`.
@@ -52,7 +52,7 @@ The bugs the adapter-parity audit just found are the ones that matter, and SQLit
 does not remove them:
 
 - The gateway emitted `numeric` as a JSON number (`118.00` → `118`), silently losing
-  scale and precision — the exact values a money column is made of.
+  scale and precision: the exact values a money column is made of.
 - PGlite's JavaScript decoder shifted a naive `timestamp` by the host's UTC offset
   (`10:30:00` → `05:00:00`), because it materialises `timestamp` as a JS `Date`.
 - The two adapters disagreed about SQLSTATE `42P01`/`42703` (`missing relation`):
@@ -76,14 +76,14 @@ Stated honestly, because the owner's instinct is not wrong in the abstract:
   server to boot, no roles, no pool, no per-learner database. If the product were
   "learn `SELECT`/`JOIN`/`GROUP BY` against a toy table", SQLite in the browser
   (`wa-sqlite`, `sql.js`) is strictly less machinery and the right call.
-- **The writable learner workspace is the one feature that is easier in SQLite** —
+- **The writable learner workspace is the one feature that is easier in SQLite**:
   copy a file, hand it to the learner, delete it. Per-account PostgreSQL
   environments (ADR 0003) cost ~35 ms per create and a connection budget; a file
   copy costs ~1 ms and no connection at all. Worth recording as the real price of
   the decision.
 - If the concern is download size or an air-gapped install, the answer is bundling
-  the PostgreSQL binaries or pointing `QC_DATABASE_URL` at a managed server — both
-  already supported — not changing the engine.
+  the PostgreSQL binaries or pointing `QC_DATABASE_URL` at a managed server, both
+  already supported, not changing the engine.
 
 ## Consequences
 
@@ -93,7 +93,7 @@ Stated honestly, because the owner's instinct is not wrong in the abstract:
 - The parity gate is meaningful and cheap to keep: one script, one dataset, both
   adapters.
 - The price is the embedded server, the 60 MiB one-time download, the pool and the
-  roles — all of it already built, measured and green, and cheaper to keep than to
+  roles, all of it already built, measured and green, and cheaper to keep than to
   remove.
 - New content must stay inside what PostgreSQL actually does. That is a feature:
   the point of the product is to teach PostgreSQL, not a dialect that merely looks
@@ -104,7 +104,7 @@ Stated honestly, because the owner's instinct is not wrong in the abstract:
 The decision above is "PostgreSQL is the default engine", not "SQLite is banned". The
 owner has asked for SQLite courses too, and that is a different (and good) product idea:
 a course that teaches where SQLite differs from PostgreSQL is exactly the kind of thing
-this app is for. It is tracked as **M6 "Second dialect — SQLite"** in
+this app is for. It is tracked as **M6 "Second dialect, SQLite"** in
 `docs/technical-design.md` §14, with open decisions D12–D15. Adding it is real work
 precisely because of the reasons above: dialect-aware grading, error classification and
 value encoding, plus a second dataset and a per-dialect parity audit. It does not change

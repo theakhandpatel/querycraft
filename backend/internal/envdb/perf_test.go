@@ -99,3 +99,43 @@ func TestEnsurePerfProvidesThePlanFixture(t *testing.T) {
 		t.Error("the plan environment reports itself read-only; the lesson adds an index")
 	}
 }
+
+// TestPerfResetKeepsTheChallengeResetTime pins the reset bookkeeping to the
+// environment kind. The plan environment and the challenge environment share
+// one resetAt map, keyed by kind prefix, so a plan reset that wrote the bare
+// account digest would overwrite the challenge time Facts reports.
+func TestPerfResetKeepsTheChallengeResetTime(t *testing.T) {
+	srv := pgtest.Start(t)
+	ctx, cancel := context.WithTimeout(context.Background(), 4*time.Minute)
+	defer cancel()
+
+	m := newManager(t, ctx, srv, envdb.Options{MaxEnvironments: 4, IdleTTL: time.Hour})
+	if err := m.EnsureTemplate(ctx); err != nil {
+		t.Fatalf("ensure challenge template: %v", err)
+	}
+	if err := m.EnsurePerfTemplate(ctx); err != nil {
+		t.Fatalf("ensure plan template: %v", err)
+	}
+
+	if _, err := m.Reset(ctx, accountA); err != nil {
+		t.Fatalf("reset challenge environment: %v", err)
+	}
+	challenge, err := m.Facts(ctx, accountA)
+	if err != nil {
+		t.Fatalf("facts after the challenge reset: %v", err)
+	}
+	if challenge.ResetAt.IsZero() {
+		t.Fatal("the challenge reset time was not recorded")
+	}
+
+	if _, err := m.ResetPerf(ctx, accountA); err != nil {
+		t.Fatalf("reset plan environment: %v", err)
+	}
+	after, err := m.Facts(ctx, accountA)
+	if err != nil {
+		t.Fatalf("facts after the plan reset: %v", err)
+	}
+	if !after.ResetAt.Equal(challenge.ResetAt) {
+		t.Fatalf("the plan reset overwrote the challenge reset time: %v, want the first reset at %v", after.ResetAt, challenge.ResetAt)
+	}
+}

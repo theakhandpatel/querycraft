@@ -7,13 +7,13 @@ isolated environments without containers multiplying.
 
 | Level | What it is | Querycraft's use |
 | --- | --- | --- |
-| Cluster | One `postgres` server process, one data directory, one set of roles. | The local server the gateway starts (`QC_PG_DATA`), or the `db` service in `docker-compose.yml`. One cluster is plenty for every environment. |
+| Cluster | One `postgres` server process, one data directory, one set of roles. | The local server the gateway starts (`pg_data`), or the `db` service in `docker-compose.yml`. | One cluster is plenty for every environment. |
 | Database | A catalog inside the cluster. Connection strings (DSNs) select it. Databases cannot read each other's tables. | **One database per environment**: `querycraft` for dev/preview, `querycraft_test` for the gated integration tests. `deploy/postgres/initdb/01-databases.sql` creates both. |
 | Schema | A namespace inside a database. Same server, same connection, addressable as `schema.table`. | **Two schemas per database**: `dataset` and `app`. |
 
 ```
 cluster  (one postgres process)
-├── database querycraft            ← dev / preview (QC_DATABASE_URL)
+├── database querycraft            ← dev / preview (database_url)
 │   ├── schema dataset             learner-visible commerce tables
 │   │   ├── customers  products  orders  order_items  dataset_meta
 │   │   └── (also the only schema on a learner query's search_path)
@@ -41,7 +41,7 @@ SET LOCAL search_path = dataset, public
 
 So `SELECT count(*) FROM orders` resolves to `dataset.orders`, while an
 unqualified `SELECT * FROM progress` fails with `42P01` (relation does not
-exist) — gateway metadata is not reachable by accident or by probing.
+exist): gateway metadata is not reachable by accident or by probing.
 
 That separation buys three things:
 
@@ -83,39 +83,39 @@ applied, so an existing data directory keeps its rows.
 
 ## Pointing the gateway at a container
 
-`QC_DATABASE_URL` selects the environment; the gateway creates the schemas on
+`database_url` in `querycraft.json` selects the environment; the gateway creates the schemas on
 first connect. Use the `docker-compose.yml` service:
 
 ```sh
 docker compose up -d db
 
 # dev / preview
-export QC_DATABASE_URL='postgres://querycraft:querycraft@localhost:5432/querycraft?sslmode=disable'
-export QC_ADMIN_DATABASE_URL="$QC_DATABASE_URL"   # optional: persist progress/events
+printf '{"database_url":"postgres://querycraft:querycraft@localhost:5432/querycraft?sslmode=disable","admin_database_url":"postgres://querycraft:querycraft@localhost:5432/querycraft?sslmode=disable"}\n' > querycraft.json
 (cd backend && go run ./cmd/api)
 
 # a different environment is a different database on the same server
-export QC_DATABASE_URL='postgres://querycraft:querycraft@localhost:5432/querycraft_test?sslmode=disable'
+printf '{"database_url":"postgres://querycraft:querycraft@localhost:5432/querycraft_test?sslmode=disable"}\n' > querycraft.json
 
 # gated integration test
 (cd backend && QC_TEST_DATABASE_URL='postgres://querycraft:querycraft@localhost:5432/querycraft_test?sslmode=disable' \
   go test ./internal/httpapi -run TestGatewayIntegration -v)
 ```
 
-With `QC_DATABASE_URL` unset the gateway starts its own PostgreSQL and seeds the
-same layout into a repo-local data directory (`QC_PG_DATA`, default
-`.data/pg`); with `QC_DATABASE_URL` set it uses the server as-is. Docker is not
+With `database_url` unset the gateway starts its own PostgreSQL and seeds the
+same layout into a repo-local data directory (`pg_data`, default
+`.data/pg`); with `database_url` set it uses the server as-is. Docker is not
 required for the default dev flow.
 
 ## Verifying the separation
 
 ```sh
 # both schemas exist
-psql "$QC_DATABASE_URL" -Atc "select nspname from pg_namespace where nspname in ('dataset','app')"
+DSN='postgres://querycraft:querycraft@localhost:5432/querycraft?sslmode=disable'
+psql "$DSN" -Atc "select nspname from pg_namespace where nspname in ('dataset','app')"
 # dataset   -> the learner tables
-psql "$QC_DATABASE_URL" -c '\dt dataset.*'
+psql "$DSN" -c '\dt dataset.*'
 # app       -> gateway metadata
-psql "$QC_DATABASE_URL" -c '\dt app.*'
+psql "$DSN" -c '\dt app.*'
 
 # unqualified learner table resolves
 curl -fsS -X POST localhost:8080/query -H 'content-type: application/json' \

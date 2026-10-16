@@ -120,7 +120,7 @@ export function Header() {
       <div className="headright">
         <span className="enginestate hide-small">
           <span className="dot"></span>{' '}
-          {api.mode === 'http' ? 'gateway · live' : api.mode === 'pglite' ? 'postgres 18 · in-browser' : 'pg 16.3 · simulated'}
+          {api.mode === 'http' ? 'gateway · live' : 'postgres 18 · in-browser'}
         </span>
         <button className="small ghost" onClick={cycleTheme} aria-label="Toggle theme" title="Toggle theme">
           <Icon name={effectiveTheme === 'dark' ? 'sun' : 'moon'} />

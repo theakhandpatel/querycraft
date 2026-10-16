@@ -229,7 +229,7 @@ async function main() {
 
     /* ---------- clause 4c: no database, no invention ---------- */
     report.section('with no database the plan lab invents nothing');
-    const degraded = await startGateway(bin, { ...env, QC_NO_LOCAL_DB: '1' });
+    const degraded = await startGateway(bin, { ...env, no_local_db: true });
     try {
       const dCaps = await getJSON(`${degraded.base}/capabilities`);
       report.check('capabilities says the lab is unavailable', dCaps.json?.plan?.available === false, dCaps.json?.plan);

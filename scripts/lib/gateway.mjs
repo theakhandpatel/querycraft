@@ -177,20 +177,27 @@ export function buildGateway(tag = 'audit') {
 /**
  * startGateway launches a gateway and waits for /health.
  *
- * extraEnv is merged over the environment: QC_NO_LOCAL_DB=1 for the degraded
- * shape, or a QC_PG_PORT/QC_PG_DATA/QC_PG_RUNTIME trio for an isolated embedded
- * PostgreSQL (see `liveEnv`).
+ * config is the gateway's settings object: its keys are the snake_case keys of
+ * querycraft.json (pg_port, pg_data, pg_runtime, no_local_db, ai_provider, ...).
+ * It is written to a temporary config file and handed to the binary through
+ * --config, so the audits exercise the same resolution path an install does.
+ * extraEnv, if given, is merged over the child process environment for
+ * process-level variables only (for example TZ).
  */
-export async function startGateway(bin, extraEnv = {}, readyTimeoutMs = 120_000) {
+export async function startGateway(bin, config = {}, extraEnv = {}, readyTimeoutMs = 120_000) {
   const port = await freePort();
-  const child = spawn(bin, [], {
-    env: { ...process.env, QC_ADDR: `127.0.0.1:${port}`, TMPDIR: scratchTmp(), ...extraEnv },
+  const cfgFile = path.join(scratchTmp(), `gateway-${Date.now()}-${process.pid}.json`);
+  fs.writeFileSync(cfgFile, JSON.stringify({ addr: `127.0.0.1:${port}`, ...config }, null, 2));
+  const child = spawn(bin, ['--config', cfgFile], {
+    env: { ...process.env, TMPDIR: scratchTmp(), ...extraEnv },
     stdio: ['ignore', 'pipe', 'pipe'],
     detached: true,
   });
+  const forgetConfig = () => { try { fs.unlinkSync(cfgFile); } catch { /* best effort */ } };
   let log = '';
   child.stdout.on('data', (d) => { log += d.toString(); });
   child.stderr.on('data', (d) => { log += d.toString(); });
+  child.on('exit', forgetConfig);
 
   const base = `http://127.0.0.1:${port}`;
   const deadline = Date.now() + readyTimeoutMs;
@@ -220,13 +227,13 @@ export function stopGateway(child) {
   try { process.kill(-child.pid, 'SIGTERM'); } catch { /* no process group */ }
 }
 
-/** liveEnv returns an environment for a gateway with its own embedded PostgreSQL. */
+/** liveEnv returns config keys for a gateway with its own embedded PostgreSQL. */
 export async function liveEnv(tag = 'audit') {
   const dir = scratchDir(`pg-${tag}`);
   return {
-    QC_PG_PORT: String(await freePort()),
-    QC_PG_DATA: path.join(dir, 'data'),
-    QC_PG_RUNTIME: path.join(dir, 'runtime'),
+    pg_port: await freePort(),
+    pg_data: path.join(dir, 'data'),
+    pg_runtime: path.join(dir, 'runtime'),
   };
 }
 

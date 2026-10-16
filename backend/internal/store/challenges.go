@@ -8,22 +8,21 @@ import (
 	"time"
 
 	"github.com/jackc/pgx/v5"
-
-	"github.com/querycraft/sqlquery/backend/internal/ai"
+	"github.com/querycraft/sqlquery/backend/internal/schema"
 )
 
 /* ---------- generated challenges (M4) ---------- */
 
-// SaveChallenge implements ai.Depot. The artifact and its outcome are stored as
+// SaveChallenge implements schema.Depot. The artifact and its outcome are stored as
 // one row: the evidence that admitted a challenge is not a separate lifecycle
 // that can drift from it.
-func (p *Postgres) SaveChallenge(ctx context.Context, rec ai.Record) error {
+func (p *Postgres) SaveChallenge(ctx context.Context, rec schema.Record) error {
 	if rec.Artifact.ID == "" {
 		return errors.New("challenge id is required")
 	}
 	status := rec.Status
 	if status == "" {
-		status = ai.StatusActive
+		status = schema.StatusActive
 	}
 	created := rec.CreatedAt
 	if created.IsZero() {
@@ -49,10 +48,10 @@ func (p *Postgres) SaveChallenge(ctx context.Context, rec ai.Record) error {
 	return err
 }
 
-// Challenge implements ai.Depot.
-func (p *Postgres) Challenge(ctx context.Context, id string) (ai.Record, bool, error) {
+// Challenge implements schema.Depot.
+func (p *Postgres) Challenge(ctx context.Context, id string) (schema.Record, bool, error) {
 	var (
-		rec      ai.Record
+		rec      schema.Record
 		artifact []byte
 		outcome  []byte
 	)
@@ -60,29 +59,29 @@ func (p *Postgres) Challenge(ctx context.Context, id string) (ai.Record, bool, e
 		`SELECT owner_id, status, artifact, outcome, created_at FROM app.challenges WHERE id = $1`, id).
 		Scan(&rec.OwnerID, &rec.Status, &artifact, &outcome, &rec.CreatedAt)
 	if errors.Is(err, pgx.ErrNoRows) {
-		return ai.Record{}, false, nil
+		return schema.Record{}, false, nil
 	}
 	if err != nil {
-		return ai.Record{}, false, err
+		return schema.Record{}, false, err
 	}
 	if err := decodeRecord(&rec, artifact, outcome); err != nil {
-		return ai.Record{}, false, err
+		return schema.Record{}, false, err
 	}
 	return rec, true, nil
 }
 
-// Challenges implements ai.Depot. Newest first, because the lab lists what was
+// Challenges implements schema.Depot. Newest first, because the lab lists what was
 // just generated at the top.
-func (p *Postgres) Challenges(ctx context.Context) ([]ai.Record, error) {
+func (p *Postgres) Challenges(ctx context.Context) ([]schema.Record, error) {
 	return p.challengesWhere(ctx, "")
 }
 
 // ChallengesFor is Challenges filtered to one owner in SQL (see CoursesFor).
-func (p *Postgres) ChallengesFor(ctx context.Context, ownerID string) ([]ai.Record, error) {
+func (p *Postgres) ChallengesFor(ctx context.Context, ownerID string) ([]schema.Record, error) {
 	return p.challengesWhere(ctx, ownerID)
 }
 
-func (p *Postgres) challengesWhere(ctx context.Context, ownerID string) ([]ai.Record, error) {
+func (p *Postgres) challengesWhere(ctx context.Context, ownerID string) ([]schema.Record, error) {
 	query := `SELECT owner_id, status, artifact, outcome, created_at
 		   FROM app.challenges`
 	args := []any{}
@@ -97,10 +96,10 @@ func (p *Postgres) challengesWhere(ctx context.Context, ownerID string) ([]ai.Re
 	}
 	defer rows.Close()
 
-	out := []ai.Record{}
+	out := []schema.Record{}
 	for rows.Next() {
 		var (
-			rec      ai.Record
+			rec      schema.Record
 			artifact []byte
 			outcome  []byte
 		)
@@ -115,17 +114,17 @@ func (p *Postgres) challengesWhere(ctx context.Context, ownerID string) ([]ai.Re
 	return out, rows.Err()
 }
 
-// DeleteChallenge implements ai.Depot. Learner attempts are the learner's data
+// DeleteChallenge implements schema.Depot. Learner attempts are the learner's data
 // and are not touched here; only the generated definition goes.
 func (p *Postgres) DeleteChallenge(ctx context.Context, id string) error {
 	_, err := p.pool.Exec(ctx, `DELETE FROM app.challenges WHERE id = $1`, id)
 	return err
 }
 
-// SavePatch implements ai.Depot. A patch is stored the moment it is proposed,
+// SavePatch implements schema.Depot. A patch is stored the moment it is proposed,
 // but `approved_at` stays null until a learner approves it, so "proposed" and
 // "applied" cannot be confused by a later reader.
-func (p *Postgres) SavePatch(ctx context.Context, proposal ai.PatchProposal) error {
+func (p *Postgres) SavePatch(ctx context.Context, proposal schema.PatchProposal) error {
 	if proposal.ID == "" {
 		return errors.New("patch id is required")
 	}
@@ -140,8 +139,8 @@ func (p *Postgres) SavePatch(ctx context.Context, proposal ai.PatchProposal) err
 	return err
 }
 
-// Patch implements ai.Depot.
-func (p *Postgres) Patch(ctx context.Context, id string) (ai.PatchProposal, bool, error) {
+// Patch implements schema.Depot.
+func (p *Postgres) Patch(ctx context.Context, id string) (schema.PatchProposal, bool, error) {
 	var (
 		raw      []byte
 		approved *time.Time
@@ -149,19 +148,19 @@ func (p *Postgres) Patch(ctx context.Context, id string) (ai.PatchProposal, bool
 	err := p.pool.QueryRow(ctx, `SELECT proposal, approved_at FROM app.patches WHERE id = $1`, id).
 		Scan(&raw, &approved)
 	if errors.Is(err, pgx.ErrNoRows) {
-		return ai.PatchProposal{}, false, nil
+		return schema.PatchProposal{}, false, nil
 	}
 	if err != nil {
-		return ai.PatchProposal{}, false, err
+		return schema.PatchProposal{}, false, err
 	}
-	var proposal ai.PatchProposal
+	var proposal schema.PatchProposal
 	if err := json.Unmarshal(raw, &proposal); err != nil {
-		return ai.PatchProposal{}, false, fmt.Errorf("decode patch: %w", err)
+		return schema.PatchProposal{}, false, fmt.Errorf("decode patch: %w", err)
 	}
 	return proposal, true, nil
 }
 
-// ApprovePatch implements ai.Depot. Approval is recorded once; approving an
+// ApprovePatch implements schema.Depot. Approval is recorded once; approving an
 // already-approved patch keeps the first approver, so the record says who
 // actually said yes.
 func (p *Postgres) ApprovePatch(ctx context.Context, id, approvedBy string) error {
@@ -177,7 +176,7 @@ func (p *Postgres) ApprovePatch(ctx context.Context, id, approvedBy string) erro
 // decodeRecord turns the two jsonb columns back into the ai types. A row that
 // cannot be decoded is a storage fault, not a missing challenge, so it is
 // reported rather than skipped.
-func decodeRecord(rec *ai.Record, artifact, outcome []byte) error {
+func decodeRecord(rec *schema.Record, artifact, outcome []byte) error {
 	if err := json.Unmarshal(artifact, &rec.Artifact); err != nil {
 		return fmt.Errorf("decode challenge artifact: %w", err)
 	}

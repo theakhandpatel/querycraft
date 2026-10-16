@@ -1,4 +1,4 @@
-# M8 — A course that builds itself, one chapter at a time
+# M8: A course that builds itself, one chapter at a time
 
 Status: in progress. M7 (real course generation) is complete and verified: a live
 model generated a four-chapter course, every exercise's reference and cross-check
@@ -15,7 +15,7 @@ problems a learner feels immediately:
    progress, then eight lines appear at once.
 2. **One failure discards everything.** The whole plan is re-asked after any
    rejected exercise, and a chapter that the model got wrong twice ends the run
-   with no course at all — including the chapters that had already verified.
+   with no course at all: including the chapters that had already verified.
 3. **Nothing is saved until the end.** Nothing is in the database while the run
    is working, so a closed tab, a proxy timeout or a dead gateway leaves the
    learner with nothing to look at.
@@ -38,7 +38,7 @@ model writes the next one.
   chapter **as soon as it passes**.
 * The tool result carries the engine's own verdict back into the conversation:
   a row count, the failing exercise id, the evaluator's message. That is the
-  point of doing this in one session — the model repairs against a real error
+  point of doing this in one session: the model repairs against a real error
   instead of guessing, and it still remembers what it wrote in chapter 1 when it
   writes chapter 3.
 * `finish_course` closes the course. The stored row moves from `building` to
@@ -64,7 +64,7 @@ dies leaves a `building` course with the chapters it managed, instead of nothing
 * One chapter, one provider call, with a bounded number of in-session repairs
   after a failed `save_chapter`.
 * A chapter that cannot be repaired is dropped with its failure reported, and the
-  course finishes with what did verify — a smaller honest course, never a course
+  course finishes with what did verify: a smaller honest course, never a course
   with an unverified exercise in it.
 * The run budget still bounds the whole conversation; the per-call budget still
   bounds one provider call.
@@ -72,8 +72,8 @@ dies leaves a `building` course with the chapters it managed, instead of nothing
 
 ## The audit trail
 
-Every generation run now persists its transcript — every provider message,
-tool call and tool result, in order — to `app.runs` (`internal/ai/transcript.go`).
+Every generation run now persists its transcript, every provider message,
+tool call and tool result, in order, to `app.runs` (`internal/ai/transcript.go`).
 The seam is the provider call, so both the challenge pipeline and the M8 course
 agent are covered: `complete`/`completeRaw` record a single-shot exchange, and
 the course agent records its conversation as it assembles it, because it owns
@@ -105,7 +105,7 @@ Status: complete and verified. The loop replaced the single whole-course call.
   `save_chapter` and `finish_course`. Bounds: `maxChapterWrites = 3` (one write
   and two in-session repairs per chapter), `maxAgentRounds = 40`, and every tool
   result is clipped to `maxToolResultChars` on a rune boundary.
-* The provider seam grew the multi-turn pieces — `Messages` (role, content,
+* The provider seam grew the multi-turn pieces: `Messages` (role, content,
   `tool_call_id`, `tool_calls`) and `Tools` on the request; `ToolCalls` and
   `FinishReason` on the reply. `HTTPProvider` marshals `tools`/`tool_choice` and
   parses `message.tool_calls`; it never sends `response_format` together with
@@ -123,13 +123,13 @@ Status: complete and verified. The loop replaced the single whole-course call.
   (`StatusBuilding`); every accepted chapter is re-stored; `finish_course`
   activates the course, which holds exactly the chapters that verified. A
   chapter that cannot be repaired is dropped and reported, and a run in which
-  nothing verified deletes the outline row and is refused — nothing activates a
+  nothing verified deletes the outline row and is refused: nothing activates a
   course containing an unverified exercise.
 * The job view carries the live progress a poller needs: `chapters_planned`,
   `chapters_verified`, `current_chapter` (the chapter the gateway most recently
   started verifying) and `chapters`, the per-chapter report in outline order.
   The blocking routes are unchanged, and a terminal view only names a record
-  when one exists — a refusal clears it.
+  when one exists: a refusal clears it.
 
 Two defects the tests found, both fixed: a chapter that had been written and
 refused reported as `skipped` rather than `refused`, and a refused job kept
@@ -137,7 +137,7 @@ naming the `building` row its own refusal had just deleted.
 
 Evidence:
 
-* `make audit-course-gen` — five runs. The deterministic provider activates a
+* `make audit-course-gen`: five runs. The deterministic provider activates a
   course chapter by chapter; a stub provider that pauses between turns shows
   the record route answering with a `building` course whose content is exactly
   the chapters that verified while later chapters are still being written; a

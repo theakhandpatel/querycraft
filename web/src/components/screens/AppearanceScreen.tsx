@@ -3,8 +3,10 @@ import { useStore } from '../../state/store';
 import ImportControl from '../ui/ImportControl';
 
 
-function Switch({ on, onClick }: { on: boolean; onClick: () => void }) {
-  return <div className="switch" role="switch" aria-checked={on} tabIndex={0} onClick={onClick} onKeyDown={(e) => { if (e.key === ' ' || e.key === 'Enter') { e.preventDefault(); onClick(); } }}></div>;
+/* A switch is a div, so it carries no name of its own. `labelledBy` points at
+   the visible label beside it, which keeps one copy of the words. */
+function Switch({ labelledBy, on, onClick }: { labelledBy: string; on: boolean; onClick: () => void }) {
+  return <div className="switch" role="switch" aria-checked={on} aria-labelledby={labelledBy} tabIndex={0} onClick={onClick} onKeyDown={(e) => { if (e.key === ' ' || e.key === 'Enter') { e.preventDefault(); onClick(); } }}></div>;
 }
 
 export default function AppearanceScreen() {
@@ -71,16 +73,16 @@ export default function AppearanceScreen() {
       <div className="card mt-16">
         <h2>Reading &amp; motion</h2>
         <div className="toggle">
-          <div><div className="tl">Reduced motion</div><div className="ts">Disable transitions and animations</div></div>
-          <Switch on={s.motion} onClick={s.setMotion} />
+          <div><div className="tl" id="set-motion">Reduced motion</div><div className="ts">Disable transitions and animations</div></div>
+          <Switch labelledBy="set-motion" on={s.motion} onClick={s.setMotion} />
         </div>
         <div className="toggle">
-          <div><div className="tl">Wide result grids</div><div className="ts">Allow horizontal scroll instead of wrapping cells</div></div>
-          <Switch on={true} onClick={() => s.toast('Result grids already scroll horizontally.')} />
+          <div><div className="tl" id="set-grids">Wide result grids</div><div className="ts">Allow horizontal scroll instead of wrapping cells</div></div>
+          <Switch labelledBy="set-grids" on={true} onClick={() => s.toast('Result grids already scroll horizontally.')} />
         </div>
         <div className="toggle">
-          <div><div className="tl">Confirm before accepting an override</div><div className="ts">Ask before recording an accepted-by-you answer</div></div>
-          <Switch on={true} onClick={() => s.toast('Override confirmation would be a product setting.')} />
+          <div><div className="tl" id="set-override">Confirm before accepting an override</div><div className="ts">Ask before recording an accepted-by-you answer</div></div>
+          <Switch labelledBy="set-override" on={true} onClick={() => s.toast('Override confirmation would be a product setting.')} />
         </div>
       </div>
 
@@ -107,8 +109,8 @@ export default function AppearanceScreen() {
         </p>
         <code className="apiurl">{s.api.baseUrl}</code>
         <div className="toggle">
-          <div><div className="tl">Simulate network latency</div><div className="ts">Adds a short round-trip so loading and error states are real</div></div>
-          <Switch on={s.latency} onClick={() => s.setLatency(!s.latency)} />
+          <div><div className="tl" id="set-latency">Simulate network latency</div><div className="ts">Adds a short round-trip so loading and error states are real</div></div>
+          <Switch labelledBy="set-latency" on={s.latency} onClick={() => s.setLatency(!s.latency)} />
         </div>
         <div className="reportrow"><span>Engine behind the API</span><span className="mono">{s.api.config.engine}</span></div>
         <div className="reportrow"><span>Requests this session</span><span className="mono">{s.apiCount}</span></div>

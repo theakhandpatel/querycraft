@@ -5,40 +5,40 @@ import (
 	"testing"
 	"time"
 
-	"github.com/querycraft/sqlquery/backend/internal/ai"
 	"github.com/querycraft/sqlquery/backend/internal/pgtest"
+	"github.com/querycraft/sqlquery/backend/internal/schema"
 )
 
 // sampleRecord is a challenge as the pipeline would hand it over: the artifact
 // plus the evidence that admitted it.
-func sampleRecord(id, title string, at time.Time) ai.Record {
-	return ai.Record{
-		Artifact: ai.Artifact{
+func sampleRecord(id, title string, at time.Time) schema.Record {
+	return schema.Record{
+		Artifact: schema.Artifact{
 			ID:      id,
 			Version: 1,
 			Title:   title,
 			Prompt:  "Return the top product per category.",
 			Dialect: "postgresql",
 			Hints:   []string{"Start from products."},
-			Setup:   ai.SetupPlan{Dataset: "commerce", SchemaVersion: 1, SeedVersion: 1},
-			ResultContract: ai.ResultContract{
+			Setup:   schema.SetupPlan{Dataset: "commerce", SchemaVersion: 1, SeedVersion: 1},
+			ResultContract: schema.ResultContract{
 				Columns:     []string{"category", "name"},
 				ColumnOrder: "exact",
 				RowOrder:    "ignored",
 				Duplicates:  "preserved",
 			},
-			Provenance: ai.Provenance{
+			Provenance: schema.Provenance{
 				Provider:         "fake",
 				Model:            "fake-v1",
-				PipelineVersion:  ai.PipelineVersion,
+				PipelineVersion:  schema.PipelineVersion,
 				EvaluatorVersion: "go-1",
 			},
 		},
-		Outcome: ai.Outcome{
-			Status: ai.StatusActive,
-			Stages: []ai.Stage{{Name: ai.StageCrossCheck, State: ai.StateDone, Detail: "both solutions agreed"}},
+		Outcome: schema.Outcome{
+			Status: schema.StatusActive,
+			Stages: []schema.Stage{{Name: schema.StageCrossCheck, State: schema.StateDone, Detail: "both solutions agreed"}},
 		},
-		Status:    ai.StatusActive,
+		Status:    schema.StatusActive,
 		CreatedAt: at,
 	}
 }
@@ -58,7 +58,7 @@ func TestMemoryChallengeRoundTripIsDeepCopied(t *testing.T) {
 	if got.Artifact.Title != rec.Artifact.Title {
 		t.Fatalf("title = %q, want %q", got.Artifact.Title, rec.Artifact.Title)
 	}
-	if len(got.Outcome.Stages) != 1 || got.Outcome.Stages[0].Name != ai.StageCrossCheck {
+	if len(got.Outcome.Stages) != 1 || got.Outcome.Stages[0].Name != schema.StageCrossCheck {
 		t.Fatalf("the evidence did not survive the round trip: %+v", got.Outcome.Stages)
 	}
 
@@ -106,11 +106,11 @@ func TestMemoryChallengesAreNewestFirst(t *testing.T) {
 func TestMemoryPatchApprovalKeepsTheFirstApprover(t *testing.T) {
 	m := NewMemory()
 	ctx := context.Background()
-	proposal := ai.PatchProposal{
+	proposal := schema.PatchProposal{
 		ID:          "p_1",
 		ChallengeID: "ch_1",
 		Summary:     "widen the contract",
-		Changes:     []ai.PatchChange{{Field: "result_contract.row_order", From: "exact", To: "ignored"}},
+		Changes:     []schema.PatchChange{{Field: "result_contract.row_order", From: "exact", To: "ignored"}},
 	}
 	if err := m.SavePatch(ctx, proposal); err != nil {
 		t.Fatalf("save patch: %v", err)
@@ -154,7 +154,7 @@ func TestPostgresChallengesSurviveARestart(t *testing.T) {
 	if err := first.SaveChallenge(ctx, rec); err != nil {
 		t.Fatalf("save: %v", err)
 	}
-	if err := first.SavePatch(ctx, ai.PatchProposal{ID: "p_restart", ChallengeID: "ch_restart", Summary: "fix"}); err != nil {
+	if err := first.SavePatch(ctx, schema.PatchProposal{ID: "p_restart", ChallengeID: "ch_restart", Summary: "fix"}); err != nil {
 		t.Fatalf("save patch: %v", err)
 	}
 	first.Close()
@@ -173,13 +173,13 @@ func TestPostgresChallengesSurviveARestart(t *testing.T) {
 	if got.Artifact.Title != "Survives a restart" {
 		t.Fatalf("title = %q", got.Artifact.Title)
 	}
-	if got.Status != ai.StatusActive {
+	if got.Status != schema.StatusActive {
 		t.Fatalf("status = %q, want active", got.Status)
 	}
 	if len(got.Outcome.Stages) == 0 {
 		t.Fatalf("the evidence that admitted the challenge was not persisted")
 	}
-	if got.Artifact.Provenance.PipelineVersion != ai.PipelineVersion {
+	if got.Artifact.Provenance.PipelineVersion != schema.PipelineVersion {
 		t.Fatalf("provenance = %+v", got.Artifact.Provenance)
 	}
 

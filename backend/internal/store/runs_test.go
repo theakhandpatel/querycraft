@@ -6,23 +6,23 @@ import (
 	"testing"
 	"time"
 
-	"github.com/querycraft/sqlquery/backend/internal/ai"
 	"github.com/querycraft/sqlquery/backend/internal/pgtest"
+	"github.com/querycraft/sqlquery/backend/internal/schema"
 )
 
 // sampleRun is a transcript as the pipeline would hand it over: the entries it
 // recorded plus the attribution the store keeps beside them.
-func sampleRun(id, owner, status string, at time.Time) ai.RunTranscript {
-	return ai.RunTranscript{
+func sampleRun(id, owner, status string, at time.Time) schema.RunTranscript {
+	return schema.RunTranscript{
 		ID:      id,
-		Kind:    ai.RunKindCourse,
+		Kind:    schema.RunKindCourse,
 		OwnerID: owner,
 		Status:  status,
-		Entries: []ai.TranscriptEntry{
-			{Seq: 0, Kind: ai.EntryMessage, Role: "system", Content: "You design SQL courses.", At: at},
-			{Seq: 1, Kind: ai.EntryMessage, Role: "user", Content: "Design one complete course.", At: at},
-			{Seq: 2, Kind: ai.EntryToolCall, Role: "assistant", ToolName: "save_chapter", ToolCallID: "call_1", Content: `{"id":"gen.joins"}`, At: at},
-			{Seq: 3, Kind: ai.EntryToolResult, Role: "tool", ToolCallID: "call_1", Content: `{"status":"verified"}`, At: at},
+		Entries: []schema.TranscriptEntry{
+			{Seq: 0, Kind: schema.EntryMessage, Role: "system", Content: "You design SQL courses.", At: at},
+			{Seq: 1, Kind: schema.EntryMessage, Role: "user", Content: "Design one complete course.", At: at},
+			{Seq: 2, Kind: schema.EntryToolCall, Role: "assistant", ToolName: "save_chapter", ToolCallID: "call_1", Content: `{"id":"gen.joins"}`, At: at},
+			{Seq: 3, Kind: schema.EntryToolResult, Role: "tool", ToolCallID: "call_1", Content: `{"status":"verified"}`, At: at},
 		},
 		EntryCount: 4,
 		Bytes:      80,
@@ -37,7 +37,7 @@ func sampleRun(id, owner, status string, at time.Time) ai.RunTranscript {
 func TestMemoryRunRoundTripIsDeepCopied(t *testing.T) {
 	m := NewMemory()
 	ctx := context.Background()
-	rec := sampleRun("run_1", "u_alice", ai.StatusActive, time.Now().UTC())
+	rec := sampleRun("run_1", "u_alice", schema.StatusActive, time.Now().UTC())
 
 	if err := m.SaveRun(ctx, rec); err != nil {
 		t.Fatalf("save: %v", err)
@@ -46,7 +46,7 @@ func TestMemoryRunRoundTripIsDeepCopied(t *testing.T) {
 	if err != nil || !ok {
 		t.Fatalf("get ok=%v err=%v", ok, err)
 	}
-	if got.Kind != ai.RunKindCourse || got.Status != ai.StatusActive {
+	if got.Kind != schema.RunKindCourse || got.Status != schema.StatusActive {
 		t.Fatalf("attribution did not survive: %+v", got)
 	}
 	if len(got.Entries) != 4 || got.Entries[2].ToolName != "save_chapter" {
@@ -55,7 +55,7 @@ func TestMemoryRunRoundTripIsDeepCopied(t *testing.T) {
 
 	// The order of entries is the order they happened in; a tool result names
 	// the call it answers.
-	if got.Entries[3].ToolCallID != "call_1" || got.Entries[3].Kind != ai.EntryToolResult {
+	if got.Entries[3].ToolCallID != "call_1" || got.Entries[3].Kind != schema.EntryToolResult {
 		t.Fatalf("the tool result lost its call attribution: %+v", got.Entries[3])
 	}
 
@@ -76,7 +76,7 @@ func TestMemoryRunsAreNewestFirst(t *testing.T) {
 	ctx := context.Background()
 	base := time.Now().UTC()
 	for i, id := range []string{"run_old", "run_mid", "run_new"} {
-		rec := sampleRun(id, "u_alice", ai.StatusActive, base.Add(time.Duration(i)*time.Minute))
+		rec := sampleRun(id, "u_alice", schema.StatusActive, base.Add(time.Duration(i)*time.Minute))
 		if err := m.SaveRun(ctx, rec); err != nil {
 			t.Fatalf("save %s: %v", id, err)
 		}
@@ -98,11 +98,11 @@ func TestMemoryRunSaveIsAnUpsert(t *testing.T) {
 	ctx := context.Background()
 	start := time.Now().UTC().Add(-time.Minute)
 
-	first := sampleRun("run_upsert", "u_alice", ai.StatusActive, start)
+	first := sampleRun("run_upsert", "u_alice", schema.StatusActive, start)
 	if err := m.SaveRun(ctx, first); err != nil {
 		t.Fatalf("save: %v", err)
 	}
-	second := sampleRun("run_upsert", "u_alice", ai.StatusActive, time.Now().UTC())
+	second := sampleRun("run_upsert", "u_alice", schema.StatusActive, time.Now().UTC())
 	second.Entries = second.Entries[:2]
 	second.EntryCount = 2
 	if err := m.SaveRun(ctx, second); err != nil {
@@ -125,8 +125,8 @@ func TestMemoryRunSaveIsAnUpsert(t *testing.T) {
 func TestMemoryRunCarriesItsOwner(t *testing.T) {
 	m := NewMemory()
 	ctx := context.Background()
-	_ = m.SaveRun(ctx, sampleRun("run_a", "u_alice", ai.StatusActive, time.Now().UTC()))
-	_ = m.SaveRun(ctx, sampleRun("run_b", "u_bob", ai.StatusActive, time.Now().UTC()))
+	_ = m.SaveRun(ctx, sampleRun("run_a", "u_alice", schema.StatusActive, time.Now().UTC()))
+	_ = m.SaveRun(ctx, sampleRun("run_b", "u_bob", schema.StatusActive, time.Now().UTC()))
 
 	rec, ok, _ := m.Run(ctx, "run_b")
 	if !ok || rec.OwnerID != "u_bob" {
@@ -142,7 +142,7 @@ func TestMemoryRunCarriesItsOwner(t *testing.T) {
 
 func TestMemoryRunRequiresID(t *testing.T) {
 	m := NewMemory()
-	if err := m.SaveRun(context.Background(), ai.RunTranscript{Kind: ai.RunKindChallenge}); err == nil {
+	if err := m.SaveRun(context.Background(), schema.RunTranscript{Kind: schema.RunKindChallenge}); err == nil {
 		t.Fatalf("a run with no id was accepted")
 	}
 }
@@ -157,8 +157,8 @@ func TestPostgresRunsSurviveARestart(t *testing.T) {
 	if err != nil {
 		t.Fatalf("open store: %v", err)
 	}
-	rec := sampleRun("run_restart", "u_alice", ai.StatusActive, time.Now().UTC())
-	rec.Error = &ai.Error{Code: "AI_UNAVAILABLE", Message: "the provider could not be reached"}
+	rec := sampleRun("run_restart", "u_alice", schema.StatusActive, time.Now().UTC())
+	rec.Error = &schema.Error{Code: "AI_UNAVAILABLE", Message: "the provider could not be reached"}
 	if err := first.SaveRun(ctx, rec); err != nil {
 		t.Fatalf("save: %v", err)
 	}
@@ -174,10 +174,10 @@ func TestPostgresRunsSurviveARestart(t *testing.T) {
 	if err != nil || !ok {
 		t.Fatalf("after restart ok=%v err=%v", ok, err)
 	}
-	if got.Kind != ai.RunKindCourse || got.OwnerID != "u_alice" || got.Status != ai.StatusActive {
+	if got.Kind != schema.RunKindCourse || got.OwnerID != "u_alice" || got.Status != schema.StatusActive {
 		t.Fatalf("attribution = %+v", got)
 	}
-	if len(got.Entries) != 4 || got.Entries[2].Kind != ai.EntryToolCall {
+	if len(got.Entries) != 4 || got.Entries[2].Kind != schema.EntryToolCall {
 		t.Fatalf("entries did not survive: %+v", got.Entries)
 	}
 	if got.Error == nil || got.Error.Code != "AI_UNAVAILABLE" {
@@ -203,10 +203,10 @@ func TestPostgresRunSaveIsAnUpsert(t *testing.T) {
 	defer st.Close()
 
 	start := time.Now().UTC().Add(-time.Minute)
-	if err := st.SaveRun(ctx, sampleRun("run_upsert", "u_alice", ai.StatusActive, start)); err != nil {
+	if err := st.SaveRun(ctx, sampleRun("run_upsert", "u_alice", schema.StatusActive, start)); err != nil {
 		t.Fatalf("save: %v", err)
 	}
-	second := sampleRun("run_upsert", "u_alice", ai.StatusActive, time.Now().UTC())
+	second := sampleRun("run_upsert", "u_alice", schema.StatusActive, time.Now().UTC())
 	second.Entries = second.Entries[:1]
 	second.EntryCount = 1
 	if err := st.SaveRun(ctx, second); err != nil {
@@ -236,10 +236,10 @@ func TestPostgresRunsCarryTheirOwner(t *testing.T) {
 	}
 	defer st.Close()
 
-	if err := st.SaveRun(ctx, sampleRun("run_a", "u_alice", ai.StatusActive, time.Now().UTC())); err != nil {
+	if err := st.SaveRun(ctx, sampleRun("run_a", "u_alice", schema.StatusActive, time.Now().UTC())); err != nil {
 		t.Fatalf("save a: %v", err)
 	}
-	if err := st.SaveRun(ctx, sampleRun("run_b", "u_bob", ai.StatusActive, time.Now().UTC())); err != nil {
+	if err := st.SaveRun(ctx, sampleRun("run_b", "u_bob", schema.StatusActive, time.Now().UTC())); err != nil {
 		t.Fatalf("save b: %v", err)
 	}
 	rec, ok, _ := st.Run(ctx, "run_a")
@@ -264,7 +264,7 @@ func TestPostgresRunsCarryTheirOwner(t *testing.T) {
 func TestStoreDoesNotAlterStoredContent(t *testing.T) {
 	m := NewMemory()
 	ctx := context.Background()
-	rec := sampleRun("run_verbatim", "u_alice", ai.StatusActive, time.Now().UTC())
+	rec := sampleRun("run_verbatim", "u_alice", schema.StatusActive, time.Now().UTC())
 	rec.Entries[0].Content = "the exact text the recorder stored"
 	if err := m.SaveRun(ctx, rec); err != nil {
 		t.Fatalf("save: %v", err)

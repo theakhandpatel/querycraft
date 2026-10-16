@@ -1,8 +1,8 @@
 # Result-contract fixtures
 
 The language-neutral fixture suite from `docs/technical-design.md` §6.3. The
-result-contract evaluator exists twice — JavaScript (`web/src/api/compare.ts`,
-M1) and Go (`backend/internal/eval`, M3) — and both are judged against **these
+result-contract evaluator exists twice, JavaScript (`web/src/api/compare.ts`,
+M1) and Go (`backend/internal/eval`, M3), and both are judged against **these
 files**. A new comparison rule is added here first, then implemented in both
 languages.
 
@@ -81,7 +81,7 @@ The verdict both evaluators must produce:
 
 - `passed` is the overall verdict.
 - `codes` is the exact **set** of feedback codes the comparator emits for the
-  case — order-independent and duplicate-free. It is empty when the case passes
+  case, order-independent and duplicate-free. It is empty when the case passes
   and empty for an execution failure. A code that passes is never listed.
 
 ## Code vocabulary
@@ -97,7 +97,7 @@ The comparison codes, from `contracts/evaluation.schema.json`:
 | `ROW_ORDER_MISMATCH` | `row_order: exact` and the rows are a permutation. |
 
 A pure reorder under `row_order: exact` emits both `VALUE_MISMATCH` and
-`ROW_ORDER_MISMATCH` — the positional values differ *and* the order is wrong.
+`ROW_ORDER_MISMATCH`: the positional values differ *and* the order is wrong.
 
 ## Adding a case
 

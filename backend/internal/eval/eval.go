@@ -7,6 +7,7 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
+	"slices"
 	"strings"
 	"time"
 
@@ -166,7 +167,12 @@ type ErrorResponse struct {
 // (reported through qr.status), never a "wrong answer".
 func Evaluate(ctx context.Context, ex engine.Executor, req Request) Response {
 	start := time.Now()
-	limits := req.Limits.Merge(engine.DefaultLimits())
+	/* Fill, not Merge: the caller (the HTTP handler) has already resolved
+	   request-vs-server with Merge, where the server's configured caps are the
+	   ceiling. Re-merging the compiled DefaultLimits() here clamped DOWN, so a
+	   gateway configured above the default (QC_MAX_ROWS=2000) silently ran at
+	   the default 500. */
+	limits := req.Limits.Fill(engine.DefaultLimits())
 
 	qr := engine.Execute(ctx, ex, req.SQL, limits)
 	resp := Response{QR: qr, Checks: []CheckResult{}}
@@ -243,7 +249,7 @@ func columnNames(cols []engine.Column) []string {
 func comparisonChecks(cmp Comparison, contract Contract) []CheckResult {
 	contract = contract.normalized()
 	columnCode := CodeColumn
-	if contains(cmp.Codes, CodeColumnOrder) {
+	if slices.Contains(cmp.Codes, CodeColumnOrder) {
 		columnCode = CodeColumnOrder
 	}
 	columnLabel := "Column names"

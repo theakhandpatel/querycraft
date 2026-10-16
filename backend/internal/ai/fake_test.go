@@ -4,14 +4,16 @@ import (
 	"strings"
 	"testing"
 
+	"github.com/querycraft/sqlquery/backend/internal/ai/provider"
 	"github.com/querycraft/sqlquery/backend/internal/engine"
 	"github.com/querycraft/sqlquery/backend/internal/eval"
+	"github.com/querycraft/sqlquery/backend/internal/schema"
 )
 
 func TestFakeProviderIsDeterministic(t *testing.T) {
 	p := NewFakeProvider()
 	ctx := testContext(t)
-	req := ProviderRequest{Kind: "challenge", Prompt: "Topics: joins\nDifficulty: beginner"}
+	req := provider.ProviderRequest{Kind: "challenge", Prompt: "Topics: joins\nDifficulty: beginner"}
 
 	first, err := p.Complete(ctx, req)
 	if err != nil {
@@ -25,7 +27,7 @@ func TestFakeProviderIsDeterministic(t *testing.T) {
 		t.Fatal("the same request produced two different bundles")
 	}
 
-	other, err := p.Complete(ctx, ProviderRequest{Kind: "challenge", Prompt: "Topics: window functions"})
+	other, err := p.Complete(ctx, provider.ProviderRequest{Kind: "challenge", Prompt: "Topics: window functions"})
 	if err != nil {
 		t.Fatalf("Complete() error = %v", err)
 	}
@@ -44,7 +46,7 @@ func TestFakeProviderServesEveryKind(t *testing.T) {
 	ctx := testContext(t)
 	for _, kind := range []string{"challenge", "course", "repair", "tutor", "critique"} {
 		t.Run(kind, func(t *testing.T) {
-			resp, err := p.Complete(ctx, ProviderRequest{
+			resp, err := p.Complete(ctx, provider.ProviderRequest{
 				Kind:     kind,
 				Prompt:   "Topics: joins\nhint_level: 1",
 				Previous: `{"title":"old"}`,
@@ -58,7 +60,7 @@ func TestFakeProviderServesEveryKind(t *testing.T) {
 			}
 		})
 	}
-	if _, err := p.Complete(ctx, ProviderRequest{Kind: "haiku"}); err == nil {
+	if _, err := p.Complete(ctx, provider.ProviderRequest{Kind: "haiku"}); err == nil {
 		t.Fatal("an unsupported kind should be an error, not an empty reply")
 	}
 }
@@ -73,14 +75,14 @@ func TestFakeProviderTopicsProduceRunnableReferences(t *testing.T) {
 
 	for _, topic := range fakeTopics {
 		t.Run(topic.name, func(t *testing.T) {
-			resp, err := p.Complete(ctx, ProviderRequest{
+			resp, err := p.Complete(ctx, provider.ProviderRequest{
 				Kind:   "challenge",
 				Prompt: "Topics: " + topic.name + " (" + strings.Join(topic.keywords, ", ") + ")\nDifficulty: intermediate",
 			})
 			if err != nil {
 				t.Fatalf("Complete() error = %v", err)
 			}
-			var art Artifact
+			var art schema.Artifact
 			if derr := decodeBundle(resp.Text, &art); derr != nil {
 				t.Fatalf("decode bundle: %v", derr)
 			}

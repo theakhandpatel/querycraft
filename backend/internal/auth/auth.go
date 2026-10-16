@@ -118,7 +118,7 @@ func EnsureDefaultAdmin(ctx context.Context, st store.Store, spec DefaultAdmin, 
 		name = "Administrator"
 	}
 	if err := ValidateEmail(email); err != nil {
-		return store.User{}, fmt.Errorf("QC_ADMIN_EMAIL %q: %w", spec.Email, err)
+		return store.User{}, fmt.Errorf("admin_email %q: %w", spec.Email, err)
 	}
 
 	existing, hash, ok, err := st.UserByEmail(ctx, email)
@@ -161,7 +161,7 @@ func EnsureDefaultAdmin(ctx context.Context, st store.Store, spec DefaultAdmin, 
 		return store.User{}, err
 	}
 	if spec.Password == "" {
-		log.Warn("created the default administrator with an EMPTY password - set QC_ADMIN_PASSWORD or change it before exposing this port", "email", email)
+		log.Warn("created the default administrator with an EMPTY password - set admin_password or change it before exposing this port", "email", email)
 	} else {
 		log.Info("created the default administrator", "email", email)
 	}

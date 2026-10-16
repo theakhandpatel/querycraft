@@ -67,9 +67,9 @@ export default function App() {
     );
   }
 
-  /* No session (gateway or mock mode, signed out): the app is gated behind
-     sign-in. The offline PGlite adapter always has a local workspace session,
-     so it renders straight through. */
+  /* No session (gateway mode, signed out): the app is gated behind sign-in.
+     The offline PGlite adapter always has a local workspace session, so it
+     renders straight through. */
   if (!s.session) {
     return (
       <>

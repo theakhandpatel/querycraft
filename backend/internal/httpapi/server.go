@@ -12,15 +12,15 @@ import (
 	"log/slog"
 	"math/rand/v2"
 	"net/http"
-	"sort"
+	"slices"
 	"strings"
 
 	"github.com/querycraft/sqlquery/backend/internal/ai"
+	"github.com/querycraft/sqlquery/backend/internal/ai/jobs"
 	"github.com/querycraft/sqlquery/backend/internal/engine"
 	"github.com/querycraft/sqlquery/backend/internal/envdb"
 	"github.com/querycraft/sqlquery/backend/internal/metrics"
 	"github.com/querycraft/sqlquery/backend/internal/store"
-	"github.com/querycraft/sqlquery/backend/internal/webui"
 )
 
 // BuildVersion is reported by GET /health; override with -ldflags "-X ...".
@@ -75,7 +75,7 @@ type Server struct {
 	// rather than being built per request, because a job outlives the request
 	// that submitted it: a service built for one request would be gone before
 	// the run it started had a chance to store anything.
-	jobs *ai.Jobs
+	jobs *jobs.Jobs
 
 	// dialects is the list of dialects this gateway can route a statement to.
 	// It is PostgreSQL alone until an adapter registers another one with
@@ -89,7 +89,7 @@ type Server struct {
 	// nil when no SQLite data root is configured, in which case "sqlite" is not
 	// registered as a served dialect and a request for it is refused with
 	// DIALECT_MISMATCH rather than answered by PostgreSQL.
-	sqlite *SQLiteEnvironments
+	sqlite *envdb.SQLiteEnvironments
 
 	// adminPasswordEmpty reports that the install's default administrator has no
 	// password, so an empty password can sign it in. It is a boolean — never
@@ -140,23 +140,16 @@ func New(exec engine.Executor, st store.Store, cfg Config, log *slog.Logger) *Se
 // order, so /capabilities does not flap between requests.
 func (s *Server) UseDialect(name string) {
 	name = strings.TrimSpace(name)
-	if name == "" {
+	if name == "" || slices.Contains(s.dialects, name) {
 		return
 	}
-	for _, have := range s.dialects {
-		if have == name {
-			return
-		}
-	}
 	s.dialects = append(s.dialects, name)
-	sort.Strings(s.dialects)
+	slices.Sort(s.dialects)
 }
 
 // Dialects reports what this gateway can serve, in stable order.
 func (s *Server) Dialects() []string {
-	out := make([]string, len(s.dialects))
-	copy(out, s.dialects)
-	return out
+	return slices.Clone(s.dialects)
 }
 
 // UseSQLite attaches the SQLite dialect's file store and registers the dialect.
@@ -166,7 +159,7 @@ func (s *Server) Dialects() []string {
 // a separate UseDialect call: a gateway that advertises SQLite in
 // /capabilities but cannot open a file for it is exactly the dishonesty this
 // seam exists to prevent.
-func (s *Server) UseSQLite(env *SQLiteEnvironments) {
+func (s *Server) UseSQLite(env *envdb.SQLiteEnvironments) {
 	if env == nil {
 		return
 	}
@@ -186,60 +179,23 @@ func (s *Server) UseAdminPasswordEmpty(empty bool) { s.adminPasswordEmpty = empt
 
 // Handler returns the routed, CORS-wrapped HTTP handler.
 func (s *Server) Handler() http.Handler {
+	routes := s.routes()
 	mux := http.NewServeMux()
-	mux.HandleFunc("GET /health", s.handleHealth)
-	mux.HandleFunc("GET /metrics", s.handleMetrics)
-	mux.HandleFunc("GET /diagnostics", s.handleDiagnostics)
-	mux.HandleFunc("POST /auth/signup", s.handleSignup)
-	mux.HandleFunc("POST /auth/login", s.handleLogin)
-	mux.HandleFunc("POST /auth/logout", s.handleLogout)
-	mux.HandleFunc("GET /auth/me", s.handleMe)
-	mux.HandleFunc("GET /capabilities", s.handleCapabilities)
-	mux.HandleFunc("POST /query", s.handleQuery)
-	mux.HandleFunc("POST /explain", s.handleExplain)
-	mux.HandleFunc("POST /answers/evaluate", s.handleEvaluate)
-	mux.HandleFunc("GET /environment", s.handleEnvironment)
-	mux.HandleFunc("POST /environment/reset", s.handleEnvironmentReset)
-	mux.HandleFunc("GET /datasets/{id}/tables", s.handleTables)
-	mux.HandleFunc("GET /progress/{course}", s.handleGetProgress)
-	mux.HandleFunc("PUT /progress/{course}", s.handlePutProgress)
-	mux.HandleFunc("POST /events", s.handleEvent)
-	mux.HandleFunc("POST /courses/generate", s.handleGenerateCourse)
-	mux.HandleFunc("GET /generation/{id}", s.handleGenerationJob)
-	mux.HandleFunc("GET /courses", s.handleListCourses)
-	mux.HandleFunc("GET /courses/{id}", s.handleGetCourse)
-	mux.HandleFunc("POST /courses/{id}/build", s.handleBuildCourse)
-	mux.HandleFunc("DELETE /courses/{id}", s.handleDeleteCourse)
-	mux.HandleFunc("POST /challenges/generate", s.handleGenerateChallenge)
-	mux.HandleFunc("GET /challenges", s.handleListChallenges)
-	mux.HandleFunc("GET /challenges/{id}", s.handleGetChallenge)
-	mux.HandleFunc("POST /challenges/{id}/reset", s.handleResetChallenge)
-	mux.HandleFunc("POST /challenges/{id}/critique", s.handleCritique)
-	mux.HandleFunc("POST /challenges/{id}/report", s.handleReportDefect)
-	mux.HandleFunc("POST /challenges/{id}/patches/{patchID}", s.handlePatch)
-	mux.HandleFunc("POST /tutor", s.handleTutor)
-	mux.HandleFunc("GET /runs", s.handleListRuns)
-	mux.HandleFunc("GET /runs/{id}", s.handleGetRun)
-	mux.HandleFunc("GET /openapi.json", s.handleOpenAPI)
-	mux.HandleFunc("GET /docs", s.handleDocs)
-	mux.HandleFunc("GET /docs/", s.handleDocs)
-
-	// Catch-all for the embedded SPA. In Go 1.22+ ServeMux the more specific
-	// patterns above (including /health, /query, /docs, /openapi.json) still
-	// win, so the UI only handles paths no API route claims.
-	if webui.Available() {
-		mux.Handle("GET /", webui.Handler())
-	} else {
-		mux.Handle("GET /{$}", webui.Placeholder())
+	for _, rt := range routes {
+		mux.Handle(rt.pattern(), rt.handler)
 	}
-	// withAuth sits inside logging/request-id so a resolved account is visible to
-	// every handler and to the access log's context, and inside CORS so that an
-	// OPTIONS preflight short-circuits before any database lookup. withMetrics is
-	// outside withAuth so an unauthenticated request is still measured, and it
-	// resolves the route from the mux rather than the handler chain so that
-	// requests answered before routing carry a route label from a bounded set
-	// instead of an attacker-chosen path.
-	return withCORS(s.withRequest(s.withObservability(s.withAuth(mux), routeOfMux(mux))))
+
+	// withAuth resolves a bearer token into an account. withRouteAuth, inside
+	// withAuth, then enforces the routing table's requirement, so an anonymous
+	// request to a required route never reaches its handler. Both sit inside
+	// logging/request-id so a resolved account is visible to every handler and
+	// to the access log's context, and inside CORS so that an OPTIONS preflight
+	// short-circuits before any database lookup. withMetrics is outside
+	// withAuth so an unauthenticated request is still measured, and it resolves
+	// the route from the mux rather than the handler chain so that requests
+	// answered before routing carry a route label from a bounded set instead of
+	// an attacker-chosen path.
+	return withCORS(s.withRequest(s.withObservability(s.withAuth(withRouteAuth(mux, routes)), routeOfMux(mux))))
 }
 
 /* ---------- middleware ---------- */
@@ -320,10 +276,7 @@ func readJSON(w http.ResponseWriter, r *http.Request, dst any) bool {
 		if empty {
 			message = "Request body is empty."
 		}
-		writeJSON(w, http.StatusBadRequest, map[string]any{
-			"ok":    false,
-			"error": map[string]string{"code": requestErrorCode(r, empty), "message": message},
-		})
+		errorEnvelope(w, http.StatusBadRequest, requestErrorCode(r, empty), message)
 		return false
 	}
 	return true
@@ -355,26 +308,13 @@ func writeJSON(w http.ResponseWriter, status int, v any) {
 func notFound(w http.ResponseWriter, message string) {
 	// ok:false like every other error envelope on this gateway. It used to omit
 	// the field, so a client that consistently reads `ok` saw undefined here.
-	writeJSON(w, http.StatusNotFound, map[string]any{
-		"ok":    false,
-		"error": map[string]string{"code": "NOT_FOUND", "message": message},
-	})
+	errorEnvelope(w, http.StatusNotFound, "NOT_FOUND", message)
 }
 
 func persistenceFailed(w http.ResponseWriter, err error) {
-	writeJSON(w, http.StatusInternalServerError, map[string]any{
-		"ok":    false,
-		"error": map[string]string{"code": "PERSISTENCE_FAILED", "message": err.Error()},
-	})
+	errorEnvelope(w, http.StatusInternalServerError, "PERSISTENCE_FAILED", err.Error())
 }
 
 func persistenceBadRequest(w http.ResponseWriter, message string) {
-	writeJSON(w, http.StatusBadRequest, map[string]any{
-		"ok":    false,
-		"error": map[string]string{"code": "PERSISTENCE_FAILED", "message": message},
-	})
-}
-
-func trimCourse(name string) string {
-	return strings.TrimSpace(name)
+	errorEnvelope(w, http.StatusBadRequest, "PERSISTENCE_FAILED", message)
 }

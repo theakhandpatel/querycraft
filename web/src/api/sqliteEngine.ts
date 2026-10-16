@@ -370,7 +370,7 @@ function readTables(db: SqliteDatabase): EngineTable[] {
       },
     });
 
-    const preview: string[][] = [[...cols.map((c) => c[0])]];
+    const preview: string[][] = [cols.map((c) => c[0])];
     db.exec({
       sql: `SELECT * FROM ${quoted} LIMIT 5`,
       rowMode: 'array',

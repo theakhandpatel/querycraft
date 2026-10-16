@@ -1,6 +1,6 @@
 ---
 name: Querycraft
-description: A learn-SQL-by-writing-it app — ink-on-paper workspace with one pine accent.
+description: A learn-SQL-by-writing-it app, ink-on-paper workspace with one pine accent.
 colors:
   page-canvas: "#f4f5f7"
   surface-raised: "#ffffff"
@@ -148,14 +148,14 @@ components:
 
 Querycraft is a workspace that happens to teach. The learner is not watching a
 lesson; they are at a bench with a real database on it, and the interface is built
-so that the thing they are making — the query and what it returned — is always the
+so that the thing they are making, the query and what it returned, is always the
 loudest object on screen. Everything else is furniture: paper-white surfaces, a
 single hairline where a border would do, and a rail of navigation that stays quiet
 until it is the current place.
 
 The palette is directional rather than decorative. Ink neutrals carry every surface
 and every line; exactly one saturated hue, a deep pine green, is spent on state and
-action — the active nav item, the primary button, the pass colour's quieter sibling,
+action: the active nav item, the primary button, the pass colour's quieter sibling,
 the focus ring. Nothing else is allowed to be a colour. The feedback panels are the
 only place the system raises its voice, and they do it with a wash of green, amber
 or red rather than a border or a badge, so a verdict reads as a change in the room
@@ -164,7 +164,7 @@ rather than a sticker applied to it.
 Type does the structural work that colour is not allowed to. Space Grotesk is
 reserved for display: page titles, the numbers in a stat row, the ring's percentage,
 the named brand. Geist carries all prose and all chrome. Geist Mono is not a costume
-for "technical" — it is spent only on data and metadata, which is the honest
+for "technical". It is spent only on data and metadata, which is the honest
 distinction: column names, row values, ids, durations, statuses, and the small
 uppercase labels that annotate a section. The result of that split is that a learner
 can tell what is *material* (data, from the engine) and what is *furniture* (the app
@@ -195,13 +195,13 @@ colours that are wash-only.
 
 ### Primary
 
-- **Pine** (`#0b6b59`): the accent as a solid fill — the primary button, the active
+- **Pine** (`#0b6b59`): the accent as a solid fill, the primary button, the active
   switch track, the completed pip in a lesson list. In the light palette the darker
   step is used for fills so white text clears AA on it.
-- **Deep Pine Ink** (`#0c6f5c`): the accent used *as text or iconography* — the current
+- **Deep Pine Ink** (`#0c6f5c`): the accent used *as text or iconography*, the current
   nav icon, an eyebrow, a link, a `.tag`, the filled arc of a progress ring. Kept a
   step darker than the fill so accent-on-accent-wash text still clears AA.
-- **Pine Wash** (`rgba(12, 111, 92, 0.10)`): the accent as a background — selected
+- **Pine Wash** (`rgba(12, 111, 92, 0.10)`): the accent as a background, selected
   chips, the current course switch, an "accepted" panel, the editor's focus tint.
 - **Pine Hairline** (`rgba(12, 111, 92, 0.26)`): the accent as a 1px edge, used only on
   the exercise cell to mark it as gradable.
@@ -213,25 +213,25 @@ colours that are wash-only.
 - **Raised Surface** (`#ffffff`): cards, the sidebar, the header, inputs' surrounding
   chrome. This is the "paper".
 - **Sunken Surface** (`#f7f8fa`): a quieter fill for hints, table headers, staged
-  panels — a surface that is present but should not compete.
+  panels: a surface that is present but should not compete.
 - **Fill Surface** (`#eef0f3`): the default button, pills, switch tracks, code gutters,
   and any control that must read as a control before it is hovered.
 - **Hairline** (`#e3e6eb`) / **Hairline Strong** (`#cbd1da`): separators between rows
   and sections; the strong step for kbd caps, switch outlines and scrollbar thumbs.
 - **Ink** (`#14161a`): body copy, headings, values in a result grid's hover state.
 - **Ink Secondary** (`#494f5a`): supporting prose, nav labels, table cell values.
-- **Ink Tertiary** (`#636a75`): metadata — row counts, durations, ids, section kickers,
+- **Ink Tertiary** (`#636a75`): metadata: row counts, durations, ids, section kickers,
   uppercase labels, empty-state text. *Must* clear 4.5:1 against both the page canvas
   and the fill surface; it is the token that carries the most small text in the product.
 
 ### Named Rules
 
 **The One Voice Rule.** Pine is spent on ≤10% of any screen. It marks action, current
-state, focus and success — never decoration, never a heading, never a chart series for
+state, focus and success: never decoration, never a heading, never a chart series for
 its own sake. Its rarity is what makes the active nav item legible at a glance.
 
 **The Verdict-Is-A-Wash Rule.** Pass, caution and failure are communicated by a tinted
-background (green/amber/red wash) plus a coloured icon and heading — never by a border,
+background (green/amber/red wash) plus a coloured icon and heading, never by a border,
 a ribbon, or a coloured left edge. Colour changes the room; it does not get applied to
 the wall.
 
@@ -245,7 +245,7 @@ to mistake "your SQL is broken" for "your SQL is wrong".
 **Body Font:** Geist (with the system sans)
 **Label/Mono Font:** Geist Mono (with ui-monospace, SFMono-Regular, Menlo)
 
-**Character:** Space Grotesk supplies a slightly mechanical, engineered display voice —
+**Character:** Space Grotesk supplies a slightly mechanical, engineered display voice: 
 enough personality to signal "tools", restrained enough that a 40px page title never
 looks like a poster. Geist is the neutral, high-legibility workhorse underneath it.
 The pairing works because the two share an almost monolinear skeleton; the mono then
@@ -258,11 +258,11 @@ marks, by contrast, the one category of text the product refuses to style as pro
   (`−0.035em` at that size). Never used for a subsection.
 - **Headline** (Space Grotesk 600; 17px / 1.35 / −0.02em): card titles and section
   headings; 15px in a course hero.
-- **Title** (Geist 600; 14px, letter-spacing 0): `h3` inside a panel — switches to the
+- **Title** (Geist 600; 14px, letter-spacing 0): `h3` inside a panel, switches to the
   body face deliberately so a sub-heading reads as an annotation, not a second title.
 - **Prose** (Geist 400; 14.5px / 1.75, max 66ch): chapter body copy and seeded
   markdown. The measure is capped so a long chapter stays readable on a wide monitor.
-- **Body** (Geist 400; 14px / 1.6): all app chrome — buttons, nav, table cells at
+- **Body** (Geist 400; 14px / 1.6): all app chrome, buttons, nav, table cells at
   12.5px, prose at 13px in a card.
 - **Label** (Geist Mono 500; 11px, `0.1em`, uppercase): eyebrows, section kickers,
   `SECTION n`, `COURSE · 9 CHAPTERS`, column headers, `.label` group names. Ten-pixel
@@ -283,13 +283,13 @@ and it is a label. Body faces are never letter-spaced into caps.
 A fixed shell around a single scrolling workspace. The sidebar is 244px wide and holds
 the brand, three to four labelled nav groups, and a pinned account row; the shell's
 `header` is a fixed 52px containing the breadcrumb, the one global search field, and
-engine/theme state. Only `.workspace` scrolls — `.app` is exactly one viewport tall
+engine/theme state. Only `.workspace` scrolls, `.app` is exactly one viewport tall
 with `overflow: hidden`, which is load-bearing: it contains the screens' absolutely
 positioned visually-hidden nodes so the document cannot be scrolled past one viewport.
 
 Content sits in a `.content` column capped at 1180px and centred, with `28px 32px 72px`
 of padding so the last row of a long screen clears the fold. A chapter is a two-column
-grid — a 272px in-page chapter rail and the reading column — where the reading column
+grid of a 272px in-page chapter rail and the reading column, where the reading column
 holds a 720px article and prose blocks cap at 66ch independently of that. There is no
 global max-width on the reading text; the cap is per-paragraph so lists, code and
 tables can still use the full column.
@@ -301,9 +301,9 @@ groups tightly (2–6px between a row's own lines), distinct groups separate gen
 
 **Breakpoints.** Three, and they are about what breaks, not device classes:
 
-- **≤1080px** — `.grid2` and the lesson grid collapse to one column, the chapter rail
+- **≤1080px**, `.grid2` and the lesson grid collapse to one column, the chapter rail
   is hidden, `.grid3` goes to two, `.stats` to two.
-- **≤760px** — the shell rail collapses to 64px of icons (labels hidden but kept for
+- **≤760px**, the shell rail collapses to 64px of icons (labels hidden but kept for
   screen readers and pointers), all multi-column grids go single, page padding drops to
   16px, and `.hide-small` content is dropped.
 
@@ -315,7 +315,7 @@ row carries a `min-width: 0` ancestor or an explicit truncation.
 
 **The system is flat by default.** Depth is tonal: the page canvas is one step darker
 than the paper surfaces that sit on it, and a hairline separates adjacent regions. Cards
-have no border and no shadow — the canvas/paper contrast plus the radius is the whole
+have no border and no shadow. The canvas/paper contrast plus the radius is the whole
 elevation story. A shadow is never used to indicate that something is a card.
 
 Shadow exists for exactly one purpose: something is floating *over* the page, and the
@@ -325,7 +325,7 @@ drawer, the modal, the search results dropdown, and the toast. Nothing else gets
 ### Shadow Vocabulary
 
 - **Ambient (raised, in-flow)** (`0 1px 2px rgba(20,22,26,.05), 0 10px 30px -18px rgba(20,22,26,.28)`):
-  the lightest step. Only for a surface that is genuinely floating in the page flow — a
+  the lightest step. Only for a surface that is genuinely floating in the page flow, a
   selected auth tab, the skip link while focused.
 - **Overlay** (`0 24px 60px -30px rgba(20,22,26,.42)`): the tables drawer, the modal, the
   toast. Always paired with a dimmed backdrop (`rgba(20,22,26,.42–.5)`).
@@ -336,7 +336,7 @@ in the vocabulary, and the one place a ring is drawn (focus) is a ring and says 
 ### Named Rules
 
 **The Flat-By-Default Rule.** Surfaces are flat at rest. A shadow means "floating over
-the page", and if an element is not floating it does not get one — the canvas/paper
+the page", and if an element is not floating it does not get one: the canvas/paper
 contrast already did the work.
 
 **The Hairline-Not-Border Rule.** Separation inside a surface is a 1px hairline in the
@@ -352,8 +352,8 @@ small and single-line.
 Radii run `6 → 8 → 10 → 12 → 14px` on a named scale: 6px for the smallest controls and
 inline code, 8px for buttons, inputs, nav rows and small marks, 10px for panels and
 tables, 12px for cards and the SQL cell, 14px for the auth card. The pill radius (999px)
-is reserved for chips, badges, tags, progress tracks and the switch — all small,
-single-line, and all things whose identity is "a capsule".
+is reserved for chips, badges, tags, progress tracks and the switch, all small,
+single-line things whose identity is "a capsule".
 
 Enclosures are 1px hairlines around scrollable content, never around decorative
 groupings. The SQL cell is the one component with a full enclosure, and it is treated
@@ -370,8 +370,8 @@ than nested boxes.
 - **Primary:** solid deep pine with white text, 600 weight; the dark palette inverts the
   text to a near-black pine so contrast holds on the brighter accent. Padding `8px 13px`.
 - **Hover / Focus:** background steps one token darker/lighter on hover over `180ms`
-  with `cubic-bezier(.2,.7,.3,1)`. Focus is a *ring* — `0 0 0 2px <surface>, 0 0 0 4px
-  var(--accent)` — never an outline, and it must survive on a pill, which is why the
+  with `cubic-bezier(.2,.7,.3,1)`. Focus is a *ring*: `0 0 0 2px <surface>, 0 0 0 4px
+  var(--accent)`, never an outline, and it must survive on a pill, which is why the
   ring's radius is inherited rather than forced.
 - **Secondary:** the fill surface as a background; this is the default `button`, and it
   reads as a control before it is hovered.
@@ -394,7 +394,7 @@ than nested boxes.
 ### Cards / Containers
 
 - **Corner Style:** 12px radius.
-- **Background:** raised surface on the page canvas — no border, no shadow.
+- **Background:** raised surface on the page canvas, no border, no shadow.
 - **Shadow Strategy:** none. See Elevation & Depth. This is the flat-by-default rule
   applied.
 - **Border:** none by default. Enclosed scrollable content (result grid, schema table)
@@ -406,7 +406,7 @@ than nested boxes.
 
 - **Style:** fill surface background, 8px radius, transparent 1px border so the box does
   not move when it focuses. Placeholder uses the tertiary ink token and must clear
-  contrast — a placeholder is still text.
+  contrast: a placeholder is still text.
 - **Focus:** border steps to pine and a 3px pine wash ring appears. The editor inside a
   SQL cell is a borderless code surface and takes an *inset* ring on its wrapper instead,
   because the cell clips with `overflow: hidden`; without that, the one control a learner
@@ -418,11 +418,11 @@ than nested boxes.
 
 - **Style:** sidebar rail, 13px 500, secondary ink on transparent, 8px radius. Groups are
   introduced by a mono uppercase 11px label. The current item takes the fill surface and
-  full ink, and its icon switches to pine — that icon is the only accent in the rail.
+  full ink, and its icon switches to pine. That icon is the only accent in the rail.
 - **Mobile (≤760px):** the rail collapses to 64px of centred icons; the label is hidden
   visually but preserved for pointers (`title`) and screen readers (`aria-label`).
 - **In-page:** chapter and section navigation uses the same row vocabulary at a smaller
-  scale — a numbered 20–24px mark, a truncating label, and metadata on the right.
+  scale: a numbered 20–24px mark, a truncating label, and metadata on the right.
 
 ### SQL Cell (signature component)
 
@@ -445,7 +445,7 @@ mistaken for "passed".
 
 ### Do:
 
-- **Do** keep the accent at ≤10% of a screen — action, current state, focus, success.
+- **Do** keep the accent at ≤10% of a screen: action, current state, focus, success.
 - **Do** express depth as canvas-vs-paper contrast plus a hairline; reserve `box-shadow`
   for surfaces that float over the page (drawer, modal, dropdown, toast).
 - **Do** use `minmax(0, 1fr)` for every grid column and give every nowrap node in a grid
@@ -471,6 +471,6 @@ mistaken for "passed".
   cell, the primary action and the current nav item must dominate their neighbours.
 - **Don't** rename product terminology (chapter, exercise, result contract, workbook,
   challenge lab, workspace, dialect, plan) or rewrite the product's copy in a design pass.
-- **Don't** let a dark palette be derived by inverting the light one — the dark palette is
+- **Don't** let a dark palette be derived by inverting the light one. The dark palette is
   a second palette with its own accent value (`#34d3a6`) so contrast holds on a dark
   surface.

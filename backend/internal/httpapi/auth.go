@@ -33,11 +33,10 @@ func userFrom(ctx context.Context) (store.User, bool) {
 	return u, ok
 }
 
-// withAuth resolves a bearer token into an account and attaches it.
-//
-// An absent token is allowed through untouched so the public surface (health,
-// query, dataset introspection) keeps working; handlers that need an owner call
-// requireUser, which answers 401 with a stable code.
+// withAuth resolves a bearer token into an account and attaches it. A request
+// with no token, or one the store does not know, continues as anonymous:
+// withRouteAuth decides whether the route it is heading for may serve an
+// anonymous caller, and handlers that need an owner call requireUser.
 func (s *Server) withAuth(next http.Handler) http.Handler {
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		token := auth.BearerToken(r.Header.Get("Authorization"))
@@ -58,23 +57,41 @@ func (s *Server) withAuth(next http.Handler) http.Handler {
 	})
 }
 
+// withRouteAuth enforces the routing table's requirement for the request.
+//
+// It sits inside withAuth, so a valid token is already resolved into an
+// account. A required route without one answers 401 AUTH_REQUIRED and never
+// reaches its handler. A pattern the table does not declare is closed too, so a
+// route added to the mux without a table entry cannot serve an anonymous
+// caller.
+func withRouteAuth(mux *http.ServeMux, routes []route) http.Handler {
+	declared := make(map[string]authMode, len(routes))
+	for _, rt := range routes {
+		declared[rt.pattern()] = rt.auth
+	}
+	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if _, pattern := mux.Handler(r); pattern != "" && declared[pattern] != authPublic {
+			if _, ok := userFrom(r.Context()); !ok {
+				errorEnvelope(w, http.StatusUnauthorized, "AUTH_REQUIRED", "Sign in to continue.")
+				return
+			}
+		}
+		// An unmatched pattern carries no route; the mux answers 404 as before.
+		mux.ServeHTTP(w, r)
+	})
+}
+
 // requireUser resolves the caller or writes 401 and returns false.
 func (s *Server) requireUser(w http.ResponseWriter, r *http.Request) (store.User, bool) {
 	if u, ok := userFrom(r.Context()); ok {
 		return u, true
 	}
-	writeJSON(w, http.StatusUnauthorized, map[string]any{
-		"ok":    false,
-		"error": map[string]string{"code": "AUTH_REQUIRED", "message": "Sign in to continue."},
-	})
+	errorEnvelope(w, http.StatusUnauthorized, "AUTH_REQUIRED", "Sign in to continue.")
 	return store.User{}, false
 }
 
 func authBadRequest(w http.ResponseWriter, err error) {
-	writeJSON(w, http.StatusBadRequest, map[string]any{
-		"ok":    false,
-		"error": map[string]string{"code": "AUTH_INVALID_INPUT", "message": err.Error()},
-	})
+	errorEnvelope(w, http.StatusBadRequest, "AUTH_INVALID_INPUT", err.Error())
 }
 
 // authResponse is the body returned by signup and login. The token is the only
@@ -126,10 +143,7 @@ func (s *Server) handleSignup(w http.ResponseWriter, r *http.Request) {
 	}
 	if err := s.store.CreateUser(r.Context(), u, hash); err != nil {
 		if errors.Is(err, store.ErrEmailTaken) {
-			writeJSON(w, http.StatusConflict, map[string]any{
-				"ok":    false,
-				"error": map[string]string{"code": "AUTH_EMAIL_TAKEN", "message": "That email is already registered."},
-			})
+			errorEnvelope(w, http.StatusConflict, "AUTH_EMAIL_TAKEN", "That email is already registered.")
 			return
 		}
 		persistenceFailed(w, err)
@@ -159,20 +173,14 @@ func (s *Server) handleLogin(w http.ResponseWriter, r *http.Request) {
 	key := loginKey(clientIP(r), auth.NormalizeEmail(req.Email))
 	if allowed, retryAfter := s.login.allow(key); !allowed {
 		w.Header().Set("Retry-After", strconv.Itoa(retryAfter))
-		writeJSON(w, http.StatusTooManyRequests, map[string]any{
-			"ok":    false,
-			"error": map[string]string{"code": "AUTH_RATE_LIMITED", "message": "Too many failed sign-in attempts. Try again later."},
-		})
+		errorEnvelope(w, http.StatusTooManyRequests, "AUTH_RATE_LIMITED", "Too many failed sign-in attempts. Try again later.")
 		return
 	}
 	u, err := auth.Authenticate(r.Context(), s.store, req.Email, req.Password)
 	if err != nil {
 		if errors.Is(err, auth.ErrInvalidCredentials) {
 			s.login.fail(key)
-			writeJSON(w, http.StatusUnauthorized, map[string]any{
-				"ok":    false,
-				"error": map[string]string{"code": "AUTH_INVALID_CREDENTIALS", "message": "Email or password is incorrect."},
-			})
+			errorEnvelope(w, http.StatusUnauthorized, "AUTH_INVALID_CREDENTIALS", "Email or password is incorrect.")
 			return
 		}
 		persistenceFailed(w, err)

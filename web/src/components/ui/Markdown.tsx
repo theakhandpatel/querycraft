@@ -55,7 +55,7 @@ export default function Markdown({ source, className }: { source: string; classN
       let mermaid: typeof import('mermaid').default;
       try {
         mermaid = (await import('mermaid')).default;
-      } catch (err) {
+      } catch {
         if (!alive) return;
         for (const node of nodes) {
           showMermaidSource(node, node.getAttribute('data-mermaid') ?? '');
@@ -95,7 +95,7 @@ export default function Markdown({ source, className }: { source: string; classN
           if (!alive) return;
           node.innerHTML = svg;
           node.setAttribute(RENDERED_ATTR, '1');
-        } catch (err) {
+        } catch {
           document.getElementById(`d${id}`)?.remove();
           document.getElementById(id)?.remove();
           if (!alive) return;

@@ -4,10 +4,9 @@ import type { ExecutionApi } from '../types';
 /* One seam. Everything above it (screens, workbook, lesson) is adapter-agnostic.
    VITE_API_MODE picks the adapter:
      - "pglite" (default): real PostgreSQL (WASM) in the page, no server needed
-     - "http": the Go gateway
-     - "mock": the original canned results, kept for comparison */
+     - "http": the Go gateway */
 
-export type ApiMode = 'mock' | 'pglite' | 'http';
+export type ApiMode = 'pglite' | 'http';
 
 let resolvedMode: ApiMode | null = null;
 let resolvedBase: string | null = null;
@@ -41,7 +40,7 @@ async function probeGatewayEngine(base: string): Promise<string | null> {
 
 function requestedMode(): ApiMode {
   const requested = import.meta.env.VITE_API_MODE;
-  return requested === 'http' ? 'http' : requested === 'mock' ? 'mock' : 'pglite';
+  return requested === 'http' ? 'http' : 'pglite';
 }
 
 /**
@@ -56,7 +55,7 @@ function requestedMode(): ApiMode {
 export async function resolveApiMode(): Promise<void> {
   if (resolvedMode) return;
   const requested = import.meta.env.VITE_API_MODE;
-  if (requested === 'http' || requested === 'mock' || requested === 'pglite') {
+  if (requested === 'http' || requested === 'pglite') {
     resolvedMode = requested;
     resolvedBase = import.meta.env.VITE_API_BASE || 'http://localhost:8080';
     if (requested === 'http') resolvedEngine = await probeGatewayEngine(resolvedBase);
@@ -98,7 +97,6 @@ export {
   AUTH_TOKEN_KEY,
   ExecutionService,
   GatewayError,
-  MOCK_CONFIG,
   PGLITE_CONFIG,
   clearAuthToken,
   readAuthToken,

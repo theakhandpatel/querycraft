@@ -7,6 +7,9 @@ import (
 	"strings"
 	"testing"
 	"time"
+
+	"github.com/querycraft/sqlquery/backend/internal/ai/provider"
+	"github.com/querycraft/sqlquery/backend/internal/schema"
 )
 
 /* The M8 agent's tests.
@@ -28,23 +31,23 @@ import (
 // results it sent back.
 type scriptedAgent struct {
 	outline string
-	steps   []ProviderResponse
-	calls   []ProviderRequest
+	steps   []provider.ProviderResponse
+	calls   []provider.ProviderRequest
 }
 
-func (a *scriptedAgent) Descriptor() ProviderDescriptor {
-	return ProviderDescriptor{Name: "scripted", Model: "scripted-agent-v1", Version: "1", Configured: true}
+func (a *scriptedAgent) Descriptor() provider.ProviderDescriptor {
+	return provider.ProviderDescriptor{Name: "scripted", Model: "scripted-agent-v1", Version: "1", Configured: true}
 }
 
-func (a *scriptedAgent) Complete(_ context.Context, req ProviderRequest) (ProviderResponse, error) {
+func (a *scriptedAgent) Complete(_ context.Context, req provider.ProviderRequest) (provider.ProviderResponse, error) {
 	a.calls = append(a.calls, req)
 	if len(req.Tools) == 0 {
-		return ProviderResponse{Text: a.outline, Provider: "scripted", Model: "scripted-agent-v1", FinishReason: "stop"}, nil
+		return provider.ProviderResponse{Text: a.outline, Provider: "scripted", Model: "scripted-agent-v1", FinishReason: "stop"}, nil
 	}
 	if len(a.steps) == 0 {
 		// Nothing scripted left: a plain reply, which the loop answers with a
 		// nudge rather than by inventing a tool call.
-		return ProviderResponse{Text: "I am done.", Provider: "scripted", Model: "scripted-agent-v1", FinishReason: "stop"}, nil
+		return provider.ProviderResponse{Text: "I am done.", Provider: "scripted", Model: "scripted-agent-v1", FinishReason: "stop"}, nil
 	}
 	step := a.steps[0]
 	a.steps = a.steps[1:]
@@ -53,8 +56,8 @@ func (a *scriptedAgent) Complete(_ context.Context, req ProviderRequest) (Provid
 }
 
 // agentCalls is every tool-calling request the provider saw, in order.
-func (a *scriptedAgent) agentCalls() []ProviderRequest {
-	var out []ProviderRequest
+func (a *scriptedAgent) agentCalls() []provider.ProviderRequest {
+	var out []provider.ProviderRequest
 	for _, req := range a.calls {
 		if len(req.Tools) > 0 {
 			out = append(out, req)
@@ -64,7 +67,7 @@ func (a *scriptedAgent) agentCalls() []ProviderRequest {
 }
 
 // lastToolMessages is the tool results the gateway sent on one turn.
-func lastToolMessages(req ProviderRequest) []string {
+func lastToolMessages(req provider.ProviderRequest) []string {
 	var out []string
 	for _, m := range req.Messages {
 		if m.Role == "tool" && m.ToolCallID != "" {
@@ -75,17 +78,17 @@ func lastToolMessages(req ProviderRequest) []string {
 }
 
 // saveChapterCall scripts one save_chapter turn.
-func saveChapterCall(t *testing.T, ch CourseChapter) ProviderResponse {
+func saveChapterCall(t *testing.T, ch schema.CourseChapter) provider.ProviderResponse {
 	t.Helper()
 	args, err := json.Marshal(ch)
 	if err != nil {
 		t.Fatalf("encode chapter: %v", err)
 	}
-	return ProviderResponse{
-		ToolCalls: []ToolCall{{
+	return provider.ProviderResponse{
+		ToolCalls: []provider.ToolCall{{
 			ID:       "call_" + ch.ID,
 			Type:     "function",
-			Function: ToolCallFunction{Name: toolSaveChapter, Arguments: string(args)},
+			Function: provider.ToolCallFunction{Name: toolSaveChapter, Arguments: string(args)},
 		}},
 		FinishReason: "tool_calls",
 	}
@@ -93,23 +96,23 @@ func saveChapterCall(t *testing.T, ch CourseChapter) ProviderResponse {
 
 // saveChapterArgs scripts a save_chapter turn whose arguments are raw text, so
 // a test can hand the gateway something the model could not have written.
-func saveChapterArgs(id, args string) ProviderResponse {
-	return ProviderResponse{
-		ToolCalls: []ToolCall{{
+func saveChapterArgs(id, args string) provider.ProviderResponse {
+	return provider.ProviderResponse{
+		ToolCalls: []provider.ToolCall{{
 			ID:       "call_" + id,
 			Type:     "function",
-			Function: ToolCallFunction{Name: toolSaveChapter, Arguments: args},
+			Function: provider.ToolCallFunction{Name: toolSaveChapter, Arguments: args},
 		}},
 		FinishReason: "tool_calls",
 	}
 }
 
-func finishCourseCall() ProviderResponse {
-	return ProviderResponse{
-		ToolCalls: []ToolCall{{
+func finishCourseCall() provider.ProviderResponse {
+	return provider.ProviderResponse{
+		ToolCalls: []provider.ToolCall{{
 			ID:       "call_finish_course",
 			Type:     "function",
-			Function: ToolCallFunction{Name: toolFinishCourse, Arguments: `{"summary":"done"}`},
+			Function: provider.ToolCallFunction{Name: toolFinishCourse, Arguments: `{"summary":"done"}`},
 		}},
 		FinishReason: "tool_calls",
 	}
@@ -117,7 +120,7 @@ func finishCourseCall() ProviderResponse {
 
 // outlineFor renders the outline of a plan fixture: exactly what the agent's
 // first call asks for, derived from the plan the chapters come from.
-func outlineFor(t *testing.T, plan CoursePlan) string {
+func outlineFor(t *testing.T, plan schema.CoursePlan) string {
 	t.Helper()
 	outline := CourseOutline{
 		Title:      plan.Title,
@@ -149,13 +152,13 @@ func outlineFor(t *testing.T, plan CoursePlan) string {
 // cross-check. The copy matters: a chapter holds slices, so a test that edited
 // the fixture in place would hand the gateway the same broken chapter twice and
 // prove nothing about repair.
-func crossCheckChapter(t *testing.T, ch CourseChapter, cross string) CourseChapter {
+func crossCheckChapter(t *testing.T, ch schema.CourseChapter, cross string) schema.CourseChapter {
 	t.Helper()
 	raw, err := json.Marshal(ch)
 	if err != nil {
 		t.Fatalf("encode chapter: %v", err)
 	}
-	var out CourseChapter
+	var out schema.CourseChapter
 	if err := json.Unmarshal(raw, &out); err != nil {
 		t.Fatalf("decode chapter: %v", err)
 	}
@@ -186,7 +189,7 @@ func TestTheOutlinePromptNamesTheChapterBudget(t *testing.T) {
 	}
 	for _, tc := range tests {
 		t.Run(fmt.Sprintf("exercise_count=%d", tc.exerciseCount), func(t *testing.T) {
-			req := GenerationRequest{Title: "A budgeted course", Difficulty: Intermediate, ExerciseCount: tc.exerciseCount}
+			req := schema.GenerationRequest{Title: "A budgeted course", Difficulty: schema.Intermediate, ExerciseCount: tc.exerciseCount}
 			prompt := courseOutlinePrompt(req)
 			want := fmt.Sprintf("budget is %d exercise(s)", tc.budget)
 			if !strings.Contains(prompt, want) {
@@ -215,7 +218,7 @@ func outlineWithBudgetChapters(t *testing.T, n int, emptyLast bool) string {
 		Subtitle:   "One exercise per chapter, planned against an exact budget.",
 		Level:      "intermediate",
 		Objectives: []string{"Plan a course within its exercise budget."},
-		Setup:      SetupPlan{Dataset: "commerce", SchemaVersion: 1, SeedVersion: 1, Statements: []string{}},
+		Setup:      schema.SetupPlan{Dataset: "commerce", SchemaVersion: 1, SeedVersion: 1, Statements: []string{}},
 	}
 	for i := 0; i < n; i++ {
 		exercises := 1
@@ -280,7 +283,7 @@ func TestARequestSmallerThanItsOutlineIsNeverBlamedOnTheSchema(t *testing.T) {
 			// Chapters to hand in for the rows whose outline the gate accepts.
 			// The empty chapter is never written, because a chapter that plans
 			// no exercise is not a chapter the model can save.
-			steps := make([]ProviderResponse, 0, tc.chapters+1)
+			steps := make([]provider.ProviderResponse, 0, tc.chapters+1)
 			for i := 0; i < tc.chapters; i++ {
 				if tc.emptyLast && i == tc.chapters-1 {
 					break
@@ -292,15 +295,15 @@ func TestARequestSmallerThanItsOutlineIsNeverBlamedOnTheSchema(t *testing.T) {
 
 			agent := &scriptedAgent{outline: outline, steps: steps}
 			svc := testService(agent, depot, ex)
-			out := svc.GenerateCourse(ctx, GenerationRequest{
+			out := svc.GenerateCourse(ctx, schema.GenerationRequest{
 				Title:         "A course within a small budget",
-				Difficulty:    Intermediate,
+				Difficulty:    schema.Intermediate,
 				ExerciseCount: tc.exerciseCount,
 			})
 
 			if tc.wantActive {
-				if out.Status != StatusActive {
-					t.Fatalf("status = %q, want %q (error = %+v)", out.Status, StatusActive, out.Error)
+				if out.Status != schema.StatusActive {
+					t.Fatalf("status = %q, want %q (error = %+v)", out.Status, schema.StatusActive, out.Error)
 				}
 				if out.Plan == nil || len(out.Plan.Chapters) != tc.chapters {
 					t.Fatalf("active course has %v chapters, want the %d the outline planned", out.Plan, tc.chapters)
@@ -312,14 +315,14 @@ func TestARequestSmallerThanItsOutlineIsNeverBlamedOnTheSchema(t *testing.T) {
 				return
 			}
 
-			if out.Status != StatusFailed {
-				t.Fatalf("status = %q, want %q (error = %+v)", out.Status, StatusFailed, out.Error)
+			if out.Status != schema.StatusFailed {
+				t.Fatalf("status = %q, want %q (error = %+v)", out.Status, schema.StatusFailed, out.Error)
 			}
 			if out.Error == nil {
 				t.Fatal("a refused outline must name the reason")
 			}
-			if out.Error.Code != CodeInvalidArtifact || out.Error.Stage != StageValidateArtifact {
-				t.Fatalf("error = %+v, want %s at %s", out.Error, CodeInvalidArtifact, StageValidateArtifact)
+			if out.Error.Code != CodeInvalidArtifact || out.Error.Stage != schema.StageValidateArtifact {
+				t.Fatalf("error = %+v, want %s at %s", out.Error, CodeInvalidArtifact, schema.StageValidateArtifact)
 			}
 			detail := out.Error.Detail
 			// The defect, verbatim: a request the contract permits answered
@@ -359,12 +362,12 @@ func TestTheRefusedOutlineNamesTheChapterCountWhenTheBudgetCannotReachIt(t *test
 	agent := &scriptedAgent{outline: outlineWithBudgetChapters(t, 3, true)}
 	svc := testService(agent, depot, nil)
 
-	out := svc.GenerateCourse(testContext(t), GenerationRequest{
+	out := svc.GenerateCourse(testContext(t), schema.GenerationRequest{
 		Title:         "One exercise, three chapters",
-		Difficulty:    Intermediate,
+		Difficulty:    schema.Intermediate,
 		ExerciseCount: 1,
 	})
-	if out.Status != StatusFailed || out.Error == nil {
+	if out.Status != schema.StatusFailed || out.Error == nil {
 		t.Fatalf("outcome = %+v, want a failure that names the reason", out)
 	}
 	if !strings.Contains(out.Error.Detail, "at least 3 exercise(s)") {
@@ -401,12 +404,12 @@ func TestCourseOutlineIsGatedBeforeAnyChapterIsAsked(t *testing.T) {
 	agent.outline = string(raw)
 	svc := testService(agent, newTestDepot(), ex)
 
-	out := svc.GenerateCourse(ctx, GenerationRequest{Title: "An outline the gate refuses", Difficulty: Intermediate})
-	if out.Status != StatusFailed {
-		t.Fatalf("status = %q, want %q", out.Status, StatusFailed)
+	out := svc.GenerateCourse(ctx, schema.GenerationRequest{Title: "An outline the gate refuses", Difficulty: schema.Intermediate})
+	if out.Status != schema.StatusFailed {
+		t.Fatalf("status = %q, want %q", out.Status, schema.StatusFailed)
 	}
-	if out.Error == nil || out.Error.Code != CodeInvalidArtifact || out.Error.Stage != StageValidateArtifact {
-		t.Fatalf("error = %+v, want %s at %s", out.Error, CodeInvalidArtifact, StageValidateArtifact)
+	if out.Error == nil || out.Error.Code != CodeInvalidArtifact || out.Error.Stage != schema.StageValidateArtifact {
+		t.Fatalf("error = %+v, want %s at %s", out.Error, CodeInvalidArtifact, schema.StageValidateArtifact)
 	}
 	if !strings.Contains(out.Error.Detail, "exercises") {
 		t.Errorf("detail = %q, want it to name the field the outline got wrong", out.Error.Detail)
@@ -433,13 +436,13 @@ func TestTheAgentRepairsAChapterFromTheEnginesMessage(t *testing.T) {
 
 	agent := &scriptedAgent{
 		outline: outlineFor(t, plan),
-		steps:   []ProviderResponse{saveChapterCall(t, broken), saveChapterCall(t, good), finishCourseCall()},
+		steps:   []provider.ProviderResponse{saveChapterCall(t, broken), saveChapterCall(t, good), finishCourseCall()},
 	}
 	svc := testService(agent, depot, ex)
 
 	out := svc.GenerateCourse(ctx, exerciseTitleRequest("A chapter that has to be repaired"))
-	if out.Status != StatusActive {
-		t.Fatalf("status = %q, want %q (error = %+v)", out.Status, StatusActive, out.Error)
+	if out.Status != schema.StatusActive {
+		t.Fatalf("status = %q, want %q (error = %+v)", out.Status, schema.StatusActive, out.Error)
 	}
 	if out.Plan == nil {
 		t.Fatal("an active course must carry its plan")
@@ -493,7 +496,7 @@ func TestTheAgentRepairsAChapterFromTheEnginesMessage(t *testing.T) {
 	}
 	// The stored record is the active course, readable by id.
 	rec, found, err := depot.Course(ctx, out.Plan.ID)
-	if err != nil || !found || rec.Status != StatusActive {
+	if err != nil || !found || rec.Status != schema.StatusActive {
 		t.Fatalf("stored course = %+v (found = %v, err = %v), want the active plan", rec.Status, found, err)
 	}
 }
@@ -509,7 +512,7 @@ func TestACourseIsStoredWhileItsLaterChaptersAreStillBeingWritten(t *testing.T) 
 	plan := coursePlanFixture()
 	agent := &scriptedAgent{
 		outline: outlineFor(t, plan),
-		steps:   []ProviderResponse{saveChapterCall(t, plan.Chapters[0]), saveChapterCall(t, plan.Chapters[1]), finishCourseCall()},
+		steps:   []provider.ProviderResponse{saveChapterCall(t, plan.Chapters[0]), saveChapterCall(t, plan.Chapters[1]), finishCourseCall()},
 	}
 	svc := testService(agent, depot, ex)
 
@@ -517,7 +520,7 @@ func TestACourseIsStoredWhileItsLaterChaptersAreStillBeingWritten(t *testing.T) 
 	// handed in — that is the moment the first chapter is on disk and the
 	// second is not.
 	var (
-		seen      CourseRecord
+		seen      schema.CourseRecord
 		seenFound bool
 		seenAt    int
 	)
@@ -535,14 +538,14 @@ func TestACourseIsStoredWhileItsLaterChaptersAreStillBeingWritten(t *testing.T) 
 	}}
 
 	out := svc.GenerateCourse(ctx, exerciseTitleRequest("A course written while you watch"))
-	if out.Status != StatusActive {
-		t.Fatalf("status = %q, want %q (error = %+v)", out.Status, StatusActive, out.Error)
+	if out.Status != schema.StatusActive {
+		t.Fatalf("status = %q, want %q (error = %+v)", out.Status, schema.StatusActive, out.Error)
 	}
 	if !seenFound || seenAt != 2 {
 		t.Fatalf("the store was never read while the second chapter was being written (found = %v, turn = %d)", seenFound, seenAt)
 	}
-	if seen.Status != StatusBuilding {
-		t.Fatalf("the course read mid-run is %q, want %q", seen.Status, StatusBuilding)
+	if seen.Status != schema.StatusBuilding {
+		t.Fatalf("the course read mid-run is %q, want %q", seen.Status, schema.StatusBuilding)
 	}
 	if seen.Plan.ID != out.Plan.ID {
 		t.Fatalf("the mid-run course has id %q, the finished one %q", seen.Plan.ID, out.Plan.ID)
@@ -573,7 +576,7 @@ func TestAChapterThatNeverVerifiesIsDroppedAndTheRestIsKept(t *testing.T) {
 
 	agent := &scriptedAgent{
 		outline: outlineFor(t, plan),
-		steps: []ProviderResponse{
+		steps: []provider.ProviderResponse{
 			saveChapterCall(t, plan.Chapters[0]),
 			saveChapterCall(t, broken),
 			saveChapterCall(t, broken),
@@ -584,8 +587,8 @@ func TestAChapterThatNeverVerifiesIsDroppedAndTheRestIsKept(t *testing.T) {
 	svc := testService(agent, depot, ex)
 
 	out := svc.GenerateCourse(ctx, exerciseTitleRequest("A course with one chapter that will not run"))
-	if out.Status != StatusActive {
-		t.Fatalf("status = %q, want %q (error = %+v)", out.Status, StatusActive, out.Error)
+	if out.Status != schema.StatusActive {
+		t.Fatalf("status = %q, want %q (error = %+v)", out.Status, schema.StatusActive, out.Error)
 	}
 	if out.Plan == nil {
 		t.Fatal("an active course must carry its plan")
@@ -603,7 +606,7 @@ func TestAChapterThatNeverVerifiesIsDroppedAndTheRestIsKept(t *testing.T) {
 	if dropped.Status != ChapterDropped {
 		t.Fatalf("chapter %s = %q, want %q", dropped.ID, dropped.Status, ChapterDropped)
 	}
-	if dropped.Error == nil || dropped.Error.Stage != StageCrossCheck {
+	if dropped.Error == nil || dropped.Error.Stage != schema.StageCrossCheck {
 		t.Fatalf("the dropped chapter does not name the stage that refused it: %+v", dropped.Error)
 	}
 	failed := false
@@ -649,7 +652,7 @@ func TestACourseWithNoVerifiedChapterIsRefusedAndNothingIsStored(t *testing.T) {
 
 	agent := &scriptedAgent{
 		outline: outlineFor(t, plan),
-		steps: []ProviderResponse{
+		steps: []provider.ProviderResponse{
 			saveChapterCall(t, broken),
 			saveChapterCall(t, broken),
 			saveChapterCall(t, broken),
@@ -659,8 +662,8 @@ func TestACourseWithNoVerifiedChapterIsRefusedAndNothingIsStored(t *testing.T) {
 	svc := testService(agent, depot, ex)
 
 	out := svc.GenerateCourse(ctx, exerciseTitleRequest("A course that never verifies"))
-	if out.Status != StatusRejected {
-		t.Fatalf("status = %q, want %q (error = %+v)", out.Status, StatusRejected, out.Error)
+	if out.Status != schema.StatusRejected {
+		t.Fatalf("status = %q, want %q (error = %+v)", out.Status, schema.StatusRejected, out.Error)
 	}
 	if out.Plan != nil {
 		t.Fatal("a refused course must not return a plan")
@@ -691,8 +694,8 @@ func TestTheRunBudgetEndsAStuckLoop(t *testing.T) {
 	svc := testService(&loopingAgent{scriptedAgent: agent}, depot, ex)
 
 	out := svc.GenerateCourse(ctx, exerciseTitleRequest("A model that will not write a chapter"))
-	if out.Status != StatusRejected {
-		t.Fatalf("status = %q, want %q (error = %+v)", out.Status, StatusRejected, out.Error)
+	if out.Status != schema.StatusRejected {
+		t.Fatalf("status = %q, want %q (error = %+v)", out.Status, schema.StatusRejected, out.Error)
 	}
 	if got := len(agent.agentCalls()); got != maxAgentRounds {
 		t.Fatalf("tool-calling turns = %d, want the budget of %d", got, maxAgentRounds)
@@ -716,7 +719,7 @@ func TestASaveChapterWithUnusableArgumentsIsAnsweredNotCrashing(t *testing.T) {
 	plan := coursePlanFixture()
 	agent := &scriptedAgent{
 		outline: outlineFor(t, plan),
-		steps: []ProviderResponse{
+		steps: []provider.ProviderResponse{
 			saveChapterArgs("garbage", "this is not json"),
 			saveChapterCall(t, plan.Chapters[0]),
 			finishCourseCall(),
@@ -733,7 +736,7 @@ func TestASaveChapterWithUnusableArgumentsIsAnsweredNotCrashing(t *testing.T) {
 	if !strings.Contains(answered, `"status":"invalid"`) {
 		t.Fatalf("unreadable arguments were not reported back as invalid: %s", answered)
 	}
-	if out.Status != StatusActive {
+	if out.Status != schema.StatusActive {
 		t.Fatalf("status = %q, want the course to continue after the bad call (%+v)", out.Status, out.Error)
 	}
 }
@@ -742,21 +745,21 @@ func TestASaveChapterWithUnusableArgumentsIsAnsweredNotCrashing(t *testing.T) {
 
 // exerciseTitleRequest is the tiny request these tests drive the agent with: a
 // goal and nothing else, which is what the prompt is written for.
-func exerciseTitleRequest(title string) GenerationRequest {
-	return GenerationRequest{Title: title, Difficulty: Intermediate}
+func exerciseTitleRequest(title string) schema.GenerationRequest {
+	return schema.GenerationRequest{Title: title, Difficulty: schema.Intermediate}
 }
 
 // observingAgent wraps a scripted agent and calls onTurn before each
 // tool-calling request, which is how a test reads the store mid-run.
 type observingAgent struct {
-	inner  Provider
+	inner  provider.Provider
 	onTurn func(turn int)
 	turn   int
 }
 
-func (a *observingAgent) Descriptor() ProviderDescriptor { return a.inner.Descriptor() }
+func (a *observingAgent) Descriptor() provider.ProviderDescriptor { return a.inner.Descriptor() }
 
-func (a *observingAgent) Complete(ctx context.Context, req ProviderRequest) (ProviderResponse, error) {
+func (a *observingAgent) Complete(ctx context.Context, req provider.ProviderRequest) (provider.ProviderResponse, error) {
 	if len(req.Tools) > 0 {
 		a.turn++
 		if a.onTurn != nil {
@@ -770,23 +773,23 @@ func (a *observingAgent) Complete(ctx context.Context, req ProviderRequest) (Pro
 // chapter is ever resolved.
 type loopingAgent struct{ *scriptedAgent }
 
-func (a *loopingAgent) Complete(_ context.Context, req ProviderRequest) (ProviderResponse, error) {
+func (a *loopingAgent) Complete(_ context.Context, req provider.ProviderRequest) (provider.ProviderResponse, error) {
 	a.calls = append(a.calls, req)
 	if len(req.Tools) == 0 {
-		return ProviderResponse{Text: a.outline, FinishReason: "stop"}, nil
+		return provider.ProviderResponse{Text: a.outline, FinishReason: "stop"}, nil
 	}
-	return ProviderResponse{
-		ToolCalls: []ToolCall{{
+	return provider.ProviderResponse{
+		ToolCalls: []provider.ToolCall{{
 			ID:       "call_unknown",
 			Type:     "function",
-			Function: ToolCallFunction{Name: toolSaveChapter, Arguments: `{"id":"not-in-the-outline"}`},
+			Function: provider.ToolCallFunction{Name: toolSaveChapter, Arguments: `{"id":"not-in-the-outline"}`},
 		}},
 		FinishReason: "tool_calls",
 	}, nil
 }
 
 // chapterIDsOf names the chapters of a plan, for a failure message.
-func chapterIDsOf(chapters []CourseChapter) []string {
+func chapterIDsOf(chapters []schema.CourseChapter) []string {
 	out := make([]string, 0, len(chapters))
 	for _, ch := range chapters {
 		out = append(out, ch.ID)
@@ -813,8 +816,8 @@ func TestTheOutlinePhaseStopsAwaitingApproval(t *testing.T) {
 	req.RequireApproval = true
 	out := svc.GenerateCourse(testContext(t), req)
 
-	if out.Status != StatusAwaitingApproval {
-		t.Fatalf("status = %q, want %q (error = %+v)", out.Status, StatusAwaitingApproval, out.Error)
+	if out.Status != schema.StatusAwaitingApproval {
+		t.Fatalf("status = %q, want %q (error = %+v)", out.Status, schema.StatusAwaitingApproval, out.Error)
 	}
 	if out.Error != nil {
 		t.Fatalf("a pause is not a failure, but it carries an error: %+v", out.Error)
@@ -835,8 +838,8 @@ func TestTheOutlinePhaseStopsAwaitingApproval(t *testing.T) {
 	if err != nil || !found {
 		t.Fatalf("the paused run stored nothing: found = %v err = %v", found, err)
 	}
-	if rec.Status != StatusBuilding {
-		t.Fatalf("the stored course is %q, want %q", rec.Status, StatusBuilding)
+	if rec.Status != schema.StatusBuilding {
+		t.Fatalf("the stored course is %q, want %q", rec.Status, schema.StatusBuilding)
 	}
 	if len(rec.Plan.Chapters) != len(plan.Chapters) {
 		t.Fatalf("the stored course has %d chapters, want the %d the outline planned", len(rec.Plan.Chapters), len(plan.Chapters))
@@ -870,13 +873,13 @@ func TestApprovingAPausedCourseRunsTheChapterPhase(t *testing.T) {
 	req := exerciseTitleRequest("A course built after its outline is approved")
 	req.RequireApproval = true
 	out := svc.GenerateCourse(testContext(t), req)
-	if out.Status != StatusAwaitingApproval || out.Plan == nil {
+	if out.Status != schema.StatusAwaitingApproval || out.Plan == nil {
 		t.Fatalf("the pause did not happen: status = %q plan = %+v", out.Status, out.Plan)
 	}
 
 	// Phase 2: approve. The provider now answers the chapter conversation, and
 	// a scratch environment exists to verify in.
-	steps := make([]ProviderResponse, 0, len(plan.Chapters)+1)
+	steps := make([]provider.ProviderResponse, 0, len(plan.Chapters)+1)
 	for _, ch := range plan.Chapters {
 		steps = append(steps, saveChapterCall(t, ch))
 	}
@@ -885,8 +888,8 @@ func TestApprovingAPausedCourseRunsTheChapterPhase(t *testing.T) {
 	approveSvc := testService(approve, depot, ex)
 
 	built := approveSvc.BuildCourse(testContext(t), out.Plan.ID)
-	if built.Status != StatusActive {
-		t.Fatalf("status = %q, want %q (error = %+v)", built.Status, StatusActive, built.Error)
+	if built.Status != schema.StatusActive {
+		t.Fatalf("status = %q, want %q (error = %+v)", built.Status, schema.StatusActive, built.Error)
 	}
 	if built.Plan == nil || built.Plan.ID != out.Plan.ID {
 		t.Fatalf("the built course = %+v, want the paused course %s", built.Plan, out.Plan.ID)
@@ -909,8 +912,8 @@ func TestApprovingAPausedCourseRunsTheChapterPhase(t *testing.T) {
 	}
 	// And the row is active on the next read.
 	rec, found, err := depot.Course(testContext(t), out.Plan.ID)
-	if err != nil || !found || rec.Status != StatusActive {
-		t.Fatalf("stored course = %q (found = %v, err = %v), want %q", rec.Status, found, err, StatusActive)
+	if err != nil || !found || rec.Status != schema.StatusActive {
+		t.Fatalf("stored course = %q (found = %v, err = %v), want %q", rec.Status, found, err, schema.StatusActive)
 	}
 }
 
@@ -928,24 +931,24 @@ func TestAnAlreadyVerifiedChapterIsNotAskedForAgain(t *testing.T) {
 	// chapters their expected rows.
 	full := &scriptedAgent{
 		outline: outlineFor(t, plan),
-		steps:   []ProviderResponse{saveChapterCall(t, plan.Chapters[0]), saveChapterCall(t, plan.Chapters[1]), finishCourseCall()},
+		steps:   []provider.ProviderResponse{saveChapterCall(t, plan.Chapters[0]), saveChapterCall(t, plan.Chapters[1]), finishCourseCall()},
 	}
 	firstSvc := testService(full, newTestDepot(), ex)
 	fullOut := firstSvc.GenerateCourse(ctx, exerciseTitleRequest("A course that verifies both chapters"))
-	if fullOut.Status != StatusActive || fullOut.Plan == nil {
+	if fullOut.Status != schema.StatusActive || fullOut.Plan == nil {
 		t.Fatalf("the setup build did not activate: status = %q error = %+v", fullOut.Status, fullOut.Error)
 	}
 
 	// Now the building row an interrupted run would leave: chapter one verified
 	// and stored with its measured rows, chapter two still an outline skeleton.
 	verified := fullOut.Plan.Chapters[0]
-	skeleton := CourseChapter{ID: plan.Chapters[1].ID, N: plan.Chapters[1].N, Title: plan.Chapters[1].Title, Summary: plan.Chapters[1].Summary, Objectives: plan.Chapters[1].Objectives, Sections: []CourseSection{}, Exercises: []CourseExercise{}}
-	rec := CourseRecord{
-		Plan:    CoursePlan{ID: fullOut.Plan.ID, Version: 1, Title: fullOut.Plan.Title, Subtitle: fullOut.Plan.Subtitle, Level: fullOut.Plan.Level, Dialect: "postgresql", Objectives: fullOut.Plan.Objectives, Setup: fullOut.Plan.Setup, Chapters: []CourseChapter{verified, skeleton}},
-		Status:  StatusBuilding,
-		Request: &GenerationRequest{Title: "A course interrupted after one chapter", Difficulty: Intermediate, Kind: "course"},
-		Outcome: Outcome{Status: StatusBuilding, Kind: "course", Chapters: []ChapterResult{
-			{ID: verified.ID, Title: verified.Title, Status: ChapterVerified, Exercises: []ExerciseResult{{ID: verified.Exercises[0].ID, Status: "verified"}}},
+	skeleton := schema.CourseChapter{ID: plan.Chapters[1].ID, N: plan.Chapters[1].N, Title: plan.Chapters[1].Title, Summary: plan.Chapters[1].Summary, Objectives: plan.Chapters[1].Objectives, Sections: []schema.CourseSection{}, Exercises: []schema.CourseExercise{}}
+	rec := schema.CourseRecord{
+		Plan:    schema.CoursePlan{ID: fullOut.Plan.ID, Version: 1, Title: fullOut.Plan.Title, Subtitle: fullOut.Plan.Subtitle, Level: fullOut.Plan.Level, Dialect: "postgresql", Objectives: fullOut.Plan.Objectives, Setup: fullOut.Plan.Setup, Chapters: []schema.CourseChapter{verified, skeleton}},
+		Status:  schema.StatusBuilding,
+		Request: &schema.GenerationRequest{Title: "A course interrupted after one chapter", Difficulty: schema.Intermediate, Kind: "course"},
+		Outcome: schema.Outcome{Status: schema.StatusBuilding, Kind: "course", Chapters: []schema.ChapterResult{
+			{ID: verified.ID, Title: verified.Title, Status: ChapterVerified, Exercises: []schema.ExerciseResult{{ID: verified.Exercises[0].ID, Status: "verified"}}},
 		}},
 	}
 	if err := depot.SaveCourse(ctx, rec); err != nil {
@@ -954,11 +957,11 @@ func TestAnAlreadyVerifiedChapterIsNotAskedForAgain(t *testing.T) {
 
 	// Only chapter two is handed in; if the gateway asked for chapter one again
 	// the scripted queue would run dry and the run would not finish.
-	resume := &scriptedAgent{steps: []ProviderResponse{saveChapterCall(t, plan.Chapters[1]), finishCourseCall()}}
+	resume := &scriptedAgent{steps: []provider.ProviderResponse{saveChapterCall(t, plan.Chapters[1]), finishCourseCall()}}
 	resumeSvc := testService(resume, depot, ex)
 	built := resumeSvc.BuildCourse(ctx, rec.Plan.ID)
-	if built.Status != StatusActive {
-		t.Fatalf("status = %q, want %q (error = %+v)", built.Status, StatusActive, built.Error)
+	if built.Status != schema.StatusActive {
+		t.Fatalf("status = %q, want %q (error = %+v)", built.Status, schema.StatusActive, built.Error)
 	}
 	calls := resume.agentCalls()
 	if len(calls) == 0 {
@@ -999,8 +1002,8 @@ func TestAnAlreadyVerifiedChapterIsNotAskedForAgain(t *testing.T) {
 func TestBuildRefusesAnUnknownCourse(t *testing.T) {
 	svc := testService(&scriptedAgent{}, newTestDepot(), nil)
 	out := svc.BuildCourse(testContext(t), "course-does-not-exist")
-	if out.Status != StatusFailed {
-		t.Fatalf("status = %q, want %q", out.Status, StatusFailed)
+	if out.Status != schema.StatusFailed {
+		t.Fatalf("status = %q, want %q", out.Status, schema.StatusFailed)
 	}
 	if out.Error == nil || out.Error.Code != CodeNotFound {
 		t.Fatalf("error = %+v, want %s", out.Error, CodeNotFound)
@@ -1017,16 +1020,16 @@ func TestALegacyRecordWithoutARequestIsStillBuildable(t *testing.T) {
 	depot := newTestDepot()
 	plan := coursePlanFixture()
 	plan.ID = "course-legacy-no-request"
-	rec := CourseRecord{
+	rec := schema.CourseRecord{
 		Plan:      plan,
-		Status:    StatusBuilding,
+		Status:    schema.StatusBuilding,
 		CreatedAt: time.Now().UTC(),
-		Outcome:   Outcome{Status: StatusBuilding, Kind: "course", Plan: &plan, Chapters: []ChapterResult{}},
+		Outcome:   schema.Outcome{Status: schema.StatusBuilding, Kind: "course", Plan: &plan, Chapters: []schema.ChapterResult{}},
 	}
 	if err := depot.SaveCourse(ctx, rec); err != nil {
 		t.Fatalf("seed the legacy course: %v", err)
 	}
-	steps := make([]ProviderResponse, 0, len(plan.Chapters)+1)
+	steps := make([]provider.ProviderResponse, 0, len(plan.Chapters)+1)
 	for _, ch := range plan.Chapters {
 		steps = append(steps, saveChapterCall(t, ch))
 	}
@@ -1035,8 +1038,8 @@ func TestALegacyRecordWithoutARequestIsStillBuildable(t *testing.T) {
 	svc := testService(agent, depot, ex)
 
 	built := svc.BuildCourse(ctx, plan.ID)
-	if built.Status != StatusActive {
-		t.Fatalf("status = %q, want %q (error = %+v)", built.Status, StatusActive, built.Error)
+	if built.Status != schema.StatusActive {
+		t.Fatalf("status = %q, want %q (error = %+v)", built.Status, schema.StatusActive, built.Error)
 	}
 	req := requestFromRecord(rec)
 	if req.Title != plan.Title {
@@ -1045,13 +1048,13 @@ func TestALegacyRecordWithoutARequestIsStillBuildable(t *testing.T) {
 	if req.Kind != "course" {
 		t.Errorf("recovered kind = %q, want course", req.Kind)
 	}
-	if req.Difficulty != Intermediate {
-		t.Errorf("recovered difficulty = %q, want the default %q", req.Difficulty, Intermediate)
+	if req.Difficulty != schema.Intermediate {
+		t.Errorf("recovered difficulty = %q, want the default %q", req.Difficulty, schema.Intermediate)
 	}
 	// The exercise budget is the one thing the plan can speak to: it counts the
 	// exercises the stored chapters carry. Nothing else is invented.
-	if req.ExerciseCount != plan.exerciseCount() {
-		t.Errorf("recovered exercise count = %d, want the plan's own %d", req.ExerciseCount, plan.exerciseCount())
+	if req.ExerciseCount != exerciseCount(&plan) {
+		t.Errorf("recovered exercise count = %d, want the plan's own %d", req.ExerciseCount, exerciseCount(&plan))
 	}
 	if req.Scenario != "" || len(req.Topics) != 0 {
 		t.Errorf("recovered request = %+v, want the fields the plan cannot know left empty", req)

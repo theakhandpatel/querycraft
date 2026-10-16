@@ -56,6 +56,27 @@ let base = '';
 
 const sleep = (ms) => new Promise((res) => setTimeout(res, ms));
 
+/**
+ * signInLearner creates a throwaway account and returns its bearer token.
+ *
+ * /diagnostics reports pool state and the learner's privileges, so the route
+ * needs a session. The account is the audit's own and is dropped with the
+ * cluster the run boots.
+ */
+async function signInLearner(base) {
+  const email = 'adversarial-' + Date.now() + '-' + Math.floor(Math.random() * 1e6) + '@adversarial.test';
+  const res = await postJSON(base + '/auth/signup', {
+    email,
+    name: 'Adversarial Audit',
+    password: 'adversarial-audit-password',
+  });
+  const token = res.json?.token;
+  if (!token) {
+    throw new Error('could not sign up a learner for the adversarial run: HTTP ' + res.status + ' ' + String(res.body).slice(0, 200));
+  }
+  return { email, token };
+}
+
 /** summarize renders a result the way the markdown table wants it. */
 function summarize(res) {
   if (res.error) return `**harness error**: ${res.error}`;
@@ -306,7 +327,7 @@ async function caseLargeValues() {
   }
 }
 
-async function caseConnectionExhaustion(maxConcurrent) {
+async function caseConnectionExhaustion(maxConcurrent, token) {
   r.section(`9. connection exhaustion by concurrent requests (cap ${maxConcurrent})`);
   const concurrency = Math.max(24, maxConcurrent * 3);
   const before = await getText(`${base}/metrics`);
@@ -339,7 +360,7 @@ async function caseConnectionExhaustion(maxConcurrent) {
   r.check('the pool is drained afterwards', acquired === 0, acquired);
   r.check('the pool never grew past its maximum', poolMax > 0 && acquired <= poolMax, { poolMax, acquired });
 
-  const diag = await getJSON(`${base}/diagnostics`);
+  const diag = await getJSON(`${base}/diagnostics`, 15_000, { authorization: 'Bearer ' + token });
   r.record(`9. ${concurrency} concurrent slow statements`, '`select pg_sleep(1)`, `timeout_ms: 400`',
     `${timeouts.length}/${concurrency} QUERY_TIMEOUT, 0 5xx`, `${elapsed} ms`, 'yes');
   r.check('9. the advertised concurrency cap is the one that was configured',
@@ -407,7 +428,11 @@ try {
   }
   console.log(`gateway: ${base}`);
 
-  const diag = await getJSON(`${base}/diagnostics`);
+  /* /diagnostics reports pool state and the learner's privileges, so it needs a
+     session. /query stays anonymous on purpose: these cases test the shared,
+     read-only dataset, and a session would send them to a private workspace. */
+  const learner = await signInLearner(base);
+  const diag = await getJSON(`${base}/diagnostics`, 15_000, { authorization: 'Bearer ' + learner.token });
   if (diag.json?.engine?.ready !== true) {
     throw new Error(`the adversarial suite needs a live PostgreSQL (engine.ready=${diag.json?.engine?.ready}); ${diag.json?.engine?.reason ?? 'no reason given'}`);
   }
@@ -419,7 +444,7 @@ try {
   await caseReachingOut();
   await casePrivileged();
   await caseLargeValues();
-  await caseConnectionExhaustion(maxConcurrent);
+  await caseConnectionExhaustion(maxConcurrent, learner.token);
   await caseRunawayWhileServing(maxConcurrent);
   await datasetIntegrity();
 } catch (err) {

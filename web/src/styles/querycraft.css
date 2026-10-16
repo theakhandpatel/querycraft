@@ -233,6 +233,16 @@ aside{background:var(--surface);border-right:1px solid var(--line);display:flex;
 .reportrow>span:first-child{color:var(--text-2);min-width:0}
 .reportrow>span:last-child{color:var(--text);font-weight:500;text-align:right}
 .reportrow>span.muted{color:var(--text-3);font-weight:400}
+/* A clickable row is a real button, so the keyboard reaches it and Enter and
+   Space activate it. The bare `button` rule sets a background, centred text, a
+   heavier weight and a corner radius. This resets all four, so the row keeps
+   the shape it had as a div. */
+.reportrow.action{width:100%;background:transparent;text-align:left;white-space:normal;font-weight:400;border-radius:0}
+.reportrow.action:hover{background:var(--surface-2)}
+/* The row is a button now, so `:last-of-type` misses the last row when another
+   button follows it in the same card, as the Workbook's "Open course home"
+   does. Target the last action row by its own siblings instead. */
+.reportrow.action:not(:has(~ .reportrow.action)){border-bottom:0}
 .callout{background:var(--surface-2);border:0;border-radius:var(--r-md);padding:14px 16px;font-size:13px;color:var(--text-2);line-height:1.65}
 .callout strong{color:var(--text);font-weight:600}
 
@@ -583,8 +593,6 @@ select{-webkit-appearance:none;appearance:none;padding-right:32px;background-ima
 .authtsubmit{width:100%;margin-top:18px;padding:10px 13px}
 .authhint{display:flex;align-items:flex-start;gap:8px;font-size:12px;color:var(--text-3);line-height:1.55;border-top:1px solid var(--line);padding-top:14px}
 .authhint .ico{width:15px;height:15px;flex:none;color:var(--accent-ink);margin-top:1px}
-.authhint.subtle{border-top:0;padding-top:0}
-.authhint.subtle .ico{color:var(--text-3)}
 
 /* ============ Responsive ============ */
 @media(max-width:1080px){
@@ -609,7 +617,7 @@ select{-webkit-appearance:none;appearance:none;padding-right:32px;background-ima
   .hide-small{display:none}
 }
 
-/* ============ mock API surface ============ */
+/* ============ query run + API log surface ============ */
 .qrun{display:flex;align-items:center;gap:9px;margin-top:12px;padding:11px 13px;border-radius:var(--r-md);background:var(--surface-2);color:var(--text-3);font-family:var(--mono);font-size:12px}
 .spin{width:12px;height:12px;border-radius:50%;border:2px solid var(--line);border-top-color:var(--accent);animation:spin .7s linear infinite;display:inline-block}
 @keyframes spin{to{transform:rotate(360deg)}}

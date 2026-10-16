@@ -1,10 +1,10 @@
-# ADR 0005 — A provider-neutral completion interface, not a vendor SDK
+# ADR 0005: A provider-neutral completion interface, not a vendor SDK
 
 - **Status:** accepted
 - **Date:** 2026-10-15
 - **Deciders:** project owner + agent session
-- **Question:** what does the app depend on to call a model — a vendor SDK, or an
-  interface it owns — and what provider is the default when nothing is
+- **Question:** what does the app depend on to call a model, a vendor SDK, or an
+  interface it owns, and what provider is the default when nothing is
   configured?
 
 Settles **AI provider and SDK** in `docs/technical-design.md` §15. Shaped by
@@ -15,7 +15,7 @@ by preference"*) and by the §12 threat table row *Provider key leak*.
 
 §11 splits the AI Challenge Lab into two roles: the model is an untrusted content
 generator, and the Go service is the policy. M4 step 1 already shipped the seam
-that role split implies — `backend/internal/ai/provider.go`:
+that role split implies: `backend/internal/ai/provider.go`:
 
 ```go
 type Provider interface {
@@ -61,7 +61,7 @@ types and defaults:
 
 | Concern | Where a vendor SDK puts it | Where §11.2 wants it |
 | --- | --- | --- |
-| Request/response types | vendor structs and streaming callbacks | `ProviderRequest`/`ProviderResponse` — the fields policy is allowed to send |
+| Request/response types | vendor structs and streaming callbacks | `ProviderRequest`/`ProviderResponse`: the fields policy is allowed to send |
 | Retry / backoff | the SDK's defaults, often undocumented | `Limits`, applied by our pipeline |
 | Key handling | an SDK client constructed wherever convenient | one server-side transport; no key in the browser |
 | Output bounding | after decode, if at all | `MaxOutputBytes` enforced while reading the reply |
@@ -78,21 +78,21 @@ The app needs text in, JSON out, over HTTP. That is the intersection every
 *hosted* and *local* option here already speaks: the compatible
 `/chat/completions` request is small enough to construct with `net/http`, and it
 means a learner who points the app at a local server gets the same code path as
-one who points it at a hosted one — the difference is a base URL, a model name and
+one who points it at a hosted one. The difference is a base URL, a model name and
 a key.
 
 The fake provider is the default because the exit gate's last clause is *"Disabling
 AI leaves every other feature working."* If the only provider were a hosted one,
 that clause would be trivially true (nothing could run) and the pipeline would be
 untestable in CI. A deterministic provider that produces a real, schema-valid
-artifact lets the whole §11.1 pipeline — including the scratch environment, the
-reference run, the cross-check and the adversarial fixtures — run offline, and it
+artifact lets the whole §11.1 pipeline, including the scratch environment, the
+reference run, the cross-check and the adversarial fixtures, run offline, and it
 is the only provider the CI gate needs.
 
 ## Consequence: keys never leave the server
 
 The browser talks to the gateway, never to the provider. `GET /capabilities`
-reports whether a provider is *configured* and *available* and its name — never a
+reports whether a provider is *configured* and *available* and its name, never a
 key, an endpoint or a model credential. This is the §12 control for *Provider key
 leak*, and it is also why "let the client choose the provider" is not on the table
 below: it would move credential handling and cost decisions into the untrusted
@@ -106,7 +106,7 @@ surface.
 | **A provider-specific client per provider, now** | More code and more review surface before there is a second provider. The surface is one completion; every candidate speaks it. If shaping ever becomes load-bearing, adapters go *behind* `Provider` (see below). |
 | **A local model only (llama.cpp) as the product's provider** | Ties the product to one machine and one hardware profile. The compatible HTTP path already covers local servers without making them mandatory. |
 | **No default provider (AI always off)** | Makes the *"AI off"* clause vacuous and the pipeline untestable in CI. The fake provider runs the real pipeline with no network. |
-| **Stream tokens to the browser** | Puts the vendor protocol — and eventually the key or a long-lived proxy — on the untrusted side, for a payload that is a JSON bundle, not prose. Not needed. |
+| **Stream tokens to the browser** | Puts the vendor protocol, and eventually the key or a long-lived proxy, on the untrusted side, for a payload that is a JSON bundle, not prose. Not needed. |
 | **Let the client pick provider and model** | Moves credential handling and cost control into the browser (§12), and makes `/capabilities`'s honest `available` flag meaningless. |
 
 ## Consequences
@@ -131,7 +131,7 @@ about, all read from the repository on 2026-10-15:
 | --- | --- |
 | Model surface the app owns | 2 methods (`Descriptor`, `Complete`) + a descriptor; `provider.go` is 51 lines |
 | What the model may see | `ProviderRequest` fields only; the reference solution is structurally absent |
-| Vendor SDK in the build | none — `backend/go.mod` has 4 direct deps, none an AI SDK |
+| Vendor SDK in the build | none, `backend/go.mod` has 4 direct deps, none an AI SDK |
 | Marginal cost of the transport | 0 new modules; `net/http` and `encoding/json` from the standard library |
 | Policy owned by us | 7 `Limits` fields + `ProviderRequest.MaxOutputBytes`, versus a library's retry/backoff defaults |
 | Offline testability | the fake provider runs the entire §11.1 pipeline with no network and no key |
@@ -144,14 +144,14 @@ policy would live in code we review.
 
 ## What would change our mind
 
-- **A provider whose API is not "text in, JSON out"** — server-side tools,
-  long-running jobs, a streaming-only contract — would need a second interface or a
+- **A provider whose API is not "text in, JSON out"**, server-side tools,
+  long-running jobs, a streaming-only contract, would need a second interface or a
   second transport. `Provider` stays the policy-facing shape; the new work is
   behind it.
 - **Provider-specific shaping becoming load-bearing for correctness** (structured
   output dialects, system-prompt precedence, strict JSON mode) is the case for a
-  thin adapter per provider — still behind `Provider`, never in front of it.
-- **Measured price or latency showing an SDK's retry/backoff materially matters** —
+  thin adapter per provider, still behind `Provider`, never in front of it.
+- **Measured price or latency showing an SDK's retry/backoff materially matters**, 
   then the transport adopts a retry posture, set and bounded by our `Limits`, not
   by a library.
 - **A vendor shipping a hard requirement we cannot express over `net/http`** (a
@@ -168,4 +168,4 @@ policy would live in code we review.
   is a `POST /chat/completions` request with a model, a JSON reply and a byte cap.
 - **Residual risk, stated:** a provider can still return a contract-shaped
   mistake. The §11.1 cross-check catches some of those, not all, because two
-  solutions can share a mistake — no interface choice removes that.
+  solutions can share a mistake: no interface choice removes that.

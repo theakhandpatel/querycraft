@@ -41,7 +41,7 @@ interface FieldErrors {
 
 export default function AuthScreen() {
   const s = useStore();
-  const { api, authNotice } = s;
+  const { authNotice } = s;
   const [mode, setMode] = useState<Mode>('login');
   const [email, setEmail] = useState('');
   const [name, setName] = useState('');
@@ -183,13 +183,6 @@ export default function AuthScreen() {
             <span>
               Local admin: <span className="mono">admin@querycraft.local</span> with an empty password.
             </span>
-          </div>
-        )}
-
-        {api.mode === 'mock' && (
-          <div className="authhint subtle">
-            <Icon name="info" />
-            <span>Mock adapter: accounts are local fixtures, not a server.</span>
           </div>
         )}
       </div>

@@ -24,7 +24,7 @@
  *
  * Configuration, in order of preference (never passed on the command line, so a
  * key stays out of shell history and process listings):
- *   QC_AI_BASE_URL / QC_AI_MODEL / QC_AI_KEY / QC_AI_KEY_FILE
+ *   AI_BASE_URL / AI_MODEL / AI_KEY / AI_KEY_FILE
  * or, when those are unset, the local mount a developer already has:
  *   ~/.config/opencode/opencode.json  (base URL and model)
  *   ~/.config/codex/amr-link.key      (the key)
@@ -54,7 +54,7 @@ const report = new Reporter('ai-live-audit');
 const HOME = os.homedir();
 const OPENCODE_CONFIG = path.join(HOME, '.config', 'opencode', 'opencode.json');
 const KEY_FILE_CANDIDATES = [
-  process.env.QC_AI_KEY_FILE,
+  process.env.AI_KEY_FILE,
   path.join(HOME, '.config', 'codex', 'amr-link.key'),
 ].filter(Boolean);
 
@@ -81,12 +81,12 @@ function opencodeMount() {
 }
 
 const mount = opencodeMount();
-const base = process.env.QC_AI_BASE_URL || mount?.base || '';
-const model = process.env.QC_AI_MODEL || mount?.model || '';
+const base = process.env.AI_BASE_URL || mount?.base || '';
+const model = process.env.AI_MODEL || mount?.model || '';
 
 /** resolveKey finds the key in the environment, then in the key files. */
 function resolveKey() {
-  if (process.env.QC_AI_KEY) return { key: process.env.QC_AI_KEY.trim(), source: 'QC_AI_KEY' };
+  if (process.env.AI_KEY) return { key: process.env.AI_KEY.trim(), source: 'AI_KEY' };
   if (mount?.keyEnv && process.env[mount.keyEnv]) return { key: process.env[mount.keyEnv].trim(), source: mount.keyEnv };
   for (const file of KEY_FILE_CANDIDATES) {
     try {
@@ -98,7 +98,7 @@ function resolveKey() {
 }
 
 const { key, source: keySource } = resolveKey();
-const sourceOf = process.env.QC_AI_BASE_URL && process.env.QC_AI_MODEL ? 'the environment' : OPENCODE_CONFIG;
+const sourceOf = process.env.AI_BASE_URL && process.env.AI_MODEL ? 'the environment' : OPENCODE_CONFIG;
 
 /** redact removes the key from anything this script prints. */
 const redact = (s) => (key ? String(s).split(key).join('<redacted>') : String(s));
@@ -294,7 +294,7 @@ async function assertActiveCourse(gw, auth, course, model) {
 
 async function main() {
   if (!base || !model || !key) {
-    report.skip('QC_AI_BASE_URL / QC_AI_MODEL / QC_AI_KEY(_FILE) not all set, and no local mount supplied them (looked at ' + OPENCODE_CONFIG + ' and ' + KEY_FILE_CANDIDATES.join(', ') + ')');
+    report.skip('AI_BASE_URL / AI_MODEL / AI_KEY(_FILE) not all set, and no local mount supplied them (looked at ' + OPENCODE_CONFIG + ' and ' + KEY_FILE_CANDIDATES.join(', ') + ')');
     report.finish();
     return;
   }
@@ -303,12 +303,12 @@ async function main() {
   const env = await liveEnv('ai-live');
   const gw = await startGateway(bin, {
     ...env,
-    QC_AI_PROVIDER: 'openai-compatible',
-    QC_AI_BASE_URL: base,
-    QC_AI_MODEL: model,
-    QC_AI_KEY: key,
-    QC_AI_TIMEOUT_MS: '120000',
-    QC_AI_RUN_TIMEOUT_MS: '600000',
+    ai_provider: 'openai-compatible',
+    ai_base_url: base,
+    ai_model: model,
+    ai_key: key,
+    ai_timeout_ms: 120000,
+    ai_run_timeout_ms: 600000,
   });
 
   console.log(`  ..   provider ${base} model ${model} (base/model from ${sourceOf}, key from ${keySource})`);

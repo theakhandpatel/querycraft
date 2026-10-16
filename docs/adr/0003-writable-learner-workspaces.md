@@ -1,4 +1,4 @@
-# ADR 0003 — Learner SQL may write, inside a per-account environment database with a reset
+# ADR 0003: Learner SQL may write, inside a per-account environment database with a reset
 
 - **Status:** accepted
 - **Date:** 2026-10-14
@@ -6,7 +6,7 @@
 - **Question:** the course claims to teach SQL, but every learner statement runs in a
   read-only transaction (`BEGIN READ ONLY` in PGlite, `pgx.TxOptions{AccessMode: ReadOnly}`
   in the gateway) against a `SELECT`-only grant. `INSERT`, `UPDATE`, `DELETE`, DDL and
-  transactions therefore cannot be taught *or practised* at all. What should change —
+  transactions therefore cannot be taught *or practised* at all. What should change, 
   and what has to stay protected?
 
 Supersedes nothing. Extends ADR 0002 (which settled *how* a throwaway environment is
@@ -22,8 +22,8 @@ silently made a large part of the subject unteachable:
   `RETURNING`, constraints, or `ON CONFLICT`.
 - It cannot teach DDL: `CREATE TABLE`, `ALTER TABLE`, `DROP`, indexes, views.
 - It cannot teach transactions: `BEGIN`/`COMMIT`/`ROLLBACK`, isolation, savepoints.
-- It teaches a false model of the engine: a learner's first instinct — "change
-  something and look at it" — is refused with an error that is about this app, not
+- It teaches a false model of the engine: a learner's first instinct, "change
+  something and look at it", is refused with an error that is about this app, not
   about PostgreSQL.
 
 Grading is result-based, so the *evaluation* of an answer genuinely only needs to read.
@@ -40,7 +40,7 @@ to "the statement writes somewhere it is safe to write":
    tables, and `USAGE, SELECT` on its sequences. No `TRUNCATE`, no ownership, no
    `REFERENCES`, no `TRIGGER`.
 2. **The environment is reset, not repaired.** `POST /environment/reset` drops the
-   database and copies the template again — measured at ~35 ms to create and ~25 ms to
+   database and copies the template again: measured at ~35 ms to create and ~25 ms to
    drop (ADR 0002). A learner who drops a table, deletes every row, or wedges the
    database gets the original back in one action, and so does the UI when the engine
    reports the environment unusable.
@@ -54,7 +54,7 @@ to "the statement writes somewhere it is safe to write":
    exist in the database the learner is connected to. The privilege checks the
    adversarial suite already makes (no `pg_read_file`, no `CREATE ROLE`, no
    `ALTER SYSTEM`, no server-file access) stay true because they were never read-only
-   checks — the learner role is `NOSUPERUSER NOCREATEDB NOCREATEROLE`.
+   checks: the learner role is `NOSUPERUSER NOCREATEDB NOCREATEROLE`.
 5. **The dataset schema is still never writable in place.** The gateway's own database
    keeps the `SELECT`-only grant. A learner's writes cannot reach the shared data
    because their statements do not run there.
@@ -67,7 +67,7 @@ to "the statement writes somewhere it is safe to write":
 | **Writable shared `dataset` schema** | One learner's `DELETE FROM orders` is every learner's. Unrecoverable without a restore, and the app has no way to know who broke it. |
 | **Writable per-account *schema* in the shared database** | Splits isolation across a single `querycraft_learner` role: schema grants in PostgreSQL are per-role, so granting every account's schema to the one shared role gives every learner read and write access to every other learner's workspace. Per-account roles would fix it, but then a "session" is a role *and* a schema *and* still inside the database that holds `app`. |
 | **Per-statement auto-rollback** | Multi-statement teaching breaks (`INSERT` then `SELECT`), and `DROP TABLE` appearing to work while leaving the table in place is the same lie as the fake write mode. |
-| **Refuse writes in the browser adapter too** | The browser already has a private database per learner — nothing to protect. Making the two adapters disagree about the language they teach would also break the "same lesson content on both adapters" rule at exactly the moment it matters. |
+| **Refuse writes in the browser adapter too** | The browser already has a private database per learner: nothing to protect. Making the two adapters disagree about the language they teach would also break the "same lesson content on both adapters" rule at exactly the moment it matters. |
 
 ## Consequences
 

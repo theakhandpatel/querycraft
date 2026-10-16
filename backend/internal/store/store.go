@@ -10,7 +10,7 @@ import (
 	"errors"
 	"time"
 
-	"github.com/querycraft/sqlquery/backend/internal/ai"
+	"github.com/querycraft/sqlquery/backend/internal/schema"
 )
 
 // ErrEmailTaken is returned when a signup reuses an existing address. Handlers
@@ -39,6 +39,9 @@ type User struct {
 func (u User) IsAdmin() bool { return u.Role == RoleAdmin }
 
 // Store is the persistence surface for accounts, progress and events.
+//
+// The two SQL backends run the account, progress and session methods from one
+// implementation (metadata.go); Memory answers the same rules in process.
 //
 // Progress and events are scoped by owner: every read and write names the user
 // it belongs to, so one account can never observe or overwrite another's
@@ -73,12 +76,12 @@ type Store interface {
 
 	Close() error
 
-	// ai.Depot is the M4 challenge store. A generated challenge and the
+	// schema.Depot is the M4 challenge store. A generated challenge and the
 	// evidence that admitted it are persisted together, so a later reader can
 	// see why an artifact was allowed in front of learners. Patch proposals
 	// live here too, unapplied until the learner approves them. The agent-run
-	// transcripts (app.runs) are also part of this seam: ai.Depot carries
+	// transcripts (app.runs) are also part of this seam: schema.Depot carries
 	// SaveRun/Run/Runs, so the audit trail is owner-scoped by the same store
 	// that scopes everything else.
-	ai.Depot
+	schema.Depot
 }

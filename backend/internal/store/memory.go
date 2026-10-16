@@ -1,15 +1,17 @@
 package store
 
 import (
+	"bytes"
+	"cmp"
 	"context"
 	"encoding/json"
 	"errors"
-	"sort"
+	"slices"
 	"strings"
 	"sync"
 	"time"
 
-	"github.com/querycraft/sqlquery/backend/internal/ai"
+	"github.com/querycraft/sqlquery/backend/internal/schema"
 )
 
 // Memory is a concurrency-safe in-process Store. It is used when no metadata
@@ -18,21 +20,21 @@ import (
 // honest behaviour for a store that has nowhere to persist them.
 type Memory struct {
 	mu         sync.RWMutex
-	progress   map[string]json.RawMessage  // key: userID + "\x00" + course
-	events     map[string]json.RawMessage  // key: userID + "\x00" + event id
-	users      map[string]memoryUser       // key: account id
-	sessions   map[string]memorySession    // key: token
-	challenges map[string]ai.Record        // key: challenge id
-	courses    map[string]ai.CourseRecord  // key: course id
-	patches    map[string]memoryPatch      // key: patch id
-	runs       map[string]ai.RunTranscript // key: run id
+	progress   map[string]json.RawMessage      // key: userID + "\x00" + course
+	events     map[string]json.RawMessage      // key: userID + "\x00" + event id
+	users      map[string]memoryUser           // key: account id
+	sessions   map[string]memorySession        // key: token
+	challenges map[string]schema.Record        // key: challenge id
+	courses    map[string]schema.CourseRecord  // key: course id
+	patches    map[string]memoryPatch          // key: patch id
+	runs       map[string]schema.RunTranscript // key: run id
 }
 
 // memoryPatch is a stored proposal plus the approval that may follow it. An
 // empty approvedBy means nobody has approved it yet, which is the only state a
 // proposal starts in.
 type memoryPatch struct {
-	proposal   ai.PatchProposal
+	proposal   schema.PatchProposal
 	approvedAt time.Time
 	approvedBy string
 }
@@ -54,23 +56,23 @@ func NewMemory() *Memory {
 		events:     make(map[string]json.RawMessage),
 		users:      make(map[string]memoryUser),
 		sessions:   make(map[string]memorySession),
-		challenges: make(map[string]ai.Record),
-		courses:    make(map[string]ai.CourseRecord),
+		challenges: make(map[string]schema.Record),
+		courses:    make(map[string]schema.CourseRecord),
 		patches:    make(map[string]memoryPatch),
-		runs:       make(map[string]ai.RunTranscript),
+		runs:       make(map[string]schema.RunTranscript),
 	}
 }
 
 /* ---------- generated challenges (M4) ---------- */
 
-// SaveChallenge implements ai.Depot. The record is deep-copied so a caller
+// SaveChallenge implements schema.Depot. The record is deep-copied so a caller
 // cannot mutate what a later read returns.
-func (m *Memory) SaveChallenge(_ context.Context, rec ai.Record) error {
+func (m *Memory) SaveChallenge(_ context.Context, rec schema.Record) error {
 	if rec.Artifact.ID == "" {
 		return errors.New("challenge id is required")
 	}
 	if rec.Status == "" {
-		rec.Status = ai.StatusActive
+		rec.Status = schema.StatusActive
 	}
 	if rec.CreatedAt.IsZero() {
 		rec.CreatedAt = time.Now().UTC()
@@ -81,47 +83,44 @@ func (m *Memory) SaveChallenge(_ context.Context, rec ai.Record) error {
 	return nil
 }
 
-// Challenge implements ai.Depot.
-func (m *Memory) Challenge(_ context.Context, id string) (ai.Record, bool, error) {
+// Challenge implements schema.Depot.
+func (m *Memory) Challenge(_ context.Context, id string) (schema.Record, bool, error) {
 	m.mu.RLock()
 	defer m.mu.RUnlock()
 	rec, ok := m.challenges[id]
 	if !ok {
-		return ai.Record{}, false, nil
+		return schema.Record{}, false, nil
 	}
 	return cloneRecord(rec), true, nil
 }
 
-// Challenges implements ai.Depot, newest first, matching Postgres.
-func (m *Memory) Challenges(_ context.Context) ([]ai.Record, error) {
+// Challenges implements schema.Depot, newest first, matching Postgres.
+func (m *Memory) Challenges(_ context.Context) ([]schema.Record, error) {
 	return m.challengesFor("")
 }
 
 // ChallengesFor filters to one owner, matching the Postgres store.
-func (m *Memory) ChallengesFor(_ context.Context, ownerID string) ([]ai.Record, error) {
+func (m *Memory) ChallengesFor(_ context.Context, ownerID string) ([]schema.Record, error) {
 	return m.challengesFor(ownerID)
 }
 
-func (m *Memory) challengesFor(ownerID string) ([]ai.Record, error) {
+func (m *Memory) challengesFor(ownerID string) ([]schema.Record, error) {
 	m.mu.RLock()
 	defer m.mu.RUnlock()
-	out := make([]ai.Record, 0, len(m.challenges))
+	out := make([]schema.Record, 0, len(m.challenges))
 	for _, rec := range m.challenges {
 		if ownerID != "" && rec.OwnerID != ownerID {
 			continue
 		}
 		out = append(out, cloneRecord(rec))
 	}
-	sort.Slice(out, func(i, j int) bool {
-		if !out[i].CreatedAt.Equal(out[j].CreatedAt) {
-			return out[i].CreatedAt.After(out[j].CreatedAt)
-		}
-		return out[i].Artifact.ID > out[j].Artifact.ID
+	slices.SortFunc(out, func(a, b schema.Record) int {
+		return cmp.Or(b.CreatedAt.Compare(a.CreatedAt), cmp.Compare(b.Artifact.ID, a.Artifact.ID))
 	})
 	return out, nil
 }
 
-// DeleteChallenge implements ai.Depot.
+// DeleteChallenge implements schema.Depot.
 func (m *Memory) DeleteChallenge(_ context.Context, id string) error {
 	m.mu.Lock()
 	defer m.mu.Unlock()
@@ -131,14 +130,14 @@ func (m *Memory) DeleteChallenge(_ context.Context, id string) error {
 
 /* ---------- generated courses (M7) ---------- */
 
-// SaveCourse implements ai.Depot. The record is deep-copied so a caller cannot
+// SaveCourse implements schema.Depot. The record is deep-copied so a caller cannot
 // mutate what a later read returns.
-func (m *Memory) SaveCourse(_ context.Context, rec ai.CourseRecord) error {
+func (m *Memory) SaveCourse(_ context.Context, rec schema.CourseRecord) error {
 	if rec.Plan.ID == "" {
 		return errors.New("course id is required")
 	}
 	if rec.Status == "" {
-		rec.Status = ai.StatusActive
+		rec.Status = schema.StatusActive
 	}
 	if rec.CreatedAt.IsZero() {
 		rec.CreatedAt = time.Now().UTC()
@@ -149,47 +148,44 @@ func (m *Memory) SaveCourse(_ context.Context, rec ai.CourseRecord) error {
 	return nil
 }
 
-// Course implements ai.Depot.
-func (m *Memory) Course(_ context.Context, id string) (ai.CourseRecord, bool, error) {
+// Course implements schema.Depot.
+func (m *Memory) Course(_ context.Context, id string) (schema.CourseRecord, bool, error) {
 	m.mu.RLock()
 	defer m.mu.RUnlock()
 	rec, ok := m.courses[id]
 	if !ok {
-		return ai.CourseRecord{}, false, nil
+		return schema.CourseRecord{}, false, nil
 	}
 	return cloneCourse(rec), true, nil
 }
 
-// Courses implements ai.Depot, newest first, matching Postgres.
-func (m *Memory) Courses(_ context.Context) ([]ai.CourseRecord, error) {
+// Courses implements schema.Depot, newest first, matching Postgres.
+func (m *Memory) Courses(_ context.Context) ([]schema.CourseRecord, error) {
 	return m.coursesFor("")
 }
 
 // CoursesFor filters to one owner, matching CoursesFor on the Postgres store.
-func (m *Memory) CoursesFor(_ context.Context, ownerID string) ([]ai.CourseRecord, error) {
+func (m *Memory) CoursesFor(_ context.Context, ownerID string) ([]schema.CourseRecord, error) {
 	return m.coursesFor(ownerID)
 }
 
-func (m *Memory) coursesFor(ownerID string) ([]ai.CourseRecord, error) {
+func (m *Memory) coursesFor(ownerID string) ([]schema.CourseRecord, error) {
 	m.mu.RLock()
 	defer m.mu.RUnlock()
-	out := make([]ai.CourseRecord, 0, len(m.courses))
+	out := make([]schema.CourseRecord, 0, len(m.courses))
 	for _, rec := range m.courses {
 		if ownerID != "" && rec.OwnerID != ownerID {
 			continue
 		}
 		out = append(out, cloneCourse(rec))
 	}
-	sort.Slice(out, func(i, j int) bool {
-		if !out[i].CreatedAt.Equal(out[j].CreatedAt) {
-			return out[i].CreatedAt.After(out[j].CreatedAt)
-		}
-		return out[i].Plan.ID > out[j].Plan.ID
+	slices.SortFunc(out, func(a, b schema.CourseRecord) int {
+		return cmp.Or(b.CreatedAt.Compare(a.CreatedAt), cmp.Compare(b.Plan.ID, a.Plan.ID))
 	})
 	return out, nil
 }
 
-// DeleteCourse implements ai.Depot.
+// DeleteCourse implements schema.Depot.
 func (m *Memory) DeleteCourse(_ context.Context, id string) error {
 	m.mu.Lock()
 	defer m.mu.Unlock()
@@ -202,7 +198,7 @@ func (m *Memory) DeleteCourse(_ context.Context, id string) error {
 // objectives, contract columns, checks and expected rows, plus the reported
 // per-chapter results. Rows are copied row-by-row because a [][]any sharing one
 // inner slice would still alias.
-func cloneCourse(rec ai.CourseRecord) ai.CourseRecord {
+func cloneCourse(rec schema.CourseRecord) schema.CourseRecord {
 	out := rec
 	/* The request is a pointer, so a shallow copy would let a caller mutate the
 	   stored request through the copy it was handed. */
@@ -215,20 +211,20 @@ func cloneCourse(rec ai.CourseRecord) ai.CourseRecord {
 	}
 	out.Plan.Objectives = append([]string(nil), rec.Plan.Objectives...)
 	out.Plan.Setup.Statements = append([]string(nil), rec.Plan.Setup.Statements...)
-	out.Plan.Chapters = make([]ai.CourseChapter, len(rec.Plan.Chapters))
+	out.Plan.Chapters = make([]schema.CourseChapter, len(rec.Plan.Chapters))
 	for i, ch := range rec.Plan.Chapters {
 		cch := ch
 		cch.Objectives = append([]string(nil), ch.Objectives...)
-		cch.Sections = append([]ai.CourseSection(nil), ch.Sections...)
-		cch.Exercises = make([]ai.CourseExercise, len(ch.Exercises))
+		cch.Sections = append([]schema.CourseSection(nil), ch.Sections...)
+		cch.Exercises = make([]schema.CourseExercise, len(ch.Exercises))
 		for j, ex := range ch.Exercises {
 			cex := ex
 			cex.Objectives = append([]string(nil), ex.Objectives...)
 			cex.Hints = append([]string(nil), ex.Hints...)
-			cex.Checks = append([]ai.Check(nil), ex.Checks...)
+			cex.Checks = append([]schema.Check(nil), ex.Checks...)
 			cex.ResultContract.Columns = append([]string(nil), ex.ResultContract.Columns...)
 			if ex.Expected != nil {
-				exp := ai.ExpectedResult{Columns: append([]string(nil), ex.Expected.Columns...)}
+				exp := schema.ExpectedResult{Columns: append([]string(nil), ex.Expected.Columns...)}
 				exp.Rows = make([][]any, len(ex.Expected.Rows))
 				for k, row := range ex.Expected.Rows {
 					exp.Rows[k] = append([]any(nil), row...)
@@ -239,29 +235,29 @@ func cloneCourse(rec ai.CourseRecord) ai.CourseRecord {
 		}
 		out.Plan.Chapters[i] = cch
 	}
-	out.Outcome.Chapters = make([]ai.ChapterResult, len(rec.Outcome.Chapters))
+	out.Outcome.Chapters = make([]schema.ChapterResult, len(rec.Outcome.Chapters))
 	for i, cr := range rec.Outcome.Chapters {
 		ccr := cr
-		ccr.Exercises = append([]ai.ExerciseResult(nil), cr.Exercises...)
+		ccr.Exercises = append([]schema.ExerciseResult(nil), cr.Exercises...)
 		out.Outcome.Chapters[i] = ccr
 	}
-	out.Outcome.Stages = append([]ai.Stage(nil), rec.Outcome.Stages...)
-	out.Outcome.Attempts = append([]ai.Attempt(nil), rec.Outcome.Attempts...)
+	out.Outcome.Stages = append([]schema.Stage(nil), rec.Outcome.Stages...)
+	out.Outcome.Attempts = append([]schema.Attempt(nil), rec.Outcome.Attempts...)
 	if rec.Outcome.Plan != nil {
-		plan := cloneCourse(ai.CourseRecord{Plan: *rec.Outcome.Plan}).Plan
+		plan := cloneCourse(schema.CourseRecord{Plan: *rec.Outcome.Plan}).Plan
 		out.Outcome.Plan = &plan
 	}
 	if rec.Outcome.Artifact != nil {
-		art := cloneRecord(ai.Record{Artifact: *rec.Outcome.Artifact}).Artifact
+		art := cloneRecord(schema.Record{Artifact: *rec.Outcome.Artifact}).Artifact
 		out.Outcome.Artifact = &art
 	}
 	return out
 }
 
-// SavePatch implements ai.Depot. Re-proposing a patch keeps any approval that
+// SavePatch implements schema.Depot. Re-proposing a patch keeps any approval that
 // already exists: an approval is a statement about an id, and re-storing the
 // text must not silently clear it.
-func (m *Memory) SavePatch(_ context.Context, proposal ai.PatchProposal) error {
+func (m *Memory) SavePatch(_ context.Context, proposal schema.PatchProposal) error {
 	if proposal.ID == "" {
 		return errors.New("patch id is required")
 	}
@@ -276,18 +272,18 @@ func (m *Memory) SavePatch(_ context.Context, proposal ai.PatchProposal) error {
 	return nil
 }
 
-// Patch implements ai.Depot.
-func (m *Memory) Patch(_ context.Context, id string) (ai.PatchProposal, bool, error) {
+// Patch implements schema.Depot.
+func (m *Memory) Patch(_ context.Context, id string) (schema.PatchProposal, bool, error) {
 	m.mu.RLock()
 	defer m.mu.RUnlock()
 	p, ok := m.patches[id]
 	if !ok {
-		return ai.PatchProposal{}, false, nil
+		return schema.PatchProposal{}, false, nil
 	}
 	return p.proposal, true, nil
 }
 
-// ApprovePatch implements ai.Depot. The first approver is kept.
+// ApprovePatch implements schema.Depot. The first approver is kept.
 func (m *Memory) ApprovePatch(_ context.Context, id, approvedBy string) error {
 	if approvedBy == "" {
 		return errors.New("approver is required")
@@ -309,18 +305,18 @@ func (m *Memory) ApprovePatch(_ context.Context, id, approvedBy string) error {
 
 /* ---------- agent-run transcripts ---------- */
 
-// SaveRun implements ai.Depot. The record is deep-copied so a caller cannot
+// SaveRun implements schema.Depot. The record is deep-copied so a caller cannot
 // mutate what a later read returns, and the run's identity is kept: re-storing
 // a run updates it rather than creating a second row, matching Postgres.
-func (m *Memory) SaveRun(_ context.Context, rec ai.RunTranscript) error {
+func (m *Memory) SaveRun(_ context.Context, rec schema.RunTranscript) error {
 	if rec.ID == "" {
 		return errors.New("run id is required")
 	}
 	if rec.Kind == "" {
-		rec.Kind = ai.RunKindChallenge
+		rec.Kind = schema.RunKindChallenge
 	}
 	if rec.Status == "" {
-		rec.Status = ai.StatusFailed
+		rec.Status = schema.StatusFailed
 	}
 	if rec.StartedAt.IsZero() {
 		rec.StartedAt = time.Now().UTC()
@@ -341,67 +337,64 @@ func (m *Memory) SaveRun(_ context.Context, rec ai.RunTranscript) error {
 	return nil
 }
 
-// Run implements ai.Depot.
-func (m *Memory) Run(_ context.Context, id string) (ai.RunTranscript, bool, error) {
+// Run implements schema.Depot.
+func (m *Memory) Run(_ context.Context, id string) (schema.RunTranscript, bool, error) {
 	m.mu.RLock()
 	defer m.mu.RUnlock()
 	rec, ok := m.runs[id]
 	if !ok {
-		return ai.RunTranscript{}, false, nil
+		return schema.RunTranscript{}, false, nil
 	}
 	return cloneRun(rec), true, nil
 }
 
-// Runs implements ai.Depot, newest first, matching Postgres.
-func (m *Memory) Runs(_ context.Context) ([]ai.RunSummary, error) {
+// Runs implements schema.Depot, newest first, matching Postgres.
+func (m *Memory) Runs(_ context.Context) ([]schema.RunSummary, error) {
 	return m.runsFor("")
 }
 
 // RunsFor filters to one owner, matching the Postgres store.
-func (m *Memory) RunsFor(_ context.Context, ownerID string) ([]ai.RunSummary, error) {
+func (m *Memory) RunsFor(_ context.Context, ownerID string) ([]schema.RunSummary, error) {
 	return m.runsFor(ownerID)
 }
 
-func (m *Memory) runsFor(ownerID string) ([]ai.RunSummary, error) {
+func (m *Memory) runsFor(ownerID string) ([]schema.RunSummary, error) {
 	m.mu.RLock()
 	defer m.mu.RUnlock()
-	out := make([]ai.RunSummary, 0, len(m.runs))
+	out := make([]schema.RunSummary, 0, len(m.runs))
 	for _, rec := range m.runs {
 		if ownerID != "" && rec.OwnerID != ownerID {
 			continue
 		}
 		out = append(out, rec.Summary())
 	}
-	sort.Slice(out, func(i, j int) bool {
-		if !out[i].StartedAt.Equal(out[j].StartedAt) {
-			return out[i].StartedAt.After(out[j].StartedAt)
-		}
-		return out[i].ID > out[j].ID
+	slices.SortFunc(out, func(a, b schema.RunSummary) int {
+		return cmp.Or(b.StartedAt.Compare(a.StartedAt), cmp.Compare(b.ID, a.ID))
 	})
 	return out, nil
 }
 
 // cloneRun deep-copies the entries a caller could otherwise share with the
 // store.
-func cloneRun(rec ai.RunTranscript) ai.RunTranscript {
+func cloneRun(rec schema.RunTranscript) schema.RunTranscript {
 	out := rec
-	out.Entries = append([]ai.TranscriptEntry(nil), rec.Entries...)
+	out.Entries = append([]schema.TranscriptEntry(nil), rec.Entries...)
 	return out
 }
 
 // cloneRecord deep-copies the slices a caller could otherwise share with the
 // store: the artifact's contracts, checks, hints and the outcome's stages.
-func cloneRecord(rec ai.Record) ai.Record {
+func cloneRecord(rec schema.Record) schema.Record {
 	out := rec
 	out.Artifact.Objectives = append([]string(nil), rec.Artifact.Objectives...)
 	out.Artifact.Hints = append([]string(nil), rec.Artifact.Hints...)
 	out.Artifact.Setup.Statements = append([]string(nil), rec.Artifact.Setup.Statements...)
 	out.Artifact.ResultContract.Columns = append([]string(nil), rec.Artifact.ResultContract.Columns...)
-	out.Artifact.Checks = append([]ai.Check(nil), rec.Artifact.Checks...)
-	out.Outcome.Stages = append([]ai.Stage(nil), rec.Outcome.Stages...)
-	out.Outcome.Attempts = append([]ai.Attempt(nil), rec.Outcome.Attempts...)
+	out.Artifact.Checks = append([]schema.Check(nil), rec.Artifact.Checks...)
+	out.Outcome.Stages = append([]schema.Stage(nil), rec.Outcome.Stages...)
+	out.Outcome.Attempts = append([]schema.Attempt(nil), rec.Outcome.Attempts...)
 	if rec.Outcome.Artifact != nil {
-		art := cloneRecord(ai.Record{Artifact: *rec.Outcome.Artifact}).Artifact
+		art := cloneRecord(schema.Record{Artifact: *rec.Outcome.Artifact}).Artifact
 		out.Outcome.Artifact = &art
 	}
 	return out
@@ -416,7 +409,7 @@ func (m *Memory) SaveProgress(_ context.Context, userID, course string, snapshot
 	}
 	m.mu.Lock()
 	defer m.mu.Unlock()
-	m.progress[scopeKey(userID, course)] = clone(snapshot)
+	m.progress[scopeKey(userID, course)] = bytes.Clone(snapshot)
 	return nil
 }
 
@@ -428,7 +421,7 @@ func (m *Memory) LoadProgress(_ context.Context, userID, course string) (json.Ra
 	if !ok {
 		return nil, false, nil
 	}
-	return clone(snap), true, nil
+	return bytes.Clone(snap), true, nil
 }
 
 // SaveEvent implements Store.
@@ -443,7 +436,7 @@ func (m *Memory) SaveEvent(_ context.Context, userID, id string, payload json.Ra
 	}
 	m.mu.Lock()
 	defer m.mu.Unlock()
-	m.events[scopeKey(userID, id)] = clone(payload)
+	m.events[scopeKey(userID, id)] = bytes.Clone(payload)
 	return nil
 }
 
@@ -551,17 +544,8 @@ func (m *Memory) DeleteSession(_ context.Context, token string) error {
 	return nil
 }
 
-// Close implements Store.
 // Kind implements Store.
 func (m *Memory) Kind() string { return "memory" }
 
+// Close implements Store.
 func (m *Memory) Close() error { return nil }
-
-func clone(b json.RawMessage) json.RawMessage {
-	if b == nil {
-		return nil
-	}
-	out := make(json.RawMessage, len(b))
-	copy(out, b)
-	return out
-}

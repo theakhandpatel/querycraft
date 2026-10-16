@@ -1,6 +1,9 @@
 package perf
 
-import "fmt"
+import (
+	"fmt"
+	"slices"
+)
 
 // Grade codes. They are exactly the codes contracts/perf-contract.schema.json
 // implies and web/src/api/planContract.ts emits: one vocabulary for both
@@ -102,7 +105,7 @@ func Grade(bundle *PlanBundle, contract *PerfContract) Verdict {
 	}
 
 	for _, want := range contract.RequireNodes {
-		if !anyNode(summary.Nodes, func(n *PlanNode) bool { return nodeMatches(n, want) }) {
+		if !slices.ContainsFunc(summary.Nodes, func(n PlanNode) bool { return nodeMatches(&n, want) }) {
 			failures = append(failures, Failure{
 				Code:   CodeNodeMissing,
 				Label:  requireLabel(want),
@@ -147,7 +150,7 @@ func Grade(bundle *PlanBundle, contract *PerfContract) Verdict {
 	}
 
 	for _, index := range contract.RequireIndexes {
-		if !contains(summary.IndexesUsed, index) {
+		if !slices.Contains(summary.IndexesUsed, index) {
 			failures = append(failures, Failure{
 				Code:   CodeIndexNotUsed,
 				Label:  fmt.Sprintf("Uses index %s", index),
@@ -191,24 +194,6 @@ func nodeMatches(node *PlanNode, want PerfRequireNode) bool {
 		return false
 	}
 	return true
-}
-
-func anyNode(nodes []PlanNode, match func(*PlanNode) bool) bool {
-	for i := range nodes {
-		if match(&nodes[i]) {
-			return true
-		}
-	}
-	return false
-}
-
-func contains(list []string, want string) bool {
-	for _, s := range list {
-		if s == want {
-			return true
-		}
-	}
-	return false
 }
 
 func engineName(engine string) string {

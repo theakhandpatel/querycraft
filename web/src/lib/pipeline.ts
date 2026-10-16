@@ -9,7 +9,7 @@ export interface PipelineOptions {
 }
 
 /* Drives the "generation stream" UI. Steps and log lines are emitted over time so
-   loading states are real whether the work happens in-process (mock) or on the
+   loading states are real whether the work happens in-process (pglite) or on the
    server (the HTTP adapter replays the same cadence).
 
    Pass a `signal` to make the run cancellable: aborting clears the pending

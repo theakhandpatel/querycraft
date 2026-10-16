@@ -1,25 +1,25 @@
-# ADR 0006 — Per-learner SQLite isolation: one file per account, reset by re-copy
+# ADR 0006: Per-learner SQLite isolation, one file per account, reset by re-copy
 
 - **Status:** accepted
 - **Date:** 2026-10-15
 - **Deciders:** project owner + agent session
 - **Question:** ADR 0003 gives a signed-in learner a writable workspace and a reset, and
   PostgreSQL implements that as *database copied from a sealed template*. SQLite has no
-  server, no `CREATE DATABASE … TEMPLATE`, no role and no `DROP DATABASE` — the file **is**
+  server, no `CREATE DATABASE … TEMPLATE`, no role and no `DROP DATABASE`. The file **is**
   the database. What is the equivalent, what does it cost here, and what must a reset do
   that PostgreSQL's reset does not have to do?
 
 Settles **D14** in `docs/technical-design.md` §15. Extends ADR 0003 (who gets a writable
 workspace, and what reset means) and ADR 0002 (how one is created) to the second dialect
-ADR 0004 accepted; ADR 0004's own estimate — *"a file copy costs ~1 ms and no connection
-at all"* — is re-measured below rather than restated.
+ADR 0004 accepted; ADR 0004's own estimate, *"a file copy costs ~1 ms and no connection
+at all"*, is re-measured below rather than restated.
 
 ## Context
 
 M6 step 4 shipped SQLite as the gateway's second dialect (`modernc.org/sqlite`, pure Go,
 cgo-free). What it did **not** ship is the reset half of ADR 0003: `backend/internal/httpapi/sqlite.go`
 holds the store (`SQLiteEnvironments`), `/query` and `/answers/evaluate` route to it, and a
-signed-in learner's writes land in their own file — but there is no way to give that learner
+signed-in learner's writes land in their own file, but there is no way to give that learner
 their fixture back, and no template for them to be copied from.
 
 ADR 0003's model is three sentences, and each one needs a SQLite answer:
@@ -28,7 +28,7 @@ ADR 0003's model is three sentences, and each one needs a SQLite answer:
 | --- | --- | --- |
 | A signed-in learner gets **their own database**, copied from `qc_template` | a file `<root>/accounts/<hash>.db`, seeded from the committed schema + seed | a copy of a 45 056-byte file, not `CREATE DATABASE … TEMPLATE` |
 | **Anonymous** visitors keep the shared, read-only dataset | one shared `<root>/commerce.db`, opened `mode=ro` **and** `query_only(1)` | the same file can be handed to every visitor, because no one can write it |
-| **Reset** is `DROP` + `CREATE … TEMPLATE` — the copy *is* the reseed | close the pool, replace the file, remove the journal sidecars | dropping is an `unlink`; there is no `WITH (FORCE)` to terminate a straggler |
+| **Reset** is `DROP` + `CREATE … TEMPLATE`: the copy *is* the reseed | close the pool, replace the file, remove the journal sidecars | dropping is an `unlink`; there is no `WITH (FORCE)` to terminate a straggler |
 
 The isolation property is the same in both dialects and is *by file*: one learner's `INSERT`
 is visible only to the file it was written to, so a wrong `DELETE` breaks that learner's copy
@@ -196,7 +196,7 @@ The same probe run a second time on the same host, verbatim, for the ranges that
 ```
 
 **Reading it.** Copy-create is ~2 ms (min 1.7–1.9, median 2.1–2.7) and reset-by-re-copy is the
-same ~2 ms — roughly **20× cheaper than PostgreSQL's 42–46 ms create**, and ~25–80× cheaper
+same ~2 ms, roughly **20× cheaper than PostgreSQL's 42–46 ms create**: and ~25–80× cheaper
 than its 47–160 ms reset. The 30–38 ms outliers appear only in the run taken while a second
 agent session was compiling on the same host; with the host quiet the maximum over 40 copies
 was 3.1 ms. The 45 056-byte file is **0.04 MiB against PostgreSQL's 7.8 MiB per environment**
@@ -210,7 +210,7 @@ this ADR decides: lazy creation on first use, a cached pool per account (a *warm
 sub-microsecond), no sidecars on disk, and the anonymous fixture built the same way.
 
 Introducing the template changes the *latency*, not the *content*: the probe builds the
-template with the same two scripts the store seeds from, and the two are byte-identical —
+template with the same two scripts the store seeds from, and the two are byte-identical:
 one `sha256` covers the template and every account file the shipped `ForAccount` produced,
 and `cmp` reports 0 differing bytes:
 
@@ -265,8 +265,8 @@ Three findings, stated as measured:
    `-wal`/`-shm` next to it left **130** rows visible through a fresh connection: the old
    `-wal` was replayed on top of the new file. `journal_mode` is deliberately absent from
    `SQLiteReadOnlyPragmas`, so with today's default (`delete`) there are no sidecars to leave
-   behind — and if WAL were ever adopted, replacement would have to delete them explicitly.
-3. **WAL is genuinely faster for writes** — 1.9–2.1 ms per autocommit INSERT against
+   behind, and if WAL were ever adopted, replacement would have to delete them explicitly.
+3. **WAL is genuinely faster for writes**: 1.9–2.1 ms per autocommit INSERT against
    4.8–4.9 ms in rollback-journal mode, ~2.5×. That is the real price of decision 6, and it
    is worth paying for a reset that is a plain file copy: the write-heavy lessons here are
    tens of statements, not tens of thousands.
@@ -274,7 +274,7 @@ Three findings, stated as measured:
 Also measured, because the read-only path's comment in `engine/sqlite.go` warns about it: a
 read-only open of the WAL file with the shipped pragma set **succeeded** on this host and read
 the uncheckpointed 100 rows (130 total); forcing `journal_mode(DELETE)` on a read-only open
-of the same file **failed** — with `SQLITE_BUSY`, not the "disk I/O error (3850)" the comment
+of the same file **failed**: with `SQLITE_BUSY`, not the "disk I/O error (3850)" the comment
 predicts (the difference is a live writer holding the file when the open was attempted).
 Recorded as measured: the `delete` default keeps the anonymous read-only path free of both
 cases, and the comment's rationale is right for the wrong reason.
@@ -318,13 +318,13 @@ Verbatim from the probe:
   lives in the DSN rather than in a lesson: without it, a two-tab learner meets a lock error
   that says nothing about what happened.
 - **Two accounts do not contend at all.** Two files, 400 autocommit INSERTs, both complete:
-  1.8–3.3 s across three runs (the spread is the shared 8-vCPU host, not the lock — the
+  1.8–3.3 s across three runs (the spread is the shared 8-vCPU host, not the lock: the
   per-statement cost in the same runs was a stable 4.8–4.9 ms).
 - **The shipped pool of 4 connections *inside* one account is the one case that can fail.**
   Four concurrent writers finished green in the two quiet runs (2.09 s, 1.30 s) and produced
   two `SQLITE_BUSY` failures in the run taken under compile load. `envdb` opens 1–2
   connections per environment; a learner's SQLite environment should follow that, and a
-  single write connection per account is the shape that matches `busy_timeout` — anything
+  single write connection per account is the shape that matches `busy_timeout`: anything
   more is contention the account created with itself.
 - **Replacement is atomic for a fresh reader, and only for a fresh reader.** In 195 reads
   across 20 renames a reader never once saw an unreadable file; a copy-in-place run was also
@@ -389,7 +389,7 @@ $ alice: sqlite count after both resets (does the row survive?)
 ```
 
 `POST /environment/reset` resets the **PostgreSQL** challenge workspace (526 ms cold, then
-115–157 ms — the first call pays the drop that the ADR 0002 spike also saw take ~2.9 s once
+115–157 ms. The first call pays the drop that the ADR 0002 spike also saw take ~2.9 s once
 per cluster) and leaves alice's SQLite row at 31; asking for the SQLite dialect by name is
 refused as an unknown **dataset**, because no SQLite reset route exists yet.
 
@@ -407,16 +407,16 @@ refused as an unknown **dataset**, because no SQLite reset route exists yet.
 | Writes at rest | WAL, checkpointed by the server | rollback journal, in the `.db` |
 
 ADR 0004's estimate is confirmed and corrected: the copy is **~2 ms**, not ~1 ms, once the
-`fsync` and the close are included — still ~20× cheaper than the database copy it was
+`fsync` and the close are included: still ~20× cheaper than the database copy it was
 comparing against, and with no connection budget at all.
 
 ## Alternatives rejected
 
 | Alternative | Concrete reason it lost (measured) |
 | --- | --- |
-| **Hard link the template as each account's file** | 7–14 µs, 200× cheaper than the copy — and not isolation: after one `INSERT` through the link both names answered **31** rows and `os.Stat` reported the *same inode* (1046390). It is one database with two names. |
+| **Hard link the template as each account's file** | 7–14 µs, 200× cheaper than the copy, and not isolation: after one `INSERT` through the link both names answered **31** rows and `os.Stat` reported the *same inode* (1046390). It is one database with two names. |
 | **Copy over the file in place** | Works (`os.Create` truncates the same inode, and both the open pool and a fresh reader saw the new 30 rows), but it is not atomic: for the length of the copy a reader can open a truncated file. The rename costs the same ~2 ms (1.7–2.1 vs 1.7–2.2) and removes the window. |
-| **Replace by rename without closing the pool** | Measured to fail silently: the pre-reset pool kept reading **530** rows while a fresh connection read 30 — an environment where "Reset" appears to do nothing. The pool must be closed (decision 5), which is exactly what `envdb.Reset` already does for PostgreSQL. |
+| **Replace by rename without closing the pool** | Measured to fail silently: the pre-reset pool kept reading **530** rows while a fresh connection read 30: an environment where "Reset" appears to do nothing. The pool must be closed (decision 5), which is exactly what `envdb.Reset` already does for PostgreSQL. |
 | **WAL mode** | 2.5× faster per autocommit INSERT (1.9 vs 4.8 ms) and rejected anyway: committed rows live in `-wal`, so a copy-based reset needs a checkpoint and sidecar deletion, and a stale `-wal` left beside a replaced file **replayed the pre-reset data** (130 rows instead of 30). The journal default is what makes "reset = copy a file" true. |
 | **One shared file with a `learner_id` column** | The same reason ADR 0002 rejected row scoping: `SELECT * FROM orders` is an ordinary first move, and `DELETE FROM customers` is one keystroke. A file, like a database, cannot be wrong about who may see it. |
 | **In-memory SQLite (`:memory:`) per request** | Cheapest of all, and it throws the product away: a learner's `INSERT` would not survive their own next statement, and "reset" would mean nothing. ADR 0003's fake-write-mode row already rejected the same lie. |
@@ -432,7 +432,7 @@ comparing against, and with no connection budget at all.
 - **Costs move from connection slots to files.** PostgreSQL bounds environments by
   `max_connections`; SQLite bounds them by disk. At 45 KiB seeded (~65 KiB after a few
   hundred writes) a thousand accounts is ~45 MiB, so the cap should be a policy (files per
-  account, bytes, idle TTL) rather than a resource limit — and unlike the PostgreSQL manager,
+  account, bytes, idle TTL) rather than a resource limit, and unlike the PostgreSQL manager,
   the SQLite store has no cap, no idle reaper and no boot-time sweep today.
 - **Grading still assumes a dirty database**, for the same reason ADR 0003 records: an
   exercise expecting 80 rows can be satisfied by changing the table. The reset is the
@@ -491,6 +491,6 @@ None of these changes the isolation property, which is already measured above an
   differences), so the change is a latency change; but a reset that *replaces an existing*
   environment, and the interaction with a file created by the pre-template code, are not
   measured end to end.
-- **The learner's own SQL can still hold a lock past the timeout** — a `BEGIN` left open in
+- **The learner's own SQL can still hold a lock past the timeout**: a `BEGIN` left open in
   one tab is measured to make a second writer fail after 2.00 s. The UX for that condition
   is step 7's, not this ADR's.

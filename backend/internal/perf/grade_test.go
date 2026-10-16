@@ -340,6 +340,10 @@ func TestGradeFixtures(t *testing.T) {
 // selector read of a field the contract deliberately excludes. A json-tag
 // line declares the field (that is plan.go describing the wire shape); a
 // selector is a read.
+//
+// explain.go is exempt: the plan capture builds those measurements and writes
+// duration_ms, so it touches them by design. The clause is about grading, and
+// Grade lives in grade.go, which this guard still reads in full.
 func TestGradeReadsNoTiming(t *testing.T) {
 	forbidden := map[string]string{
 		"ActualTimeMS": "actual_time_ms",
@@ -364,6 +368,10 @@ func TestGradeReadsNoTiming(t *testing.T) {
 	for _, entry := range entries {
 		name := entry.Name()
 		if entry.IsDir() || !strings.HasSuffix(name, ".go") || strings.HasSuffix(name, "_test.go") {
+			continue
+		}
+		if name == "explain.go" {
+			// The capture builds the measurements by design.
 			continue
 		}
 		scanned++

@@ -124,10 +124,12 @@ function buildGateway(dir) {
   return bin;
 }
 
-async function startGateway(bin, extraEnv) {
+async function startGateway(bin, config) {
   const port = await freePort();
-  const child = spawn(bin, [], {
-    env: { ...process.env, QC_ADDR: `127.0.0.1:${port}`, TMPDIR: tmpRoot, ...extraEnv },
+  const cfgFile = path.join(tmpRoot, `gateway-${Date.now()}-${process.pid}.json`);
+  fs.writeFileSync(cfgFile, JSON.stringify({ addr: `127.0.0.1:${port}`, ...config }, null, 2));
+  const child = spawn(bin, ['--config', cfgFile], {
+    env: { ...process.env, TMPDIR: tmpRoot },
     stdio: ['ignore', 'pipe', 'pipe'],
   });
   let log = '';
@@ -179,12 +181,34 @@ async function getText(url) {
   const res = await fetch(url);
   return { status: res.status, contentType: res.headers.get('content-type') || '', body: await res.text() };
 }
-async function getJSON(url) {
-  const res = await fetch(url);
+async function getJSON(url, headers = {}) {
+  const res = await fetch(url, { headers });
   const text = await res.text();
   let json = null;
   try { json = JSON.parse(text); } catch { /* leave null */ }
   return { status: res.status, json, body: text };
+}
+
+// signInLearner creates a throwaway account and returns its bearer token.
+// /diagnostics reports pool state and the learner's privileges, so the route
+// needs a session. POST /query stays anonymous on purpose: the workload
+// measures the shared, read-only dataset, and a session would send it to a
+// private workspace.
+async function signInLearner(base) {
+  const email = `load-${Date.now()}-${Math.floor(Math.random() * 1e6)}@load.test`;
+  const res = await fetch(`${base}/auth/signup`, {
+    method: 'POST',
+    headers: { 'content-type': 'application/json' },
+    body: JSON.stringify({ email, name: 'Load Test', password: 'load-test-password' }),
+  });
+  const text = await res.text();
+  let json = null;
+  try { json = JSON.parse(text); } catch { /* not JSON */ }
+  const token = json?.token;
+  if (!token) {
+    throw new Error(`could not sign up a learner for the load test: HTTP ${res.status} ${text.slice(0, 200)}`);
+  }
+  return { email, token };
 }
 
 // parseSeries turns Prometheus text into { name, labels, value } records.
@@ -338,11 +362,11 @@ async function driveLoad(base) {
 
 // sampleEngine polls /diagnostics while load runs, so pool saturation is
 // observed during the load rather than only before and after it.
-async function sampleEngine(base, window) {
+async function sampleEngine(base, window, token) {
   const samples = [];
   while (!window.done) {
     try {
-      const d = await getJSON(`${base}/diagnostics`);
+      const d = await getJSON(`${base}/diagnostics`, { authorization: 'Bearer ' + token });
       if (d.json?.engine) {
         samples.push({
           ready: d.json.engine.ready === true,
@@ -400,20 +424,25 @@ try {
   } else {
     const bin = process.env.QC_BIN || buildGateway(tmpRoot);
     pgPort = await freePort();
-    const env = {
-      QC_PG_PORT: String(pgPort),
-      QC_PG_DATA: path.join(tmpRoot, 'pg', 'data'),
-      QC_PG_RUNTIME: path.join(tmpRoot, 'pg', 'runtime'),
+    const config = {
+      pg_port: pgPort,
+      pg_data: path.join(tmpRoot, 'pg', 'data'),
+      pg_runtime: path.join(tmpRoot, 'pg', 'runtime'),
     };
-    if (MAX_CONCURRENT) env.QC_MAX_CONCURRENT = MAX_CONCURRENT;
-    const started = await startGateway(bin, env);
+    if (MAX_CONCURRENT) config.max_concurrent = MAX_CONCURRENT;
+    const started = await startGateway(bin, config);
     child = started.child;
     base = started.base;
     booted = true;
     console.log(`load-test: ${base} (harness-booted gateway, embedded PostgreSQL on ${pgPort})`);
   }
 
-  const before = await getJSON(`${base}/diagnostics`);
+  /* /diagnostics needs a session, so the harness signs in before it reads the
+     engine's own report. Signup works in both modes: a harness-booted gateway
+     has a live store, and a QC_GATEWAY keeps its own. */
+  const learner = await signInLearner(base);
+
+  const before = await getJSON(`${base}/diagnostics`, { authorization: 'Bearer ' + learner.token });
   const cap = before.json?.engine?.limits?.max_concurrent ?? null;
   const ready = before.json?.engine?.ready === true;
   console.log(`engine: ready=${ready} version=${JSON.stringify(before.json?.engine?.version ?? '')} pool=${JSON.stringify(before.json?.engine?.pool)}`);
@@ -427,7 +456,7 @@ try {
   console.log('main load');
   const metricsBefore = (await getText(`${base}/metrics`)).body;
   const window = { done: false };
-  const samplerPromise = sampleEngine(base, window);
+  const samplerPromise = sampleEngine(base, window, learner.token);
   const load = await driveLoad(base);
   window.done = true;
   const poolSamples = await samplerPromise;
@@ -566,7 +595,7 @@ try {
   console.log('the service is healthy after the load');
   const health = await getJSON(`${base}/health`);
   check('/health answers 200', health.status === 200, health.status);
-  const after = await getJSON(`${base}/diagnostics`);
+  const after = await getJSON(`${base}/diagnostics`, { authorization: 'Bearer ' + learner.token });
   check('the engine is still ready', after.json?.engine?.ready === true, after.json?.engine);
   check('the learner role is still the restricted one',
     after.json?.learner?.current_user === 'querycraft_learner', after.json?.learner);

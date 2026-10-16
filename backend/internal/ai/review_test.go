@@ -6,33 +6,35 @@ import (
 	"strings"
 	"testing"
 
+	"github.com/querycraft/sqlquery/backend/internal/ai/provider"
 	"github.com/querycraft/sqlquery/backend/internal/engine"
+	"github.com/querycraft/sqlquery/backend/internal/schema"
 )
 
 // recordingProvider captures the last request, so a test can assert what the
 // service did — and did not — send to the model.
 type recordingProvider struct {
-	inner Provider
-	last  ProviderRequest
+	inner provider.Provider
+	last  provider.ProviderRequest
 }
 
-func (r *recordingProvider) Descriptor() ProviderDescriptor { return r.inner.Descriptor() }
+func (r *recordingProvider) Descriptor() provider.ProviderDescriptor { return r.inner.Descriptor() }
 
-func (r *recordingProvider) Complete(ctx context.Context, req ProviderRequest) (ProviderResponse, error) {
+func (r *recordingProvider) Complete(ctx context.Context, req provider.ProviderRequest) (provider.ProviderResponse, error) {
 	r.last = req
 	return r.inner.Complete(ctx, req)
 }
 
 // seedChallenge runs the real pipeline once and returns the active artifact.
-func seedChallenge(t *testing.T, ex engine.Executor, depot *testDepot, p Provider) Artifact {
+func seedChallenge(t *testing.T, ex engine.Executor, depot *testDepot, p provider.Provider) schema.Artifact {
 	t.Helper()
 	svc := testService(p, depot, ex)
-	out := svc.GenerateChallenge(testContext(t), GenerationRequest{
+	out := svc.GenerateChallenge(testContext(t), schema.GenerationRequest{
 		Title:      "Orders per customer",
 		Topics:     []string{"joins"},
-		Difficulty: Beginner,
+		Difficulty: schema.Beginner,
 	})
-	if out.Status != StatusActive {
+	if out.Status != schema.StatusActive {
 		t.Fatalf("seed generation failed: status = %q error = %v", out.Status, out.Error)
 	}
 	return *out.Artifact
@@ -72,6 +74,38 @@ func TestTutorSendsNoSolutionToTheProvider(t *testing.T) {
 	}
 }
 
+// A hint is prose, so the service must not send it the exercise system prompt,
+// which asks for one JSON object. The built-in provider answers by Kind and
+// never reads the system message, so this asserts against the request the
+// service built rather than against anything the provider did with it.
+func TestTutorAndCritiqueSendTheProseSystemPrompt(t *testing.T) {
+	ex := bootPG(t)
+	ctx := testContext(t)
+	depot := newTestDepot()
+	art := seedChallenge(t, ex, depot, NewFakeProvider())
+
+	rec := &recordingProvider{inner: NewFakeProvider()}
+	svc := testService(rec, depot, ex)
+
+	if _, err := svc.Tutor(ctx, TutorRequest{
+		ChallengeID: art.ID,
+		SQL:         "SELECT 1",
+		Objective:   "Count each customer's orders.",
+	}); err != nil {
+		t.Fatalf("Tutor() error = %v", err)
+	}
+	if rec.last.System != feedbackSystemPrompt() {
+		t.Errorf("tutor system prompt = %q, want the feedback prompt", rec.last.System)
+	}
+
+	if _, err := svc.Critique(ctx, CritiqueRequest{ChallengeID: art.ID, SQL: "SELECT 1"}); err != nil {
+		t.Fatalf("Critique() error = %v", err)
+	}
+	if rec.last.System != feedbackSystemPrompt() {
+		t.Errorf("critique system prompt = %q, want the feedback prompt", rec.last.System)
+	}
+}
+
 func TestTutorNeverRevealsTheReference(t *testing.T) {
 	ex := bootPG(t)
 	ctx := testContext(t)
@@ -91,7 +125,7 @@ func TestTutorNeverRevealsTheReference(t *testing.T) {
 	if err == nil {
 		t.Fatalf("a reply containing the reference solution was returned: %+v", resp)
 	}
-	var aiErr *Error
+	var aiErr *schema.Error
 	if !errors.As(err, &aiErr) || aiErr.Code != CodeInvalidArtifact {
 		t.Fatalf("error = %v, want an %s error", err, CodeInvalidArtifact)
 	}
@@ -193,7 +227,7 @@ ORDER BY order_count DESC, customer_name ASC`
 	if err == nil {
 		t.Fatal("an unapproved patch was applied")
 	}
-	var aiErr *Error
+	var aiErr *schema.Error
 	if !errors.As(err, &aiErr) || aiErr.Code != CodePatchUnapproved {
 		t.Fatalf("error = %v, want %s", err, CodePatchUnapproved)
 	}
@@ -267,7 +301,7 @@ ORDER BY order_count DESC, customer_name ASC`
 	if err == nil {
 		t.Fatal("a patch was applied through another challenge's route")
 	}
-	var aiErr *Error
+	var aiErr *schema.Error
 	if !errors.As(err, &aiErr) || aiErr.Code != CodeNotFound {
 		t.Fatalf("error = %v, want %s", err, CodeNotFound)
 	}
@@ -305,12 +339,12 @@ func TestAvailableExplainsWhatIsMissing(t *testing.T) {
 		{name: "no database", cfg: Config{Provider: NewFakeProvider(), Depot: newTestDepot()}, wantSub: "database"},
 		{name: "no depot", cfg: Config{Provider: NewFakeProvider(), Runner: runner}, wantSub: "stored"},
 		{name: "http provider without a key", cfg: Config{
-			Provider: NewHTTPProvider(HTTPProviderConfig{BaseURL: "http://127.0.0.1:1/v1", Model: "gpt-x"}),
+			Provider: provider.NewHTTPProvider(provider.HTTPProviderConfig{BaseURL: "http://127.0.0.1:1/v1", Model: "gpt-x"}),
 			Depot:    newTestDepot(),
 			Runner:   runner,
 		}, wantSub: "API key"},
 		{name: "http provider without an address", cfg: Config{
-			Provider: NewHTTPProvider(HTTPProviderConfig{Model: "gpt-x", APIKey: "k"}),
+			Provider: provider.NewHTTPProvider(provider.HTTPProviderConfig{Model: "gpt-x", APIKey: "k"}),
 			Depot:    newTestDepot(),
 			Runner:   runner,
 		}, wantSub: "not configured"},

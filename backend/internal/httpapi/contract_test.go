@@ -8,16 +8,18 @@ import (
 	"os"
 	"path/filepath"
 	"reflect"
+	"regexp"
 	"sort"
 	"strings"
 	"testing"
 
+	"github.com/querycraft/sqlquery/backend/internal/apidocs"
 	"github.com/querycraft/sqlquery/backend/internal/engine"
 )
 
 /*
 contract_test.go proves that the gateway's JSON responses honour the shared
-contracts in contracts/ and the component schemas declared in openapi.go.
+contracts in contracts/ and the component schemas declared in apidocs.go.
 
 contracts/ is the language-neutral seam shared with the React client. It holds
 exactly three schemas:
@@ -27,17 +29,28 @@ exactly three schemas:
 	exercise.schema.json      -> an exercise bundle (the /answers/evaluate input)
 
 The other six gateway endpoints have no contract file; their response shapes are
-declared only in openapi.go, so the local schemas below mirror those components.
+declared only in apidocs.go, so the local schemas below mirror those components.
 
 The validator is deliberately small and dependency-free. It supports the subset
 of JSON Schema the contracts actually use: type, properties, required, items,
 enum, oneOf, anyOf and minimum. additionalProperties is ignored, and unknown
-keywords ($schema, $id, title, description, ...) are skipped.
+keywords ($schema, $id, title, description, ...) are skipped. loadContract
+inlines $ref before validation, and validateSchema reports a ref node that
+reaches it unresolved instead of skipping the node.
 */
 
 // contractsDir is resolved relative to this test file's package directory
 // (backend/internal/httpapi), per the task's layout.
 const contractsDir = "../../../contracts"
+
+// Sources that restate the closed error set in another language. The drift test
+// reads them from disk, because a symbol list declared in the test would not see
+// a constant added to the file.
+const (
+	engineCodesSource  = "../engine/engine.go"
+	dialectCodesSource = "../dialect/dialect.go"
+	typesCodesSource   = "../../../web/src/types.ts"
+)
 
 // evaluateBody is a representative POST /answers/evaluate request: a valid
 // exercise bundle paired with learner SQL. With no database the execution
@@ -64,6 +77,10 @@ const evaluateBody = `{
 
 /* ---------- contract loading ---------- */
 
+// loadContract reads a contract file and inlines every $ref it holds, so both
+// the validator and the tests that navigate a schema by hand see the real
+// shape. A ref left in place would match every value and let a check pass on
+// nothing.
 func loadContract(t *testing.T, name string) map[string]any {
 	t.Helper()
 	path := filepath.Join(contractsDir, name)
@@ -71,7 +88,7 @@ func loadContract(t *testing.T, name string) map[string]any {
 	if err != nil {
 		t.Fatalf("read contract %s: %v", path, err)
 	}
-	return parseSchemaObject(t, path, raw)
+	return inlineContractRefs(t, name, parseSchemaObject(t, path, raw))
 }
 
 func parseSchemaObject(t *testing.T, path string, raw []byte) map[string]any {
@@ -81,6 +98,115 @@ func parseSchemaObject(t *testing.T, path string, raw []byte) map[string]any {
 		t.Fatalf("parse contract %s: %v", path, err)
 	}
 	return schema
+}
+
+// inlineContractRefs replaces every $ref under node with the node it names.
+// Two ref forms appear in the contracts:
+//
+//	"query-result.schema.json" -> the whole sibling contract file
+//	"#/$defs/name"             -> a node inside the document that holds the ref
+//
+// Sibling keywords next to a $ref are merged, as draft 2020-12 applies both. A
+// ref that cannot be resolved and a ref cycle fail the test: inlining exists so
+// nothing is skipped silently.
+func inlineContractRefs(t *testing.T, docName string, schema map[string]any) map[string]any {
+	t.Helper()
+	resolved, ok := inlineRefs(t, docName, schema, map[string]bool{}).(map[string]any)
+	if !ok {
+		t.Fatalf("%s: the document root is not an object", docName)
+	}
+	return resolved
+}
+
+func inlineRefs(t *testing.T, docName string, node any, open map[string]bool) any {
+	t.Helper()
+	switch n := node.(type) {
+	case map[string]any:
+		ref, isRef := n["$ref"].(string)
+		if !isRef {
+			for key, value := range n {
+				n[key] = inlineRefs(t, docName, value, open)
+			}
+			return n
+		}
+		key := docName + " -> " + ref
+		if open[key] {
+			t.Fatalf("cyclic $ref %q in %s", ref, docName)
+		}
+		open[key] = true
+		target, targetDoc := refTarget(t, docName, ref)
+		resolved := inlineRefs(t, targetDoc, target, open)
+		delete(open, key)
+		if len(n) == 1 {
+			return resolved
+		}
+		// JSON Schema 2020-12 applies $ref and its sibling keywords together.
+		// The contracts use siblings for annotations (description), so merge
+		// the resolved node with them instead of dropping either side.
+		targetMap, ok := resolved.(map[string]any)
+		if !ok {
+			t.Fatalf("%s: $ref %q resolves to a non-object and carries siblings", docName, ref)
+		}
+		merged := make(map[string]any, len(targetMap)+len(n)-1)
+		for k, v := range targetMap {
+			merged[k] = v
+		}
+		for k, v := range n {
+			if k == "$ref" {
+				continue
+			}
+			merged[k] = inlineRefs(t, docName, v, open)
+		}
+		return merged
+	case []any:
+		for i, value := range n {
+			n[i] = inlineRefs(t, docName, value, open)
+		}
+		return n
+	default:
+		return node
+	}
+}
+
+// refTarget loads the document and the node a $ref names, relative to the
+// document that holds the ref, and reports which document the node came from.
+func refTarget(t *testing.T, docName string, ref string) (any, string) {
+	t.Helper()
+	file, pointer := ref, ""
+	if i := strings.Index(ref, "#"); i >= 0 {
+		file, pointer = ref[:i], ref[i+1:]
+	}
+	if file == "" {
+		file = docName
+	}
+	path := filepath.Join(contractsDir, file)
+	raw, err := os.ReadFile(path)
+	if err != nil {
+		t.Fatalf("resolve $ref %q in %s: %v", ref, docName, err)
+	}
+	var node any = parseSchemaObject(t, path, raw)
+	for _, part := range strings.Split(strings.TrimPrefix(pointer, "/"), "/") {
+		if part == "" {
+			continue
+		}
+		obj, ok := node.(map[string]any)
+		if !ok {
+			t.Fatalf("resolve $ref %q in %s: %q is not an object", ref, docName, part)
+		}
+		next, present := obj[unescapePointerSegment(part)]
+		if !present {
+			t.Fatalf("resolve $ref %q in %s: no node at %q", ref, docName, part)
+		}
+		node = next
+	}
+	return node, file
+}
+
+// unescapePointerSegment reverses the ~0 and ~1 escaping of RFC 6901. The ~1
+// replacement runs first, so a literal ~01 does not become a separator.
+func unescapePointerSegment(s string) string {
+	s = strings.ReplaceAll(s, "~1", "/")
+	return strings.ReplaceAll(s, "~0", "~")
 }
 
 /* ---------- subset JSON Schema validator ---------- */
@@ -114,6 +240,12 @@ func validateSchema(schema map[string]any, value any, path string) []contractVio
 		where = "(root)"
 	}
 	var out []contractViolation
+
+	if ref, ok := schema["$ref"]; ok {
+		// loadContract inlines refs, so a ref node that arrives here was never
+		// resolved. Report it; skipping it would match any value.
+		return []contractViolation{{where, fmt.Sprintf("resolved $ref %v", ref), "unresolved"}}
+	}
 
 	if spec, ok := schema["type"]; ok {
 		if !matchesType(spec, value) {
@@ -519,7 +651,7 @@ func decodeResponseObject(t *testing.T, body []byte) map[string]any {
 // TestEndpointsConformToSchemas drives every JSON endpoint through the real
 // handler with no database and validates the decoded response against the
 // schema that governs it: the contracts/*.schema.json file where one exists
-// (POST /query), otherwise the openapi.go component it is declared by.
+// (POST /query), otherwise the apidocs.go component it is declared by.
 func TestEndpointsConformToSchemas(t *testing.T) {
 	queryResult := loadContract(t, "query-result.schema.json")
 	planContract := loadContract(t, "plan.schema.json")
@@ -827,6 +959,38 @@ func TestEvaluationNestedErrorEnumMatchesQueryResult(t *testing.T) {
 	}
 }
 
+// TestEvaluationQRRefResolvesToTheQueryResultSchema proves the qr $ref is
+// followed instead of skipped. An unresolved ref node matches any value, so a
+// contract with a dead ref would let the conformance test pass on nothing.
+func TestEvaluationQRRefResolvesToTheQueryResultSchema(t *testing.T) {
+	evaluation := loadContract(t, "evaluation.schema.json")
+	qr := evaluation["properties"].(map[string]any)["qr"].(map[string]any)
+	if _, stillARef := qr["$ref"]; stillARef {
+		t.Fatalf("loadContract left qr as an unresolved $ref: %v", qr)
+	}
+	if requiredOf(t, qr) == nil {
+		t.Fatalf("the resolved qr carries no required list: %v", qr)
+	}
+
+	// A qr missing every query-result field must fail, or the resolution above
+	// proved nothing about what the conformance test checks.
+	truncated := map[string]any{
+		"qr":          map[string]any{"status": "succeeded"},
+		"checks":      []any{},
+		"passed":      false,
+		"duration_ms": "1.0",
+	}
+	var atQR bool
+	for _, v := range validateSchema(evaluation, truncated, "") {
+		if strings.HasPrefix(v.Path, "/qr") {
+			atQR = true
+		}
+	}
+	if !atQR {
+		t.Fatalf("a truncated qr passed evaluation.schema.json; the qr $ref is not validated")
+	}
+}
+
 // TestEvaluateRequestExerciseMatchesContract validates the exercise bundle the
 // client sends with POST /answers/evaluate against exercise.schema.json.
 func TestEvaluateRequestExerciseMatchesContract(t *testing.T) {
@@ -845,7 +1009,7 @@ func TestEvaluateRequestExerciseMatchesContract(t *testing.T) {
 
 // TestTheRealClientExerciseShapeMatchesTheContract closes the gap the fixture
 // above leaves: that test validates a hand-written body that carries setup and
-// result_contract, while the shipped client (web/src/api/execution.ts) sends
+// result_contract, while the shipped client (web/src/api/execution/http.ts) sends
 // {id, version, lesson_id, contract, reference_solution} and none of the
 // authored core. The schema used to require the authored fields, so the real
 // request would have failed it — and nothing noticed, because only the fixture
@@ -853,7 +1017,7 @@ func TestEvaluateRequestExerciseMatchesContract(t *testing.T) {
 func TestTheRealClientExerciseShapeMatchesTheContract(t *testing.T) {
 	exercise := loadContract(t, "exercise.schema.json")
 
-	// The exact body execution.ts builds for POST /answers/evaluate.
+	// The exact body execution/http.ts builds for POST /answers/evaluate.
 	clientExercise := map[string]any{
 		"id":        "ex.sqlite.1",
 		"version":   float64(1),
@@ -966,10 +1130,11 @@ func TestSchemaValidator(t *testing.T) {
 
 // TestTheQueryErrorEnumIsOneSetEverywhere closes the whole class of drift that
 // already shipped once: the closed query-error code set is hand-copied into
-// several contract files and the OpenAPI document, and each copy can fall behind
-// independently. It reads every copy from disk and asserts set equality with the
-// canonical query-result.schema.json, so adding a code in one place and not the
-// others fails here instead of at a learner.
+// several contract files, two Go packages, the client types and the OpenAPI
+// document, and each copy can fall behind independently. It reads every copy
+// from disk and asserts set equality with the canonical
+// query-result.schema.json, so adding a code in one place and not the others
+// fails here instead of at a learner.
 //
 // plan.schema.json is deliberately EXCLUDED: the plan lab refuses a foreign
 // dialect with EVALUATION_ERROR rather than DIALECT_MISMATCH (httpapi/plan.go),
@@ -991,6 +1156,34 @@ func TestTheQueryErrorEnumIsOneSetEverywhere(t *testing.T) {
 	dialectErr := loadContract(t, "dialect.schema.json")["$defs"].(map[string]any)["queryResultErrorCode"].(map[string]any)
 	if got := enumOf(t, dialectErr); strings.Join(got, ",") != canonicalSet {
 		t.Errorf("dialect.schema.json queryResultErrorCode drifted:\n got %v\n want %v", got, canonical)
+	}
+
+	// engine/engine.go: the Code* constants. PERSISTENCE_FAILED is the one
+	// deliberate absence: nothing in the engine package emits it (the gateway
+	// writes that literal itself, httpapi/server.go:353), so the constant had
+	// no caller and was deleted. The exception stays explicit, like the plan
+	// schema's below, so adding the constant back fails here.
+	engineCodes := goCodeConstants(t, engineCodesSource)
+	wantEngine := removeString(canonical, "PERSISTENCE_FAILED")
+	if strings.Join(engineCodes, ",") != strings.Join(wantEngine, ",") {
+		t.Errorf("engine/engine.go Code* constants drifted from query-result.schema.json (minus PERSISTENCE_FAILED):\n got %v\n want %v", engineCodes, wantEngine)
+	}
+
+	// dialect/dialect.go re-declares the set so the dialect package can be read
+	// on its own. It keeps PERSISTENCE_FAILED, so it must equal the canonical
+	// set exactly.
+	dialectCodes := goCodeConstants(t, dialectCodesSource)
+	if strings.Join(dialectCodes, ",") != canonicalSet {
+		t.Errorf("dialect/dialect.go Code* constants drifted from query-result.schema.json:\n got %v\n want %v", dialectCodes, canonical)
+	}
+
+	// web/src/types.ts: the QueryErrorCode values, read from the file because
+	// this test cannot import TypeScript. The union and the runtime guard share
+	// one QUERY_ERROR_CODES list, so this is the only statement of the set in
+	// the client.
+	typesCodes := typescriptQueryErrorCodes(t, typesCodesSource)
+	if strings.Join(typesCodes, ",") != canonicalSet {
+		t.Errorf("web/src/types.ts QueryErrorCode drifted from query-result.schema.json:\n got %v\n want %v", typesCodes, canonical)
 	}
 
 	// The exception, asserted rather than left implicit: plan.schema.json omits
@@ -1024,7 +1217,7 @@ func TestTheQueryErrorEnumIsOneSetEverywhere(t *testing.T) {
 	// and ErrorEnvelope (adds NON-query codes). QueryError must equal canonical;
 	// ErrorEnvelope must be a superset of it.
 	var spec map[string]any
-	if err := json.Unmarshal([]byte(openAPISpec), &spec); err != nil {
+	if err := json.Unmarshal([]byte(apidocs.Spec), &spec); err != nil {
 		t.Fatalf("decode the OpenAPI document: %v", err)
 	}
 	schemas := spec["components"].(map[string]any)["schemas"].(map[string]any)
@@ -1160,5 +1353,68 @@ func enumOf(t *testing.T, schema map[string]any) []string {
 		out = append(out, s)
 	}
 	sort.Strings(out)
+	return out
+}
+
+// goCodeConstants reads the `Code* = "UPPER"` constants of a Go file, sorted.
+// It reads the file instead of listing the Go symbols, so a constant added to
+// the file fails the drift test.
+func goCodeConstants(t *testing.T, path string) []string {
+	t.Helper()
+	raw, err := os.ReadFile(path)
+	if err != nil {
+		t.Fatalf("read %s: %v", path, err)
+	}
+	pattern := regexp.MustCompile(`(?m)^\s*Code[A-Za-z0-9]*\s*=\s*"([A-Z_]+)"`)
+	var out []string
+	for _, match := range pattern.FindAllStringSubmatch(string(raw), -1) {
+		out = append(out, match[1])
+	}
+	if len(out) == 0 {
+		t.Fatalf("%s defines no Code* string constants; the pattern or the file moved", path)
+	}
+	sort.Strings(out)
+	return out
+}
+
+// typescriptQueryErrorCodes reads the QUERY_ERROR_CODES list of web/src/types.ts.
+// The list and the QueryErrorCode type derive from each other, so one parse
+// covers both.
+func typescriptQueryErrorCodes(t *testing.T, path string) []string {
+	t.Helper()
+	raw, err := os.ReadFile(path)
+	if err != nil {
+		t.Fatalf("read %s: %v", path, err)
+	}
+	src := string(raw)
+	const marker = "export const QUERY_ERROR_CODES"
+	start := strings.Index(src, marker)
+	if start < 0 {
+		t.Fatalf("%s has no %q declaration", path, marker)
+	}
+	rest := src[start+len(marker):]
+	end := strings.Index(rest, "]")
+	if end < 0 {
+		t.Fatalf("%s: %q is not a list literal", path, marker)
+	}
+	var out []string
+	for _, match := range regexp.MustCompile(`'([A-Z_]+)'`).FindAllStringSubmatch(rest[:end], -1) {
+		out = append(out, match[1])
+	}
+	if len(out) == 0 {
+		t.Fatalf("%s: %q lists no codes", path, marker)
+	}
+	sort.Strings(out)
+	return out
+}
+
+// removeString returns list without every occurrence of drop.
+func removeString(list []string, drop string) []string {
+	out := make([]string, 0, len(list))
+	for _, s := range list {
+		if s != drop {
+			out = append(out, s)
+		}
+	}
 	return out
 }

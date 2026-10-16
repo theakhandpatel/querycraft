@@ -11,7 +11,7 @@ gateway (`backend/`). Both sides validate against these schemas in tests.
 | `export.schema.json` | The client-side workbook export document (design §8.3), which is also the input the import validates before merging it |
 | `ai.schema.json` | The M4 AI generation surface (design §11): the generation request and its `outcome`, the activated `challengeArtifact` and its `provenance`, the stage evidence, and the tutoring, critique and defect surfaces. Its error enum is an AI envelope, separate from the closed QueryResult enum |
 | `plan.schema.json` | The M5 performance lab: `POST /explain` output (design §14 M5). `summary` and `environment` carry the deterministic, gradeable facts; `plan` is the engine's own JSON, reported verbatim; `timing_precision` names what the numbers are worth |
-| `perf-contract.schema.json` | The M5 plan-based result contract attached to a performance exercise. Structural assertions only — no timing field exists, by design |
+| `perf-contract.schema.json` | The M5 plan-based result contract attached to a performance exercise. Structural assertions only: no timing field exists, by design |
 | `run.schema.json` | The agent-run audit trail: one generation run's whole transcript (`runTranscript`), the list shape (`runSummary`), and one ordered fact (`entry`). Read over `GET /runs` and `GET /runs/{id}` |
 
 `export.schema.json` is the odd one out: it describes no endpoint. It is the

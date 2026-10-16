@@ -106,7 +106,7 @@ func (s *Server) handleExplain(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	bundle, err := engine.Explain(ctx, exec, req.SQL, engine.ExplainOptions{
+	bundle, err := perf.Explain(ctx, exec, req.SQL, perf.ExplainOptions{
 		Analyze: req.Analyze,
 		Limits:  limits,
 		Dataset: datasetID,
@@ -209,7 +209,7 @@ func (s *Server) planCapability() map[string]any {
 		"datasets":              []string{commerceDatasetID, dataset.PerfDatasetID},
 		"analyze_requires_auth": true,
 		"timing_precision":      []string{perf.TimingAnalyze, perf.TimingEstimate, perf.TimingNone},
-		"node_cap":              engine.DefaultPlanNodeCap,
-		"seq_scan_large_rows":   engine.SeqScanLargeRows,
+		"node_cap":              perf.DefaultPlanNodeCap,
+		"seq_scan_large_rows":   perf.SeqScanLargeRows,
 	}
 }

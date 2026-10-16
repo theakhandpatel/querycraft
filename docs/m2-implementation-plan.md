@@ -1,4 +1,4 @@
-# M2 implementation plan — "Complete workbook (browser)"
+# M2 implementation plan: "Complete workbook (browser)"
 
 Design source: `docs/technical-design.md` §14 (M2), §8 (persistence), §9 (content),
 §10 (UI), §13.2 (test matrix). Steps are ordered so each one ships on its own,
@@ -11,19 +11,19 @@ the last column runs under `make test`.
 
 | # | Step | Outcome | Proof |
 | --- | --- | --- | --- |
-| 0 | Release 0.1.0 | **Not started** — same commit-and-tag act as step 10, awaiting the user's go-ahead | `git describe --tags` |
-| 1 | Lesson completeness | Done — every published lesson has objectives, an example and an exercise or a reading-only reason | `make audit-lessons` → 23 lessons, 24 examples, 24 graded exercises, 0 problems |
-| 2 | Store layout (§8.1) | Done — the eight stores, one snapshot splitting without loss, failed writes typed | `make audit-storage` → 8 stores, 0 problems |
-| 3 | Bookmarks | Done — create and remove, survive reload, appear in the export | `make audit-storage`, `make audit-export` |
-| 4 | Saved queries | Done — keep a query from a cell; listed in the workbook and carried by the export | `make audit-storage`, `make audit-export` |
-| 5 | Search | Done — one field across lessons, exercises and the workbook | `make audit-search` → 0 problems |
-| 6 | Progress views | Done — per-exercise history and the stale-version view | `make audit-progress` |
-| 7 | Import | Done — validated import against the schema, loss-free round trip | `make audit-import`, `make audit-export` |
-| 8 | Curriculum completion | Done — new course `foundations` (`f1`–`f7`) and module `m9`; 44 fixtures | `make audit-courses` → 24 exercises, 0 broken; `make audit-content` |
-| 9 | Accessibility pass | Done — keyboard-only lesson walkthrough passed; it found two defects, fixed below | `docs/accessibility.md` |
-| 10 | M2 release | **Not started** — awaiting the user's go-ahead to commit/tag | `make verify` |
+| 0 | Release 0.1.0 | **Not started**: same commit-and-tag act as step 10, awaiting the user's go-ahead | `git describe --tags` |
+| 1 | Lesson completeness | Done, every published lesson has objectives, an example and an exercise or a reading-only reason | `make audit-lessons` → 23 lessons, 24 examples, 24 graded exercises, 0 problems |
+| 2 | Store layout (§8.1) | Done: the eight stores, one snapshot splitting without loss, failed writes typed | `make audit-storage` → 8 stores, 0 problems |
+| 3 | Bookmarks | Done: create and remove, survive reload, appear in the export | `make audit-storage`, `make audit-export` |
+| 4 | Saved queries | Done: keep a query from a cell; listed in the workbook and carried by the export | `make audit-storage`, `make audit-export` |
+| 5 | Search | Done: one field across lessons, exercises and the workbook | `make audit-search` → 0 problems |
+| 6 | Progress views | Done: per-exercise history and the stale-version view | `make audit-progress` |
+| 7 | Import | Done: validated import against the schema, loss-free round trip | `make audit-import`, `make audit-export` |
+| 8 | Curriculum completion | Done: new course `foundations` (`f1`–`f7`) and module `m9`; 44 fixtures | `make audit-courses` → 24 exercises, 0 broken; `make audit-content` |
+| 9 | Accessibility pass | Done: keyboard-only lesson walkthrough passed; it found two defects, fixed below | `docs/accessibility.md` |
+| 10 | M2 release | **Not started**: awaiting the user's go-ahead to commit/tag | `make verify` |
 
-Steps 0 and 10 are the two halves of one act — a commit plus a tag — and neither
+Steps 0 and 10 are the two halves of one act, a commit plus a tag, and neither
 has been taken yet.
 
 ## What M2 is
@@ -40,16 +40,16 @@ has been taken yet.
 
 | M2 item | State |
 | --- | --- |
-| Objectives per lesson | Done — all 15 modules carry 3 objectives |
+| Objectives per lesson | Done: all 15 modules carry 3 objectives |
 | Example per lesson | **Missing in `m6`, `m7`, `m8`** (1 example elsewhere) |
-| Exercise per lesson | Done — 16 graded exercises, `make audit-courses` 16/16 |
-| Curriculum order to window functions | Partial — no recursive-CTE lesson; `HAVING`/`OFFSET` mentioned once each |
+| Exercise per lesson | Done: 16 graded exercises, `make audit-courses` 16/16 |
+| Curriculum order to window functions | Partial: no recursive-CTE lesson; `HAVING`/`OFFSET` mentioned once each |
 | Notes | Done (lesson → `addNote`) |
 | Bookmarks | **Model + renderer exist, no way to create one** |
 | Saved queries | **Rendered in the workbook, nothing writes to them** |
 | Search | **None** (`uiState.libraryFilter` only filters the course list) |
 | Progress views | One screen: weekly bars, first-try rate, recent attempts |
-| Import | **None** — export only |
+| Import | **None**: export only |
 | Accessibility | Partial: labels and focus styles exist; never tested keyboard-only |
 | IndexedDB stores (§8.1 names `attempts`/`evaluations`/`notes`/`bookmarks`/`saved_queries`/`drafts`/`meta`) | Today: `progress` + `events`, drafts in `localStorage` |
 
@@ -57,7 +57,7 @@ has been taken yet.
 
 | # | Step | Ships | Depends on |
 | --- | --- | --- | --- |
-| 0 | Release 0.1.0 (commit + tag) | tag `v0.1.0` | — |
+| 0 | Release 0.1.0 (commit + tag) | tag `v0.1.0` | (none) |
 | 1 | Lesson-completeness audit + the 3 missing examples | `make audit-lessons` green | 0 |
 | 2 | Offline store layout matches §8.1 | `make audit-storage` green | 0 |
 | 3 | Bookmarks | create/remove, survive reload | 1 |
@@ -75,7 +75,7 @@ largest content block and is deliberately last so the UI can be complete first.
 
 ---
 
-## Step 0 — Release 0.1.0
+## Step 0: Release 0.1.0
 
 1. `git add -A` (162 files; `.gitignore` already excludes `node_modules/`, `dist/`,
    `.data/`, `backend/bin/`, `.worktrees/`).
@@ -85,7 +85,7 @@ largest content block and is deliberately last so the UI can be complete first.
 
 **Done when:** `git describe --tags` says `v0.1.0` and the working tree is clean.
 
-## Step 1 — Lesson completeness, enforced
+## Step 1: Lesson completeness, enforced
 
 The exit gate is a property of the content, so a script decides it, not a reviewer.
 
@@ -103,7 +103,7 @@ The exit gate is a property of the content, so a script decides it, not a review
 **Done when:** `make audit-lessons` reports 0 failures and the three new examples run
 on the seed data.
 
-## Step 2 — Offline store layout (§8.1)
+## Step 2: Offline store layout (§8.1)
 
 Today the offline adapter writes one `progress` blob plus an `events` log, and drafts
 in `localStorage`. §8.1 names the stores it wants; the doc is the arbiter, and this is
@@ -122,7 +122,7 @@ greenfield, so align the code instead of the doc.
 **Done when:** reload keeps attempts, notes, saved queries and drafts; `make audit-storage`
 proves a failed write is reported rather than swallowed.
 
-## Step 3 — Bookmarks
+## Step 3: Bookmarks
 
 The model (`kind: 'bookmark'`) and the workbook renderer already exist; only the action
 is missing.
@@ -135,7 +135,7 @@ is missing.
 
 **Done when:** bookmarking survives a reload in both adapters and appears in the export.
 
-## Step 4 — Saved queries
+## Step 4: Saved queries
 
 Workbook already renders `saved`; nothing writes to it.
 
@@ -147,7 +147,7 @@ Workbook already renders `saved`; nothing writes to it.
 **Done when:** a kept query survives reload, appears in the export, and re-runs to the
 same result.
 
-## Step 5 — Search
+## Step 5: Search
 
 1. `web/src/lib/search.ts`: a pure, tested index over lesson titles, objectives, prose
    headings, exercise prompts, notes, bookmarks and saved queries; ranked, no fuzzy
@@ -159,7 +159,7 @@ same result.
 **Files:** `web/src/lib/search.ts`, `scripts/search-audit.mjs`, shell + a results panel.
 **Done when:** `make audit-search` covers ranking, empty input and a no-match query.
 
-## Step 6 — Progress views
+## Step 6: Progress views
 
 1. Per-exercise history: every attempt for one exercise, newest first, with version
    stamps and the "solved on an earlier version" label already implemented in §7.3.
@@ -170,7 +170,7 @@ same result.
 **Done when:** the view matches the export for the same account, and no number on the
 screen is inferred from anything but stored records.
 
-## Step 7 — Import, and the round trip
+## Step 7: Import, and the round trip
 
 1. `contracts/export.schema.json` describing the §8.3 document; the existing
    `scripts/export-audit.mjs` validates every export against it.
@@ -186,7 +186,7 @@ screen is inferred from anything but stored records.
 **Done when:** `make audit-import` passes and the round trip is lossless for a
 snapshot containing attempts, evaluations, notes, bookmarks, saved queries and drafts.
 
-## Step 8 — Curriculum completion through window functions
+## Step 8: Curriculum completion through window functions
 
 The order in §9.3 is the checklist; today the gap is the foundations and recursive CTEs.
 
@@ -204,11 +204,11 @@ The order in §9.3 is the checklist; today the gap is the foundations and recurs
 **Done when:** `make audit-lessons`, `make audit-courses` and `make audit-fixtures`
 are green with the new modules included, and §9.3's list has no uncovered item.
 
-## Step 9 — Accessibility pass
+## Step 9: Accessibility pass
 
 1. Keyboard-only walkthrough of one full lesson: reach every control, run a query with
    `Ctrl/Cmd+Enter`, submit, read the result and feedback, open the Tables drawer, and
-   close it — using no pointer.
+   close it, using no pointer.
 2. Fix what that finds: drawer focus trap and restore, result grid as a labelled table,
    live region for run/feedback status, visible focus on every interactive element,
    skip link to the reading column.
@@ -229,15 +229,15 @@ now fixed:
    `Tab` escaped to the document body. The tables now get the same treatment as
    `ResultGrid.tsx`: `role="region"` with an `aria-label` on the scroll container, a
    `visually-hidden` `<caption>` and `<th scope="col">` headers. Two bugs in the
-   trap's own helpers were fixed with it — the `offsetParent` visibility test is
+   trap's own helpers were fixed with it: the `offsetParent` visibility test is
    `null` for anything inside a fixed-position panel, and the `[href]` selector also
-   matched the SVG `<use href>` inside icons — so `TablesDrawer.tsx` now scopes to
+   matched the SVG `<use href>` inside icons, so `TablesDrawer.tsx` now scopes to
    `a[href]` and filters with a `getClientRects()`-based `focusable()` helper.
 2. **The query editor had no visible focus.** `.editor{box-shadow:none}` in
    `web/src/styles/querycraft.css` removed the browser ring and no wrapper rule
    replaced it. Added `.editorwrap:focus-within{box-shadow:inset 0 0 0 2px var(--accent)}`.
 
-## Step 10 — M2 release
+## Step 10: M2 release
 
 1. `make verify` + every `audit-*` target green, both adapters.
 2. README/M2 docs updated; `docs/export-format.md` gains the import contract.

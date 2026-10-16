@@ -56,11 +56,11 @@ export default function SqlCell({ block, module: mod, course }: { block: Block; 
      to be unique in the document. */
   const refusalId = `dialrefusal-${id}`;
   /* M5: a perf exercise opts into the plan viewer. Plan support comes from the
-     capability block; an adapter that reports none, or one that is known not to
-     run an engine at all (the mock), disables the action with the reason shown —
-     the same honest pattern the AI lab uses when AI is off. Until capabilities
-     have been reported we do not *assume* support, but we do not refuse either:
-     the call itself answers truthfully if the engine cannot plan. */
+     capability block; an adapter that reports none disables the action with the
+     reason shown, the same honest pattern the AI lab uses when AI is off.
+     Until capabilities have been reported we do not *assume* support, but we do
+     not refuse either: the call itself answers truthfully if the engine cannot
+     plan. */
   const perf = isExercise ? block.perf : undefined;
   const capsKnown = s.engineCaps !== null;
   /* M6 step 6: the answer is per dialect, not per adapter — the browser adapter
@@ -70,13 +70,11 @@ export default function SqlCell({ block, module: mod, course }: { block: Block; 
     ? s.engineCaps.explainDialects ?? (s.engineCaps.explain ? servedDialects(s.engineCaps) ?? [] : [])
     : null;
   const planBlockedReason =
-    s.api.mode === 'mock'
-      ? 'Plans need a real PostgreSQL engine. This adapter returns canned results and never runs SQL.'
-      : explainDialects !== null && !explainDialects.includes(dialect)
-        ? dialect === 'sqlite'
-          ? 'SQLite has no EXPLAIN (ANALYZE), so a plan cannot be captured for this dialect.'
-          : 'This environment reports that it cannot produce a plan for this dialect.'
-        : null;
+    explainDialects !== null && !explainDialects.includes(dialect)
+      ? dialect === 'sqlite'
+        ? 'SQLite has no EXPLAIN (ANALYZE), so a plan cannot be captured for this dialect.'
+        : 'This environment reports that it cannot produce a plan for this dialect.'
+      : null;
   const planWritable = capsKnown ? s.engineCaps!.writable : false;
   const starter = isExercise ? block.starter || 'SELECT ...' : (block.sql as string);
 
@@ -226,7 +224,7 @@ export default function SqlCell({ block, module: mod, course }: { block: Block; 
      POST /tutor (M4); the button used to toast "in a live app…" which is the
      classic "it's a mock" tell. The endpoint is dialect-neutral — it takes the
      learner's SQL, the objective and the engine's own error — so this is the
-     same call on both dialects. AI off (or the offline/mock adapter, where
+     same call on both dialects. AI off (or the offline engine, where
      there is no tutor) reports honestly instead of inventing an answer.
 
      The level escalates on each ask. Without it, "ask for a firmer hint" sent

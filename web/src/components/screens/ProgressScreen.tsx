@@ -161,13 +161,13 @@ export default function ProgressScreen() {
             ? `${done}/${exs.length} passed · ${tried ? Math.round((firstTryPassed / tried) * 100) : 0}% first try${complete ? ' · complete' : ''}`
             : `${m.minutes} min · reading`;
           return (
-            <div className="reportrow" key={m.id} style={{ cursor: 'pointer' }} onClick={() => s.openLessonIn(course.id, i)}>
+            <button type="button" className="reportrow action" key={m.id} onClick={() => s.openLessonIn(course.id, i)}>
               <span>{m.title}</span>
               <span className={complete ? 'pass' : 'muted'} style={{ display: 'flex', alignItems: 'center', gap: 10 }}>
                 {exs.length ? <span className="progressline" style={{ width: 90 }}><span style={{ width: `${pct}%` }}></span></span> : null}
                 {right}
               </span>
-            </div>
+            </button>
           );
         })}
       </div>

@@ -5,6 +5,7 @@ import (
 	"testing"
 
 	"github.com/querycraft/sqlquery/backend/internal/dataset"
+	"github.com/querycraft/sqlquery/backend/internal/schema"
 )
 
 // The brief a provider receives has to describe the schema the exercise will run
@@ -17,7 +18,7 @@ import (
 // list, so a column added to the seeder is required in the prompt by the same
 // commit that adds it.
 func TestRequestPromptNamesEveryTableAndColumn(t *testing.T) {
-	prompt := requestPrompt(GenerationRequest{Kind: "challenge", Difficulty: "beginner", Topics: []string{"joins"}, ExerciseCount: 1})
+	prompt := requestPrompt(schema.GenerationRequest{Kind: "challenge", Difficulty: "beginner", Topics: []string{"joins"}, ExerciseCount: 1})
 	tables, ok := dataset.Tables("commerce")
 	if !ok || len(tables.Tables) == 0 {
 		t.Fatal("the commerce dataset has no tables to describe")
@@ -50,11 +51,37 @@ func TestRequestPromptNamesEveryTableAndColumn(t *testing.T) {
 // saying otherwise is what produced `CREATE TABLE customers` against a database
 // that already had it.
 func TestRequestPromptAllowsAnEmptySetup(t *testing.T) {
-	prompt := requestPrompt(GenerationRequest{Kind: "challenge", Difficulty: "beginner", Topics: []string{"joins"}, ExerciseCount: 1})
+	prompt := requestPrompt(schema.GenerationRequest{Kind: "challenge", Difficulty: "beginner", Topics: []string{"joins"}, ExerciseCount: 1})
 	if !strings.Contains(prompt, "empty list") {
 		t.Error("the prompt does not say a setup list may be empty")
 	}
 	if !strings.Contains(prompt, "Do not create, alter or drop these tables") {
 		t.Error("the prompt does not forbid touching the loaded dataset tables")
+	}
+}
+
+// A chapter body is the learner's reading material, so the rules that keep it
+// readable are stated where both course paths read them: the system prompt of
+// the whole-plan call and of the one-chapter agent call.
+func TestTheCourseSystemPromptStatesTheReadingRules(t *testing.T) {
+	prompt := courseSystemPrompt()
+	for _, want := range []string{"for a beginner", "active voice", "do not restate its heading"} {
+		if !strings.Contains(prompt, want) {
+			t.Errorf("the course system prompt does not say %q", want)
+		}
+	}
+}
+
+// A hint and a critique are read as prose. The exercise prompt asks for one JSON
+// object, so the two must not share it. This test and the request-level test in
+// review_test.go are separate on purpose: this one holds the text, that one
+// holds which call is sent it.
+func TestTheFeedbackPromptAsksForProseNotJSON(t *testing.T) {
+	const asksForJSONObject = "Reply with one JSON object"
+	if strings.Contains(feedbackSystemPrompt(), asksForJSONObject) {
+		t.Errorf("the feedback prompt asks for one JSON object: %q", feedbackSystemPrompt())
+	}
+	if !strings.Contains(systemPrompt(), asksForJSONObject) {
+		t.Errorf("the exercise prompt no longer asks for one JSON object: %q", systemPrompt())
 	}
 }

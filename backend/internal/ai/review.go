@@ -5,10 +5,11 @@ import (
 	"encoding/json"
 	"fmt"
 	"strings"
-	"time"
 
+	"github.com/querycraft/sqlquery/backend/internal/ai/provider"
 	"github.com/querycraft/sqlquery/backend/internal/engine"
 	"github.com/querycraft/sqlquery/backend/internal/eval"
+	"github.com/querycraft/sqlquery/backend/internal/schema"
 )
 
 // Tutoring, critique, defect verification and patch application (§6.5, §11.2).
@@ -18,21 +19,35 @@ import (
 // is the only actor that may accept a failure or approve a fix, so no function
 // here ever sets those flags on the learner's behalf.
 
+// feedbackSystemPrompt is the system message for the two kinds whose answer the
+// learner reads as plain text: a hint and a critique.
+//
+// Both used to be sent systemPrompt(), which tells the model to reply with one
+// JSON object and no prose, and a hint is prose. No test caught the
+// contradiction because the built-in provider answers by Kind and never reads
+// the system message. A real provider was being told to wrap a hint in JSON.
+//
+// The writing rules are the same ones the generated course prose carries, for
+// the same reason: this text is the learner's reading material.
+func feedbackSystemPrompt() string {
+	return "You are a SQL tutor. The learner reads your reply as plain text, not as JSON. Write for a beginner: short sentences, active voice, present tense, one idea per line. Say what is wrong and what to change. Never write the full solution. No praise, no preamble, no closing summary."
+}
+
 // tutor answers with a hint that never reveals the reference solution.
 func (s *Service) tutor(ctx context.Context, req TutorRequest) (TutorResponse, error) {
 	if err := s.requireAvailable(); err != nil {
 		return TutorResponse{}, err
 	}
 	if strings.TrimSpace(req.SQL) == "" || strings.TrimSpace(req.Objective) == "" {
-		return TutorResponse{}, newError(CodeInvalidRequest, "",
+		return TutorResponse{}, NewError(CodeInvalidRequest, "",
 			"A hint needs the learner's SQL and the objective.", "sql/objective")
 	}
 	limits := s.cfg.Limits.Merge(DefaultLimits())
 	level := clampInt(req.HintLevel, 0, limits.MaxHints)
 
-	text, terr := s.complete(ctx, ProviderRequest{
+	text, terr := s.complete(ctx, provider.ProviderRequest{
 		Kind:   "tutor",
-		System: systemPrompt(),
+		System: feedbackSystemPrompt(),
 		// Only the learner's own material. The reference solution is absent by
 		// construction, so this request cannot leak it even if the model wanted
 		// to quote it back.
@@ -60,13 +75,13 @@ func (s *Service) critique(ctx context.Context, req CritiqueRequest) (CritiqueRe
 		return CritiqueResponse{}, err
 	}
 	if strings.TrimSpace(req.SQL) == "" {
-		return CritiqueResponse{}, newError(CodeInvalidRequest, "",
+		return CritiqueResponse{}, NewError(CodeInvalidRequest, "",
 			"A critique needs the learner's SQL.", "sql")
 	}
 	limits := s.cfg.Limits.Merge(DefaultLimits())
-	text, terr := s.complete(ctx, ProviderRequest{
+	text, terr := s.complete(ctx, provider.ProviderRequest{
 		Kind:           "critique",
-		System:         systemPrompt(),
+		System:         feedbackSystemPrompt(),
 		Prompt:         critiquePrompt(req),
 		MaxOutputBytes: limits.MaxOutputBytes,
 	})
@@ -90,7 +105,7 @@ func (s *Service) critique(ctx context.Context, req CritiqueRequest) (CritiqueRe
 // artifact — from regressing that property. When there is no stored challenge
 // there is nothing to compare against, which is not a silent pass on the
 // property; the request itself still carried no solution.
-func (s *Service) guardSolutions(ctx context.Context, challengeID, text string) *Error {
+func (s *Service) guardSolutions(ctx context.Context, challengeID, text string) *schema.Error {
 	art, ok, err := s.storedArtifact(ctx, challengeID)
 	if err != nil || !ok {
 		return nil
@@ -100,7 +115,7 @@ func (s *Service) guardSolutions(ctx context.Context, challengeID, text string) 
 		"cross_check_solution": art.CrossCheckSolution,
 	} {
 		if containsSolution(text, solution) {
-			return newError(CodeInvalidArtifact, "",
+			return NewError(CodeInvalidArtifact, "",
 				"The provider reply contained a solution and was discarded.",
 				field+": the reply reveals a stored solution, so it was not returned")
 		}
@@ -139,14 +154,14 @@ func (s *Service) reportDefect(ctx context.Context, rep DefectReport) (DefectVer
 		return DefectVerdict{}, err
 	}
 	if strings.TrimSpace(rep.ChallengeID) == "" {
-		return DefectVerdict{}, newError(CodeInvalidRequest, "", "A defect report needs a challenge id.", "challenge_id")
+		return DefectVerdict{}, NewError(CodeInvalidRequest, "", "A defect report needs a challenge id.", "challenge_id")
 	}
 	rec, found, err := s.cfg.Depot.Challenge(ctx, rep.ChallengeID)
 	if err != nil {
-		return DefectVerdict{}, newError(CodeUnavailable, "", "The challenge could not be loaded.", engine.RedactSecrets(err.Error()))
+		return DefectVerdict{}, NewError(CodeUnavailable, "", "The challenge could not be loaded.", engine.RedactSecrets(err.Error()))
 	}
 	if !found {
-		return DefectVerdict{}, newError(CodeNotFound, "", "No such challenge.", rep.ChallengeID)
+		return DefectVerdict{}, NewError(CodeNotFound, "", "No such challenge.", rep.ChallengeID)
 	}
 	if strings.TrimSpace(rep.SQL) == "" {
 		return DefectVerdict{
@@ -162,7 +177,7 @@ func (s *Service) reportDefect(ctx context.Context, rep DefectReport) (DefectVer
 
 	ex, release, serr := s.cfg.Runner.Scratch(runCtx, "ai_defect_"+shortHash(rep.ChallengeID+rep.SQL))
 	if serr != nil {
-		return DefectVerdict{}, newError(CodeEnvironmentDown, "",
+		return DefectVerdict{}, NewError(CodeEnvironmentDown, "",
 			"A throwaway environment could not be created for the verification.", engine.RedactSecrets(serr.Error()))
 	}
 	defer release()
@@ -174,7 +189,7 @@ func (s *Service) reportDefect(ctx context.Context, rep DefectReport) (DefectVer
 	reference := engine.Execute(runCtx, ex, rec.Artifact.ReferenceSolution, engine.DefaultLimits())
 	contract := evalContract(rec.Artifact.ResultContract)
 
-	verdict := DefectVerdict{Evidence: Evidence{}}
+	verdict := DefectVerdict{Evidence: schema.Evidence{}}
 	switch {
 	case reference.Status != "succeeded":
 		// The exercise's own reference does not run, so the exercise is broken
@@ -211,7 +226,7 @@ func (s *Service) reportDefect(ctx context.Context, rep DefectReport) (DefectVer
 // changed into a reviewable diff. When the model has nothing better, the
 // proposal records the clarification in the prompt: a verified defect must
 // still produce something the learner can approve or dismiss.
-func (s *Service) proposePatch(ctx context.Context, rec Record, rep DefectReport) (*PatchProposal, *Error) {
+func (s *Service) proposePatch(ctx context.Context, rec schema.Record, rep DefectReport) (*schema.PatchProposal, *schema.Error) {
 	limits := s.cfg.Limits.Merge(DefaultLimits())
 	previous, _ := json.Marshal(rec.Artifact)
 	// The objectives come first so a generator that picks its topic from the
@@ -221,7 +236,7 @@ func (s *Service) proposePatch(ctx context.Context, rec Record, rep DefectReport
 		rec.Artifact.Title,
 		rec.Artifact.Prompt,
 	}, "\n")
-	text, cerr := s.complete(ctx, ProviderRequest{
+	text, cerr := s.complete(ctx, provider.ProviderRequest{
 		Kind:           "repair",
 		System:         systemPrompt(),
 		Prompt:         prompt,
@@ -229,9 +244,9 @@ func (s *Service) proposePatch(ctx context.Context, rec Record, rep DefectReport
 		Previous:       string(previous),
 		Failure:        "A learner reported: " + rep.Description + " (probe: " + rep.SQL + ")",
 	})
-	changes := []PatchChange{}
+	changes := []schema.PatchChange{}
 	if cerr == nil {
-		var candidate Artifact
+		var candidate schema.Artifact
 		if decodeBundle(text, &candidate) == nil && sameContract(rec.Artifact.ResultContract, candidate.ResultContract) {
 			// A M4 patch does not change the result contract: a new contract
 			// would make the patch and the exercise disagree about what the
@@ -242,20 +257,20 @@ func (s *Service) proposePatch(ctx context.Context, rec Record, rep DefectReport
 		}
 	}
 	if len(changes) == 0 {
-		changes = []PatchChange{{
+		changes = []schema.PatchChange{{
 			Field: "prompt",
 			From:  rec.Artifact.Prompt,
 			To:    rec.Artifact.Prompt + "\n\nClarification from a verified report: " + strings.TrimSpace(rep.Description),
 		}}
 	}
-	proposal := PatchProposal{
+	proposal := schema.PatchProposal{
 		ID:          "patch-" + shortHash(rec.Artifact.ID+"\x00"+rep.SQL+"\x00"+rep.Description),
 		ChallengeID: rec.Artifact.ID,
 		Summary:     "Reword or correct the exercise after a report that reproduced by execution.",
 		Changes:     changes,
 	}
 	if err := s.cfg.Depot.SavePatch(ctx, proposal); err != nil {
-		return nil, newError(CodeUnavailable, "", "The patch could not be stored.", engine.RedactSecrets(err.Error()))
+		return nil, NewError(CodeUnavailable, "", "The patch could not be stored.", engine.RedactSecrets(err.Error()))
 	}
 	return &proposal, nil
 }
@@ -268,34 +283,34 @@ func (s *Service) applyPatch(ctx context.Context, dec PatchDecision) (PatchResul
 		return PatchResult{}, err
 	}
 	if strings.TrimSpace(dec.PatchID) == "" {
-		return PatchResult{}, newError(CodeInvalidRequest, "", "A patch id is required.", "patch_id")
+		return PatchResult{}, NewError(CodeInvalidRequest, "", "A patch id is required.", "patch_id")
 	}
 	patch, found, err := s.cfg.Depot.Patch(ctx, dec.PatchID)
 	if err != nil {
-		return PatchResult{}, newError(CodeUnavailable, "", "The patch could not be loaded.", engine.RedactSecrets(err.Error()))
+		return PatchResult{}, NewError(CodeUnavailable, "", "The patch could not be loaded.", engine.RedactSecrets(err.Error()))
 	}
 	if !found {
-		return PatchResult{}, newError(CodeNotFound, "", "No such patch.", dec.PatchID)
+		return PatchResult{}, NewError(CodeNotFound, "", "No such patch.", dec.PatchID)
 	}
 	// The route named a challenge; the patch names one too. They must agree, or
 	// a request to approve a patch under challenge A could modify challenge B.
 	// An empty dec.ChallengeID is the internal caller that has no route (tests,
 	// the CLI path), and is not a mismatch.
 	if dec.ChallengeID != "" && patch.ChallengeID != "" && patch.ChallengeID != dec.ChallengeID {
-		return PatchResult{}, newError(CodeNotFound, "",
+		return PatchResult{}, NewError(CodeNotFound, "",
 			"No such patch on this challenge.", dec.PatchID)
 	}
 	if !dec.Approved || strings.TrimSpace(dec.ApprovedBy) == "" {
-		e := newError(CodePatchUnapproved, "",
+		e := NewError(CodePatchUnapproved, "",
 			"A patch is never applied without an explicit approval.", "approved/approved_by")
 		return PatchResult{Applied: false, Patch: &patch, Error: e}, e
 	}
 	rec, found, err := s.cfg.Depot.Challenge(ctx, patch.ChallengeID)
 	if err != nil {
-		return PatchResult{}, newError(CodeUnavailable, "", "The challenge could not be loaded.", engine.RedactSecrets(err.Error()))
+		return PatchResult{}, NewError(CodeUnavailable, "", "The challenge could not be loaded.", engine.RedactSecrets(err.Error()))
 	}
 	if !found {
-		return PatchResult{}, newError(CodeNotFound, "", "The patched challenge no longer exists.", patch.ChallengeID)
+		return PatchResult{}, NewError(CodeNotFound, "", "The patched challenge no longer exists.", patch.ChallengeID)
 	}
 
 	patched, aerr := applyChanges(rec.Artifact, patch.Changes)
@@ -306,7 +321,7 @@ func (s *Service) applyPatch(ctx context.Context, dec PatchDecision) (PatchResul
 	runCtx, cancel := context.WithTimeout(ctx, limits.Timeout)
 	defer cancel()
 	if verr := s.verifyArtifact(runCtx, patched, limits); verr != nil {
-		e := newError(CodePatchUnverified, verr.Stage,
+		e := NewError(CodePatchUnverified, verr.Stage,
 			"The patched challenge did not pass verification; it was not applied.",
 			strings.TrimSpace(verr.Message+" "+verr.Detail))
 		return PatchResult{Applied: false, Patch: &patch, Error: e}, e
@@ -314,15 +329,15 @@ func (s *Service) applyPatch(ctx context.Context, dec PatchDecision) (PatchResul
 
 	patched.Version = rec.Artifact.Version + 1
 	patched.Provenance = s.stampProvenance(0)
-	out := Outcome{Status: StatusActive, Kind: "challenge", Artifact: &patched, Stages: []Stage{}, Attempts: []Attempt{}}
-	if err := s.cfg.Depot.SaveChallenge(ctx, Record{
+	out := schema.Outcome{Status: schema.StatusActive, Kind: "challenge", Artifact: &patched, Stages: []schema.Stage{}, Attempts: []schema.Attempt{}}
+	if err := s.cfg.Depot.SaveChallenge(ctx, schema.Record{
 		Artifact:  patched,
 		Outcome:   out,
-		Status:    StatusActive,
+		Status:    schema.StatusActive,
 		OwnerID:   rec.OwnerID,
 		CreatedAt: patched.Provenance.CreatedAt,
 	}); err != nil {
-		return PatchResult{}, newError(CodeUnavailable, "", "The patched challenge could not be stored.", engine.RedactSecrets(err.Error()))
+		return PatchResult{}, NewError(CodeUnavailable, "", "The patched challenge could not be stored.", engine.RedactSecrets(err.Error()))
 	}
 	// The approval is recorded AFTER the artifact is stored. The order is
 	// load-bearing: recording it first meant a failed store left the patch
@@ -330,7 +345,7 @@ func (s *Service) applyPatch(ctx context.Context, dec PatchDecision) (PatchResul
 	// look like a re-approval of something already admitted. Approval is the
 	// record that the change landed, so it must land first.
 	if err := s.cfg.Depot.ApprovePatch(ctx, patch.ID, dec.ApprovedBy); err != nil {
-		return PatchResult{}, newError(CodeUnavailable, "", "The approval could not be recorded.", engine.RedactSecrets(err.Error()))
+		return PatchResult{}, NewError(CodeUnavailable, "", "The approval could not be recorded.", engine.RedactSecrets(err.Error()))
 	}
 	return PatchResult{Applied: true, Patch: &patch}, nil
 }
@@ -339,7 +354,7 @@ func (s *Service) applyPatch(ctx context.Context, dec PatchDecision) (PatchResul
 
 // requireAvailable is the honest refusal every AI entry point shares. It names
 // the missing piece rather than returning an empty success.
-func (s *Service) requireAvailable() *Error {
+func (s *Service) requireAvailable() *schema.Error {
 	av := s.Available()
 	if av.Available {
 		return nil
@@ -348,16 +363,16 @@ func (s *Service) requireAvailable() *Error {
 	if s != nil && s.cfg.Provider != nil && s.cfg.Runner == nil {
 		code = CodeEnvironmentDown
 	}
-	return newError(code, "", av.Reason, "")
+	return NewError(code, "", av.Reason, "")
 }
 
-func (s *Service) storedArtifact(ctx context.Context, id string) (Artifact, bool, error) {
+func (s *Service) storedArtifact(ctx context.Context, id string) (schema.Artifact, bool, error) {
 	if strings.TrimSpace(id) == "" || s.cfg.Depot == nil {
-		return Artifact{}, false, nil
+		return schema.Artifact{}, false, nil
 	}
 	rec, found, err := s.cfg.Depot.Challenge(ctx, id)
 	if err != nil || !found {
-		return Artifact{}, false, err
+		return schema.Artifact{}, false, err
 	}
 	return rec.Artifact, true, nil
 }
@@ -365,34 +380,24 @@ func (s *Service) storedArtifact(ctx context.Context, id string) (Artifact, bool
 // stampProvenance attributes a non-artifact reply (a hint, a critique) to the
 // provider that produced it. DatasetVersion may be zero here: a hint is not
 // graded against a dataset, and zero says so rather than inventing a version.
-func (s *Service) stampProvenance(repairs int) Provenance {
-	d := s.cfg.Provider.Descriptor()
-	return Provenance{
-		Provider:         d.Name,
-		Model:            d.Model,
-		ProviderVersion:  d.Version,
-		PipelineVersion:  PipelineVersion,
-		EvaluatorVersion: eval.EvaluatorVersion,
-		DatasetVersion:   s.cfg.DatasetVersion,
-		CreatedAt:        time.Now().UTC(),
-		Repairs:          repairs,
-	}
+func (s *Service) stampProvenance(repairs int) schema.Provenance {
+	return provenance(s.cfg.Provider.Descriptor(), s.cfg.DatasetVersion, repairs)
 }
 
 // verifyArtifact runs the SQL-executing half of the pipeline against an
 // artifact that already exists (a patch), without the repair loop: a patch is
 // either correct as approved or it is not applied.
-func (s *Service) verifyArtifact(ctx context.Context, art Artifact, limits Limits) *Error {
-	p := newPipeline(s, GenerationRequest{Kind: "challenge"}, limits)
+func (s *Service) verifyArtifact(ctx context.Context, art schema.Artifact, limits Limits) *schema.Error {
+	p := newPipeline(s, schema.GenerationRequest{Kind: "challenge"}, limits)
 	return p.verify(ctx, art)
 }
 
 // prepareScratch applies a stored artifact's setup to a scratch environment and
 // re-checks its dataset, so a defect probe runs against the same objects the
 // challenge runs against.
-func (s *Service) prepareScratch(ctx context.Context, ex engine.Executor, art Artifact) *Error {
+func (s *Service) prepareScratch(ctx context.Context, ex engine.Executor, art schema.Artifact) *schema.Error {
 	limits := s.cfg.Limits.Merge(DefaultLimits())
-	p := newPipeline(s, GenerationRequest{Kind: "challenge"}, limits)
+	p := newPipeline(s, schema.GenerationRequest{Kind: "challenge"}, limits)
 	return p.prepare(ctx, ex, art)
 }
 
@@ -444,7 +449,7 @@ func noteLines(text string) []string {
 // sameContract reports whether two contracts are the same. It is a field-by-field
 // comparison rather than a deep-equal so an int-vs-float zero tolerance cannot
 // make a correct answer look like a contract change.
-func sameContract(a, b ResultContract) bool {
+func sameContract(a, b schema.ResultContract) bool {
 	if len(a.Columns) != len(b.Columns) {
 		return false
 	}
@@ -462,11 +467,11 @@ func sameContract(a, b ResultContract) bool {
 // diffArtifact lists the content fields the model changed. Only fields a defect
 // report can legitimately fix are compared; identity and provenance are not the
 // model's to change.
-func diffArtifact(before, after Artifact) []PatchChange {
-	var changes []PatchChange
+func diffArtifact(before, after schema.Artifact) []schema.PatchChange {
+	var changes []schema.PatchChange
 	add := func(field, from, to string) {
 		if from != to {
-			changes = append(changes, PatchChange{Field: field, From: from, To: to})
+			changes = append(changes, schema.PatchChange{Field: field, From: from, To: to})
 		}
 	}
 	add("title", before.Title, after.Title)
@@ -480,7 +485,7 @@ func diffArtifact(before, after Artifact) []PatchChange {
 // applyChanges edits the fields a PatchChange names. An unknown field is an
 // error rather than a silent no-op: a patch that changed nothing must not be
 // reported as applied.
-func applyChanges(art Artifact, changes []PatchChange) (Artifact, *Error) {
+func applyChanges(art schema.Artifact, changes []schema.PatchChange) (schema.Artifact, *schema.Error) {
 	for i, c := range changes {
 		switch c.Field {
 		case "title":
@@ -492,7 +497,7 @@ func applyChanges(art Artifact, changes []PatchChange) (Artifact, *Error) {
 		case "cross_check_solution":
 			art.CrossCheckSolution = c.To
 		case "difficulty":
-			art.Difficulty = Difficulty(c.To)
+			art.Difficulty = schema.Difficulty(c.To)
 		default:
 			return art, artifactError("changes",
 				fmt.Sprintf("change %d names an unsupported field %q", i, c.Field))

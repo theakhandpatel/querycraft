@@ -4,6 +4,7 @@ import (
 	"encoding/json"
 	"math"
 	"reflect"
+	"slices"
 	"strconv"
 	"strings"
 
@@ -100,7 +101,7 @@ func matchColumns(want, got []string, order string) (bool, []string) {
 		for i := range want {
 			if want[i] != got[i] {
 				codes = append(codes, CodeColumn)
-				if contains(got, want[i]) {
+				if slices.Contains(got, want[i]) {
 					codes = append(codes, CodeColumnOrder)
 				}
 			}
@@ -331,15 +332,6 @@ func multisetEqual(expected, actual [][]any, tol float64, duplicates string) boo
 		}
 	}
 	return true
-}
-
-func contains(haystack []string, needle string) bool {
-	for _, h := range haystack {
-		if h == needle {
-			return true
-		}
-	}
-	return false
 }
 
 func dedupe(codes []string) []string {

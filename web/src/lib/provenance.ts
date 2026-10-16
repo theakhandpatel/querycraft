@@ -4,8 +4,8 @@ import type { AiArtifact, AiProvenance } from '../api/aiContract';
 /* What the UI may honestly claim about where a result came from.
  *
  * SQL execution, grading, the dataset and saved progress are real in every
- * adapter: the gateway + PostgreSQL on http, PGlite in the page on pglite, a
- * canned engine on mock. Generation works the same way the rest of the app
+ * adapter: the gateway + PostgreSQL on http, PGlite in the page on pglite.
+ * Generation works the same way the rest of the app
  * does: the gateway owns the provider and the pipeline, the screens render the
  * stages it reports, and nothing here claims model-generated content that the
  * service did not produce. */
@@ -16,8 +16,6 @@ export function generationProvenance(api: ExecutionApi): string {
       return `references graded on ${api.baseUrl} · draft recorded by the gateway`;
     case 'pglite':
       return 'references graded in-browser · draft recorded locally';
-    default:
-      return 'references graded on the canned engine (dev only)';
   }
 }
 

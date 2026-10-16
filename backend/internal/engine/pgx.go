@@ -31,6 +31,10 @@ type PgxExecutor struct {
 	writable bool
 }
 
+// PgxExecutor answers the whole Executor interface, capability methods
+// included: the assertions for the adapters live beside their types.
+var _ Executor = (*PgxExecutor)(nil)
+
 // PgxConfig tunes the executor's pool and transaction mode.
 type PgxConfig struct {
 	// MaxConns is the pool's hard ceiling. Zero keeps the DSN's pool_max_conns,
@@ -230,7 +234,7 @@ func (e *PgxExecutor) Ready(ctx context.Context) (bool, string) {
 	return true, ""
 }
 
-// Diagnostics implements Diagnostician. Every field is read from the server
+// Diagnostics implements Executor. Every field is read from the server
 // over the learner's own connection, so it reports what a learner statement
 // actually sees and holds no privilege the learner does not.
 func (e *PgxExecutor) Diagnostics(ctx context.Context) map[string]any {
@@ -275,7 +279,14 @@ func (e *PgxExecutor) Close() error {
 	return nil
 }
 
-// ClassifyError implements ErrorClassifier with PostgreSQL's SQLSTATE rules.
+// Dialect implements Executor. This executor runs the default dialect.
+func (e *PgxExecutor) Dialect() string { return DialectPostgres }
+
+// EngineLabel implements Executor. The label names the default engine, which is
+// what QueryResult.engine carries for a statement this executor answered.
+func (e *PgxExecutor) EngineLabel() string { return EngineName }
+
+// ClassifyError implements Executor with PostgreSQL's SQLSTATE rules.
 //
 // It answers rather than declining, and it answers with the very table
 // Execute's fallback uses: two copies of the same rules would eventually

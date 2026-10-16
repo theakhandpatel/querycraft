@@ -9,7 +9,7 @@ import (
 //
 // A provider-backed call runs for minutes, so a browser cannot use the same
 // deadline it uses for a query: /capabilities advertises the pipeline's budget
-// and the transport outlasts it (web/src/api/execution.ts). Advertising zero
+// and the transport outlasts it (web/src/api/execution/). Advertising zero
 // would send a client back to its own guess, which is how a 72-second course
 // generation was reported as an unreachable gateway.
 func TestAvailabilityAdvertisesTheRunBudget(t *testing.T) {

@@ -13,8 +13,9 @@ import (
 	"time"
 )
 
-// EngineName is reported in every QueryResult as the execution engine.
-const EngineName = "postgresql"
+// EngineName is reported in every QueryResult as the execution engine. It is
+// the human label for the default dialect, so it shares that dialect's name.
+const EngineName = DialectPostgres
 
 // Dialect names, shared with contracts/query-result.schema.json.
 //
@@ -39,9 +40,8 @@ const (
 	// statement is fine and the engine is fine, but the chapter was written for
 	// a different dialect. Reusing ENVIRONMENT_UNAVAILABLE would hide a mistake
 	// the learner can fix in one action behind a fault they cannot.
-	CodeDialectMismatch   = "DIALECT_MISMATCH"
-	CodePersistenceFailed = "PERSISTENCE_FAILED"
-	CodeEvaluationError   = "EVALUATION_ERROR"
+	CodeDialectMismatch = "DIALECT_MISMATCH"
+	CodeEvaluationError = "EVALUATION_ERROR"
 )
 
 // ErrEnvironmentUnavailable marks failures that mean the engine itself could
@@ -85,58 +85,15 @@ type QueryResult struct {
 	Dialect    string      `json:"dialect"`
 }
 
-// Dialecter is implemented by an executor that runs a dialect other than the
-// default. It is a separate interface rather than a method on Executor so every
-// existing fake keeps compiling and keeps meaning PostgreSQL, which is what it
-// actually runs.
-type Dialecter interface {
-	Dialect() string
-}
+// DialectOf reports the dialect an executor runs. Every Executor answers
+// Dialect itself, so this reader needs no type assertion. It stays exported
+// because /health reports the default dialect's name through it.
+func DialectOf(ex Executor) string { return ex.Dialect() }
 
-// DialectOf reports the dialect an executor runs. An executor that does not
-// answer is PostgreSQL, the default dialect (ADR 0004).
-func DialectOf(ex Executor) string {
-	if d, ok := ex.(Dialecter); ok {
-		if name := strings.TrimSpace(d.Dialect()); name != "" {
-			return name
-		}
-	}
-	return DialectPostgres
-}
-
-// LabeledExecutor is an executor that can name the engine it runs in the words
-// a learner reads, rather than making the caller guess. PostgreSQL's adapter
-// leaves it unimplemented and keeps EngineName; the SQLite adapter answers with
-// its own version string so a result row never says "postgresql" on a page that
-// ran SQLite.
-type LabeledExecutor interface {
-	EngineLabel() string
-}
-
-// EngineLabelOf reports the human engine string for an executor.
-func EngineLabelOf(ex Executor) string {
-	if l, ok := ex.(LabeledExecutor); ok {
-		if name := strings.TrimSpace(l.EngineLabel()); name != "" {
-			return name
-		}
-	}
-	return EngineName
-}
-
-// ErrorClassifier is implemented by an executor that can name its own engine's
-// errors. It is optional, and it is asked before the shared table: SQLite has
-// no SQLSTATE, so the PostgreSQL table would report a SQLite syntax error as a
-// runtime error — the wrong advice for the learner — while the dialect profile
-// already knows the same message is QUERY_SYNTAX_ERROR.
-//
-// The second return is why the contract is (code, ok) rather than a bare
-// string: "this executor has no opinion" is a real answer, and it must not be
-// confused with a classification that happens to be empty. An executor that
-// declines (or does not implement this at all) falls back to the PostgreSQL
-// table, which is what the default dialect's errors get.
-type ErrorClassifier interface {
-	ClassifyError(err error) (code string, ok bool)
-}
+// EngineLabelOf reports the human engine string for an executor. The answer
+// comes from Executor.EngineLabel; SQLite answers with its own version string,
+// so a result row never says "postgresql" on a page that ran SQLite.
+func EngineLabelOf(ex Executor) string { return ex.EngineLabel() }
 
 // Limits are the per-request caps. Zero values fall back to defaults.
 type Limits struct {
@@ -225,19 +182,13 @@ type PoolStats struct {
 	ConstructingConns int `json:"constructing_conns"`
 }
 
-// Diagnostician is implemented by executors that can describe their own
-// sandbox. It is a separate, optional interface rather than part of Executor
-// because an executor with no database has nothing to describe.
-//
-// The values come back from the server through the learner connection, which
-// cannot read the catalog. That is the point: `current_user` and `search_path`
-// are the server answering for the session, and `can_read_app` is the sandbox
-// check performed with the learner's own privileges rather than assumed.
-type Diagnostician interface {
-	Diagnostics(ctx context.Context) map[string]any
-}
-
 // Executor is the entire database surface the gateway depends on.
+//
+// The four capability methods are on the interface rather than on optional
+// interfaces beside it. Only PgxExecutor and SQLiteExecutor run statements, and
+// UnavailableExecutor reports that nothing can. A probe that falls back to a
+// default when an executor is silent hides a missing answer, and every answer
+// here is one line.
 type Executor interface {
 	Query(ctx context.Context, sql string, args ...any) (Rows, error)
 	Ping(ctx context.Context) error
@@ -249,6 +200,30 @@ type Executor interface {
 	// cannot. It probes the server rather than trusting a cached flag, so a
 	// database that went away is reported as not ready instead of healthy.
 	Ready(ctx context.Context) (bool, string)
+	// Dialect names the SQL dialect this executor runs: DialectPostgres or
+	// DialectSQLite. It is the machine value a chapter is compared against, so
+	// the UI can refuse to grade a SQLite chapter on PostgreSQL.
+	Dialect() string
+	// EngineLabel names the running engine in the words a learner reads
+	// ("PostgreSQL 16.3", "SQLite 3.45").
+	EngineLabel() string
+	// ClassifyError names this engine's error in the contract's code set.
+	//
+	// The second return is why the contract is (code, ok) rather than a bare
+	// string: "this executor has no opinion" is a real answer, and it must not
+	// be confused with a classification that happens to be empty. An executor
+	// that declines leaves the decision to the shared table in execute.go.
+	//
+	// SQLite needs this hook. It has no SQLSTATE, so the PostgreSQL table would
+	// report a SQLite syntax error as a runtime error, while the dialect
+	// profile already knows the same message is QUERY_SYNTAX_ERROR.
+	ClassifyError(err error) (code string, ok bool)
+	// Diagnostics describes the sandbox learner statements run in, read over
+	// the learner's own connection. The values are the server answering for
+	// the session (current_user, search_path) and the sandbox check performed
+	// with the learner's own privileges rather than assumed. An executor with
+	// no database to describe returns nil.
+	Diagnostics(ctx context.Context) map[string]any
 	Close() error
 }
 

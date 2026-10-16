@@ -26,7 +26,7 @@ func Execute(ctx context.Context, ex Executor, sql string, limits Limits) QueryR
 	   the default (QC_MAX_ROWS=2000) silently ran at the default 500. */
 	limits = limits.Fill(DefaultLimits())
 	requestID := RequestIDFromContext(ctx)
-	if isBlankSQL(sql) {
+	if IsBlankSQL(sql) {
 		res := Failing(CodeEmptyQuery, "Blank SQL. Write a statement, then Run.", "", requestID)
 		/* Both the dialect AND the engine are properties of the engine that
 		   would have run the statement, so even a refusal names them: the UI and
@@ -53,7 +53,7 @@ func Execute(ctx context.Context, ex Executor, sql string, limits Limits) QueryR
 
 	rows, err := ex.Query(qctx, sql)
 	if err != nil {
-		return res.failed(classifyFor(qctx, ex, err), start)
+		return res.failed(ClassifyFor(qctx, ex, err), start)
 	}
 	if rows == nil {
 		res.DurationMS = RoundMS(time.Since(start))
@@ -75,7 +75,7 @@ func Execute(ctx context.Context, ex Executor, sql string, limits Limits) QueryR
 		}
 		vals, verr := rows.Values()
 		if verr != nil {
-			return res.failed(classifyFor(qctx, ex, verr), start)
+			return res.failed(ClassifyFor(qctx, ex, verr), start)
 		}
 		if vals == nil {
 			vals = []any{}
@@ -97,7 +97,7 @@ func Execute(ctx context.Context, ex Executor, sql string, limits Limits) QueryR
 	}
 	if !rowCapped && !byteCapped {
 		if rerr := rows.Err(); rerr != nil {
-			return res.failed(classifyFor(qctx, ex, rerr), start)
+			return res.failed(ClassifyFor(qctx, ex, rerr), start)
 		}
 	} else {
 		// A cap was hit, so the rest of the result is unwanted. Cancelling the
@@ -124,13 +124,16 @@ func Execute(ctx context.Context, ex Executor, sql string, limits Limits) QueryR
 	return res
 }
 
-// isBlankSQL reports whether the statement is empty once whitespace and SQL
+// IsBlankSQL reports whether the statement is empty once whitespace and SQL
 // comments are removed. Comment-only submissions are EMPTY_QUERY, matching the
 // browsers' stripComments (web/src/api/pglite.ts), which strips BOTH line and
 // block comments. This used to strip only `--`, so `/* nothing */` was
 // EMPTY_QUERY in the browser and a syntax error over HTTP — an adapter-parity
 // break in the one place the repo relies on the two agreeing.
-func isBlankSQL(sql string) bool {
+//
+// It is exported because the plan capture in the perf package asks the same
+// question before it runs an EXPLAIN, and one answer must serve both surfaces.
+func IsBlankSQL(sql string) bool {
 	var b strings.Builder
 	inSingle, inDouble, inBlock := false, false, false
 	for i := 0; i < len(sql); i++ {
@@ -227,14 +230,18 @@ func classify(ctx context.Context, err error) *QueryError {
 	return engineWordsFor(CodeRuntime, err)
 }
 
-// classifyFor asks the executor to classify its own engine's error before the
+// ClassifyFor asks the executor to classify its own engine's error before the
 // shared table does, so a dialect with its own vocabulary (SQLite's message
 // rules) is not described in PostgreSQL's terms. The host's own facts are
 // decided first and are not the executor's to rename: a deadline, a busy
 // gateway and an unreachable environment mean the same thing in every dialect,
 // and SQLite's profile would otherwise be asked to recognise this process's
 // sentinels.
-func classifyFor(ctx context.Context, ex Executor, err error) *QueryError {
+//
+// It is exported because the plan capture in the perf package classifies an
+// EXPLAIN failure with it, so a plan and a query name the same mistake the same
+// way.
+func ClassifyFor(ctx context.Context, ex Executor, err error) *QueryError {
 	if err == nil {
 		return nil
 	}
@@ -242,18 +249,16 @@ func classifyFor(ctx context.Context, ex Executor, err error) *QueryError {
 		errors.Is(err, context.Canceled) || errors.Is(err, ErrEnvironmentUnavailable) {
 		return classify(ctx, err)
 	}
-	if classifier, ok := ex.(ErrorClassifier); ok {
-		if code, ok := classifier.ClassifyError(err); ok && strings.TrimSpace(code) != "" {
-			return engineWordsFor(code, err)
-		}
+	if code, ok := ex.ClassifyError(err); ok && strings.TrimSpace(code) != "" {
+		return engineWordsFor(code, err)
 	}
 	return classify(ctx, err)
 }
 
 // pgCodeFor maps a PostgreSQL error onto the contract's closed code set. It is
-// separate from classify because PgxExecutor answers ErrorClassifier with it:
-// the same rules must serve both the executor's own hook and the fallback, or a
-// result could be classified one way in one path and another way in the other.
+// separate from classify because PgxExecutor.ClassifyError returns it: the same
+// rules must serve both the executor's own answer and the fallback, or a result
+// could be classified one way in one path and another way in the other.
 func pgCodeFor(err error) (string, bool) {
 	var pgErr *pgconn.PgError
 	if errors.As(err, &pgErr) {

@@ -5,8 +5,8 @@ import (
 	"testing"
 	"time"
 
-	"github.com/querycraft/sqlquery/backend/internal/ai"
 	"github.com/querycraft/sqlquery/backend/internal/pgtest"
+	"github.com/querycraft/sqlquery/backend/internal/schema"
 )
 
 /* Generated courses, from the store's point of view.
@@ -19,18 +19,18 @@ import (
 
 // sampleCourse is a paused course as the pipeline would store it: the outline
 // as a `building` plan, the request that produced it, and the run report so far.
-func sampleCourse(id, title string, at time.Time) ai.CourseRecord {
-	req := ai.GenerationRequest{
+func sampleCourse(id, title string, at time.Time) schema.CourseRecord {
+	req := schema.GenerationRequest{
 		Kind:            "course",
 		Title:           "Get me fluent with window functions",
 		Topics:          []string{"window functions", "rankings"},
-		Difficulty:      ai.Intermediate,
+		Difficulty:      schema.Intermediate,
 		Scenario:        "Count what each customer ordered, then rank the results.",
 		ExerciseCount:   6,
 		RequireApproval: true,
 	}
-	return ai.CourseRecord{
-		Plan: ai.CoursePlan{
+	return schema.CourseRecord{
+		Plan: schema.CoursePlan{
 			ID:         id,
 			Version:    1,
 			Title:      title,
@@ -38,14 +38,14 @@ func sampleCourse(id, title string, at time.Time) ai.CourseRecord {
 			Level:      "intermediate",
 			Dialect:    "postgresql",
 			Objectives: []string{"rank within a group"},
-			Setup:      ai.SetupPlan{Dataset: "commerce", SchemaVersion: 1, SeedVersion: 1, Statements: []string{}},
-			Chapters: []ai.CourseChapter{
+			Setup:      schema.SetupPlan{Dataset: "commerce", SchemaVersion: 1, SeedVersion: 1, Statements: []string{}},
+			Chapters: []schema.CourseChapter{
 				{ID: "gen.one", N: 1, Title: "Chapter one", Summary: "One.", Objectives: []string{"do one"}},
 				{ID: "gen.two", N: 2, Title: "Chapter two", Summary: "Two.", Objectives: []string{"do two"}},
 			},
 		},
-		Outcome:   ai.Outcome{Status: ai.StatusBuilding, Kind: "course", Chapters: []ai.ChapterResult{}},
-		Status:    ai.StatusBuilding,
+		Outcome:   schema.Outcome{Status: schema.StatusBuilding, Kind: "course", Chapters: []schema.ChapterResult{}},
+		Status:    schema.StatusBuilding,
 		CreatedAt: at,
 		Request:   &req,
 	}
@@ -132,8 +132,8 @@ func TestPostgresCourseRequestSurvivesARestart(t *testing.T) {
 	if err != nil || !ok {
 		t.Fatalf("after restart ok=%v err=%v", ok, err)
 	}
-	if got.Status != ai.StatusBuilding {
-		t.Fatalf("status = %q, want %q", got.Status, ai.StatusBuilding)
+	if got.Status != schema.StatusBuilding {
+		t.Fatalf("status = %q, want %q", got.Status, schema.StatusBuilding)
 	}
 	if got.Request == nil {
 		t.Fatal("the request that produced the course was not persisted")

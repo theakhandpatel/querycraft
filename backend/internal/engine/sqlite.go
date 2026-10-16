@@ -214,7 +214,7 @@ type SQLiteExecutor struct {
 	profile  dialect.Profile
 	readOnly bool
 	// version is the engine's own sqlite_version() string, read once at open.
-	// EngineLabel needs it without a context (LabeledExecutor answers
+	// EngineLabel needs it without a context (Executor.EngineLabel answers
 	// synchronously), and it is not invented: a constructor that cannot read
 	// the version fails rather than publishing a placeholder.
 	version string
@@ -275,7 +275,7 @@ func (e *SQLiteExecutor) ReadOnly() bool { return e.readOnly }
 // hard-coding "sqlite" at the call site.
 func (e *SQLiteExecutor) Dialect() string { return e.profile.Dialect }
 
-// EngineLabel implements LabeledExecutor, which is how engine.Execute fills
+// EngineLabel implements Executor, which is how engine.Execute fills
 // QueryResult.engine: without it, a result produced by SQLite would be labelled
 // "postgresql" because that is EngineName's default. The value carries the
 // engine's own version ("SQLite 3.50.3") so the label names a real string from
@@ -289,7 +289,7 @@ func (e *SQLiteExecutor) EngineLabel() string {
 
 // ClassifyError maps a driver error to this dialect's closed QueryResult code
 // with the embedded profile — the same rule table contracts/dialects/sqlite.json
-// publishes and the Node audit reads — and implements engine.ErrorClassifier,
+// publishes and the Node audit reads — and implements Executor.ClassifyError,
 // which is what makes Execute ask this executor first instead of sending a
 // SQLite syntax error through the PostgreSQL SQLSTATE table and reporting it as
 // QUERY_RUNTIME_ERROR.
@@ -312,6 +312,11 @@ func (e *SQLiteExecutor) ClassifyError(err error) (string, bool) {
 	}
 	return code, true
 }
+
+// Diagnostics implements Executor. SQLite has no server-side session and no
+// second role to check, so this returns nil and /diagnostics leaves its learner
+// block out rather than publishing fields it cannot measure.
+func (e *SQLiteExecutor) Diagnostics(ctx context.Context) map[string]any { return nil }
 
 /* ---------- the driver's error framing ---------- */
 

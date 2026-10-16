@@ -949,7 +949,7 @@ async function queryGateway(base, sql, token = null) {
 async function queryWeb(executeSql, sql) {
   const started = Date.now();
   const out = await executeSql(sql);
-  /* The adapter returns the six contract fields; execution.ts wraps it with
+  /* The adapter returns the six contract fields; the execution layer wraps it with
      engine, request_id and duration_ms. Attach the same three so the contract
      schema can judge the result the way the app sees it. */
   return { ...out, engine: PGLITE_ENGINE, request_id: null, duration_ms: Date.now() - started };
@@ -965,7 +965,7 @@ async function querySqliteGateway(base, sql, token = null) {
 
 /** One statement through the browser's wasm SQLite adapter. The adapter already
     fills `engine` (its own version string) and `dialect`, so only the two
-    envelope fields `execution.ts` adds are attached here. */
+    envelope fields the execution layer adds are attached here. */
 async function querySqliteWeb(executeSqlite, sql) {
   const started = Date.now();
   const out = await executeSqlite(sql);
@@ -1081,7 +1081,7 @@ async function runSqliteParity(tmpDir, validate) {
       base = process.env.QC_GATEWAY.replace(/\/$/, '');
     } else {
       const bin = process.env.QC_BIN || buildGateway('parity-sqlite');
-      const started = await startGateway(bin, { ...(await liveEnv('parity-sqlite')), TZ: 'UTC' });
+      const started = await startGateway(bin, await liveEnv('parity-sqlite'), { TZ: 'UTC' });
       child = started.child;
       base = started.base;
     }
@@ -1092,7 +1092,10 @@ async function runSqliteParity(tmpDir, validate) {
        difference between comparing two engines and comparing two refusals. */
     const caps = await getJSON(base + '/capabilities');
     const dialects = Array.isArray(caps.json?.dialects) ? caps.json.dialects : [];
-    const diag = await getJSON(base + '/diagnostics');
+    /* The session comes first: /diagnostics reports pool state and the learner's
+       privileges, so that route needs one. */
+    const learner = await signUpLearner(base);
+    const diag = await getJSON(base + '/diagnostics', 15_000, { authorization: 'Bearer ' + learner.token });
     console.log('         dialects served: [' + dialects.join(', ') + ']');
     if (diag.json?.engine?.ready === true) {
       console.log('         its PostgreSQL engine is ' + diag.json.engine.version + ' (the other half; not used here)');
@@ -1106,7 +1109,6 @@ async function runSqliteParity(tmpDir, validate) {
        kind of thing — the anonymous path is a single shared, read-only fixture,
        so a constraint probe would be refused for the wrong reason there and the
        audit would be comparing a read-only engine against a writable one. */
-    const learner = await signUpLearner(base);
     console.log('session: ' + learner.email + ' (a writable SQLite file on the gateway, a writable workspace in the browser)');
     console.log('note:    no statement in this half changes data — the constraint probes fail and change nothing — and the');
     console.log('         gateway has no route that restores a SQLite workspace, so the run never has anything to undo.');
@@ -1375,13 +1377,17 @@ try {
     /* The server has one timezone in production, so pin the gateway to UTC; the
        web side is the one whose host timezone varies (the timezone section
        below varies it deliberately). */
-    const started = await startGateway(bin, { ...(await liveEnv('parity')), TZ: 'UTC' });
+    const started = await startGateway(bin, await liveEnv('parity'), { TZ: 'UTC' });
     child = started.child;
     base = started.base;
   }
   console.log('gateway: ' + base);
 
-  const diag = await getJSON(base + '/diagnostics');
+  /* The session comes first: /diagnostics reports pool state and the learner's
+     privileges, so that route needs one. */
+  const learner = await signUpLearner(base);
+
+  const diag = await getJSON(base + '/diagnostics', 15_000, { authorization: 'Bearer ' + learner.token });
   if (diag.json?.engine?.ready !== true) {
     throw new Error(
       'the parity audit needs a live PostgreSQL (engine.ready=' + diag.json?.engine?.ready + '); '
@@ -1410,13 +1416,13 @@ try {
 
   /* ADR 0003: both sides are writable workspaces, so the whole comparison runs
      as a signed-in learner. Anonymous read-only is a separate, explicit check
-     below — it is a property, not a mode the browser even has.
+     below: it is a property, not a mode the browser even has. The session was
+     created above, before the diagnostics read.
 
-     This runs after the PGlite warm-up above on purpose: the browser adapter
-     boots (and announces its main-thread fallback) on first use, and doing that
-     inside the warm-up keeps the announcement in the notes instead of letting it
-     fall out of a reset call. */
-  const learner = await signUpLearner(base);
+     The reset runs after the PGlite warm-up on purpose. The browser adapter
+     boots on first use and announces its main-thread fallback then, and doing
+     that inside the warm-up keeps the announcement in the notes instead of
+     letting it fall out of a reset call. */
   console.log('session: ' + learner.email + ' (writable workspace on both sides)');
   const sealed = await resetBoth(base, learner.token, executeSql ? resetWeb : null);
   if (sealed.gateway?.ok !== true) {

@@ -15,7 +15,6 @@ import (
 	"os"
 	"os/signal"
 	"path/filepath"
-	"strconv"
 	"strings"
 	"syscall"
 	"time"
@@ -24,6 +23,7 @@ import (
 
 	"github.com/querycraft/sqlquery/backend/internal/ai"
 	"github.com/querycraft/sqlquery/backend/internal/auth"
+	"github.com/querycraft/sqlquery/backend/internal/config"
 	"github.com/querycraft/sqlquery/backend/internal/dataset"
 	"github.com/querycraft/sqlquery/backend/internal/engine"
 	"github.com/querycraft/sqlquery/backend/internal/envdb"
@@ -36,30 +36,33 @@ func main() {
 	// run owns the lifecycle, so its deferred cleanup (the embedded PostgreSQL,
 	// the pools, the store) executes even on the misconfiguration refusal below;
 	// os.Exit here would skip every defer and orphan the cluster.
-	os.Exit(run())
+	os.Exit(Execute())
 }
 
 // run starts the gateway and returns the process exit code: 0 for a clean
-// signal-driven shutdown, 1 for a refusal to start.
-func run() int {
+// signal-driven shutdown, 1 for a refusal to start. The settings arrive fully
+// resolved: cli.go has already applied defaults, the config file, the
+// environment and the command-line flags, in that order.
+func run(settings config.Settings) int {
 	log := slog.New(slog.NewTextHandler(os.Stdout, &slog.HandlerOptions{Level: slog.LevelInfo}))
 
 	cfg := httpapi.Config{
-		MaxRows:       envInt("QC_MAX_ROWS", engine.DefaultMaxRows),
-		MaxBytes:      envInt("QC_MAX_BYTES", engine.DefaultMaxBytes),
-		TimeoutMS:     envInt("QC_TIMEOUT_MS", engine.DefaultTimeoutMS),
-		MaxConcurrent: envInt("QC_MAX_CONCURRENT", 4),
+		MaxRows:       settings.MaxRows,
+		MaxBytes:      settings.MaxBytes,
+		TimeoutMS:     settings.TimeoutMS,
+		MaxConcurrent: settings.MaxConcurrent,
 		// Failed sign-in throttling (see login_throttle.go). The defaults are the
 		// shipped ones, so an install that sets nothing is still limited.
-		LoginMaxFailures: envInt("QC_LOGIN_MAX_FAILURES", httpapi.DefaultLoginMaxFailures),
-		LoginWindowMS:    envInt("QC_LOGIN_WINDOW_MS", httpapi.DefaultLoginWindowMS),
-		LoginMaxTracked:  envInt("QC_LOGIN_MAX_TRACKED", httpapi.DefaultLoginMaxTracked),
+		LoginMaxFailures: settings.LoginMaxFailures,
+		LoginWindowMS:    settings.LoginWindowMS,
+		LoginMaxTracked:  settings.LoginMaxTracked,
 	}
 	// Loopback by default: the seeded administrator may keep an empty password
 	// only on a loopback bind (see the refusal below), which is the zero-setup
 	// local flow. Reaching the gateway from the network is an explicit opt-in
-	// through QC_ADDR, and that opt-in requires a real admin password.
-	addr := env("QC_ADDR", defaultAddr)
+	// through the addr setting (querycraft.json or --addr), and that
+	// opt-in requires a real admin password.
+	addr := settings.Addr
 
 	// SIGHUP matters here: a terminal closing (or a parent shell exiting) sends
 	// it, and without a handler the process dies instantly, orphaning the
@@ -69,21 +72,21 @@ func run() int {
 	defer stop()
 
 	// The gateway owns the database. An external PostgreSQL (container, managed
-	// service, or a local server) is used when QC_DATABASE_URL is set; otherwise
+	// service, or a local server) is used when database_url is set; otherwise
 	// a real PostgreSQL is started from a repo-local data directory. Both paths
 	// speak the same wire protocol, so the swap is a configuration change.
 	// The SQLite dialect's files sit beside the embedded PostgreSQL's, under the
-	// same .data root, and can be moved independently with QC_SQLITE_DATA. The
-	// default derives from QC_PG_DATA, so relocating the data directory
-	// relocates both dialects' state together.
-	pgDataDir := env("QC_PG_DATA", localdb.DefaultDataDir("")+"/data")
-	sqliteDataDir := env("QC_SQLITE_DATA", filepath.Join(filepath.Dir(filepath.Dir(pgDataDir)), "sqlite"))
+	// same .data root, and can be moved independently with the sqlite_data key (or
+	// the sqlite_data key). The default derives from the pg_data setting, so
+	// relocating the data directory relocates both dialects' state together.
+	pgDataDir := settings.PGDataDir
+	sqliteDataDir := settings.DeriveSQLiteRoot()
 
-	dsn := os.Getenv("QC_DATABASE_URL")
+	dsn := settings.DatabaseURL
 	adminPassword := ""
 	var local *localdb.Server
-	if dsn == "" && !envBool("QC_NO_LOCAL_DB", false) {
-		runtimeDir := env("QC_PG_RUNTIME", localdb.DefaultDataDir("")+"/runtime")
+	if dsn == "" && !settings.NoLocalDB {
+		runtimeDir := settings.PGRuntimeDir
 		/* The embedded server writes its postgres log into os.TempDir() and
 		   never removes it. Give it a per-run directory beside the cluster
 		   instead, so the log leaves with the process rather than accumulating
@@ -101,12 +104,12 @@ func run() int {
 		cfg := localdb.Config{
 			DataPath:     pgDataDir,
 			RuntimePath:  runtimeDir,
-			BinariesPath: env("QC_PG_BINARIES", localdb.BinariesDir("")),
+			BinariesPath: settings.PGBinariesDir,
 			TempDir:      logDir,
-			Port:         uint32(envInt("QC_PG_PORT", 54329)),
-			User:         env("QC_PG_USER", "querycraft"),
-			Password:     env("QC_PG_PASSWORD", "querycraft"),
-			Database:     env("QC_PG_DATABASE", "querycraft"),
+			Port:         uint32(settings.PGPort),
+			User:         settings.PGUser,
+			Password:     settings.PGPassword,
+			Database:     settings.PGDatabase,
 		}
 		adminPassword = cfg.Password
 		srv, err := localdb.Start(ctx, log, cfg)
@@ -130,7 +133,7 @@ func run() int {
 	// schema and owns the progress store; a restricted role executes learner
 	// statements, so a fully qualified name cannot reach `app`, and the
 	// superuser-only catalog and file functions are refused by PostgreSQL.
-	learner := env("QC_LEARNER_DATABASE_URL", "")
+	learner := settings.LearnerDatabaseURL
 	if learner == "" && dsn != "" {
 		learner = swapDSNUser(dsn, dataset.LearnerRole, adminPassword)
 	}
@@ -141,7 +144,7 @@ func run() int {
 	exec := newExecutor(ctx, log, learner)
 	defer exec.Close()
 
-	st, err := newStore(ctx, log, dsn)
+	st, err := newStore(ctx, log, dsn, settings)
 	if err != nil {
 		log.Error("could not open explicitly selected metadata store", "err", err)
 		return 1
@@ -152,19 +155,19 @@ func run() int {
 	// own rows in app.progress/app.events through foreign keys, so the users
 	// table has to exist with at least one row before the first write; without
 	// this a fresh install would reject every progress save.
-	adminEmail := env("QC_ADMIN_EMAIL", "admin@querycraft.local")
+	adminEmail := settings.AdminEmail
 	admin, err := auth.EnsureDefaultAdmin(ctx, st, auth.DefaultAdmin{
 		Email:    adminEmail,
-		Password: os.Getenv("QC_ADMIN_PASSWORD"),
-		Name:     env("QC_ADMIN_NAME", "Administrator"),
+		Password: settings.AdminPassword,
+		Name:     settings.AdminName,
 	}, log)
 	if err != nil {
 		log.Error("could not seed the default administrator; sign-in will be unavailable until the database accepts writes", "err", err)
 	} else {
-		log.Info("default administrator ready", "email", admin.Email, "passwordSet", os.Getenv("QC_ADMIN_PASSWORD") != "")
+		log.Info("default administrator ready", "email", admin.Email, "passwordSet", settings.AdminPassword != "")
 	}
 	// Read the *stored* state rather than the environment: an operator may have
-	// set QC_ADMIN_PASSWORD on a previous boot and unset it since, and the seed
+	// set admin_password on a previous boot and removed it since, and the seed
 	// deliberately never rewrites an existing account. The honest question is
 	// "does an empty password sign this account in", which is exactly
 	// auth.Verify-hash-against-"": the seeded admin's blank password is stored
@@ -178,11 +181,11 @@ func run() int {
 	}
 	// An empty-password administrator is a local-development convenience, so it
 	// is allowed only on a loopback bind. Reaching the gateway over the network
-	// is an explicit opt-in (QC_ADDR), and that opt-in must not also publish a
+	// is an explicit opt-in (a non-loopback addr), and that opt-in must not also publish a
 	// blank-password admin. Never print the password or its hash: only that it
 	// is unset.
 	if adminPasswordEmpty && !isLoopbackAddr(addr) {
-		log.Error("refusing to start: the default administrator has an empty password, which is allowed only on a loopback address; set QC_ADMIN_PASSWORD or bind QC_ADDR to 127.0.0.1", "addr", addr, "admin", admin.Email)
+		log.Error("refusing to start: the default administrator has an empty password, which is allowed only on a loopback address; set admin_password in querycraft.json or bind the gateway to 127.0.0.1", "addr", addr, "admin", admin.Email)
 		return 1
 	}
 
@@ -204,6 +207,11 @@ func run() int {
 			LearnerPassword: adminPassword,
 			Log:             log,
 			Metrics:         api.Registry(),
+			// The two environment knobs (ADR 0006). Zero keeps envdb's own
+			// defaults (8 environments, a 15 minute idle window), which is what
+			// every install that sets nothing gets.
+			MaxEnvironments: settings.MaxEnvironments,
+			IdleTTL:         settings.IdleTTL,
 		})
 		if err != nil {
 			log.Warn("challenge environments unavailable; signed-in learners will be refused with ENVIRONMENT_UNAVAILABLE", "err", err)
@@ -233,7 +241,7 @@ func run() int {
 			// Reap every qc environment the store no longer references at boot.
 			// Best-effort and logged: a reaper that cannot run must not stop the
 			// gateway from serving.
-			m.ReapUnreferenced(ctx, st)
+			reapOrphanedEnvironments(ctx, log, m, st)
 		}
 	}
 
@@ -245,7 +253,7 @@ func run() int {
 	// cannot be prepared the dialect is not registered at all, so a sqlite
 	// request is refused with DIALECT_MISMATCH instead of being answered by the
 	// wrong engine.
-	if sqliteEnvs, err := httpapi.NewSQLiteEnvironmentsWithOptions(sqliteDataDir, sqliteOptionsFromEnv()); err != nil {
+	if sqliteEnvs, err := envdb.NewSQLiteEnvironmentsWithOptions(sqliteDataDir, sqliteOptions(settings)); err != nil {
 		log.Warn("SQLite dialect unavailable; a request for it will be refused with DIALECT_MISMATCH", "err", err)
 	} else {
 		defer func() {
@@ -273,11 +281,11 @@ func run() int {
 		runner = envManager
 	}
 	api.UseAI(ai.Config{
-		Provider:       aiProviderFromEnv(log),
+		Provider:       aiProviderFrom(settings, log),
 		Depot:          st,
 		Runner:         runner,
 		Logger:         log,
-		Limits:         aiLimitsFromEnv(),
+		Limits:         aiLimitsFrom(settings),
 		DatasetVersion: dataset.DatasetVersion,
 	})
 
@@ -312,15 +320,22 @@ func run() int {
 	if err := srv.Shutdown(shutdownCtx); err != nil {
 		log.Error("graceful shutdown failed", "err", err)
 	}
+	// A generation run is detached from its request (see ai/jobs.go), so the
+	// server's Shutdown does not wait for it. Drain before run returns: the
+	// deferred closes for the environment manager, the stores, the execution
+	// pool and the embedded PostgreSQL all run after this function returns, and
+	// a run that stored its result through one of them would lose the work.
+	// A run that outlasts the drain window is reported rather than waited for
+	// forever; its own context remains bounded by the pipeline's budget.
+	drainCtx, cancelDrain := context.WithTimeout(context.Background(), 10*time.Second)
+	defer cancelDrain()
+	if err := api.DrainJobs(drainCtx); err != nil {
+		log.Warn("generation jobs did not finish before shutdown", "err", err)
+	}
 	return 0
 }
 
-// defaultAddr is the listen address when QC_ADDR is unset. Loopback, not ":8080",
-// so the zero-setup flow (empty admin password) stays a local-only flow; a
-// network bind is an explicit opt-in that requires QC_ADMIN_PASSWORD.
-const defaultAddr = "127.0.0.1:8080"
-
-// isLoopbackAddr reports whether a QC_ADDR value binds only the loopback
+// isLoopbackAddr reports whether the listen address binds only the loopback
 // interface. Anything that could accept a connection from another host — a
 // wildcard host like ":8080" or "0.0.0.0:8080", or a concrete non-loopback
 // address — is not loopback, and a blank-password administrator is refused
@@ -365,21 +380,22 @@ func newExecutor(ctx context.Context, log *slog.Logger, dsn string) engine.Execu
 	return ex
 }
 
-func newStore(ctx context.Context, log *slog.Logger, dsn string) (store.Store, error) {
-	adminDSN := os.Getenv("QC_ADMIN_DATABASE_URL")
-	// QC_ADMIN_DATABASE_URL is an explicit request for PostgreSQL metadata.
+func newStore(ctx context.Context, log *slog.Logger, dsn string, settings config.Settings) (store.Store, error) {
+	adminDSN := settings.AdminDatabaseURL
+	// admin_database_url is an explicit request for PostgreSQL metadata.
 	// Otherwise the opt-in selects SQLite independently of the learner's
 	// execution DSN (which is commonly the gateway's embedded PostgreSQL).
-	if adminDSN == "" && strings.EqualFold(env("QC_METADATA", ""), "sqlite") {
-		defaultPath := filepath.Join(filepath.Dir(env("QC_PG_DATA", localdb.DefaultDataDir("")+"/data")), "metadata.sqlite")
-		path := env("QC_METADATA_PATH", defaultPath)
+	if adminDSN == "" && strings.EqualFold(settings.Metadata, "sqlite") {
+		path := settings.DeriveMetadataPath()
 		sqliteStore, err := store.NewSQLite(ctx, path)
 		if err != nil {
 			return nil, err
 		}
 		return sqliteStore, nil
 	}
-	dsn = env("QC_ADMIN_DATABASE_URL", dsn)
+	if adminDSN != "" {
+		dsn = adminDSN
+	}
 	if dsn == "" {
 		log.Warn("no metadata database configured; using in-memory progress store")
 		return store.NewMemory(), nil
@@ -396,6 +412,23 @@ func newStore(ctx context.Context, log *slog.Logger, dsn string) (store.Store, e
 		return store.NewMemory(), nil
 	}
 	return pg, nil
+}
+
+// reapOrphanedEnvironments runs the boot reaper, unless the account list is not
+// durable enough to answer for the cluster.
+//
+// The keep-set is the account list, so the reaper is only as honest as that
+// list. newStore falls back to the in-memory store when the metadata database
+// is stale or unreachable, and that store knows only the seeded administrator.
+// Reaping against it would treat every other registered learner's database as
+// an orphan and drop it. A memory store skips the sweep instead, and the next
+// boot with the real accounts cleans up what is genuinely orphaned.
+func reapOrphanedEnvironments(ctx context.Context, log *slog.Logger, m *envdb.Manager, st store.Store) {
+	if st.Kind() == "memory" {
+		log.Warn("skipping the environment reaper: an in-memory account list knows only the seeded administrator, so every other database would look orphaned")
+		return
+	}
+	m.ReapUnreferenced(ctx, st)
 }
 
 // passwordFromDSN extracts the password a managed DSN already carries, so the
@@ -429,7 +462,7 @@ func swapDSNUser(raw, user, password string) string {
 
 // ensureLearnerRole makes the restricted role exist and hold the right grants
 // even when the database is managed outside this process, such as a container
-// or a hosted server configured through QC_DATABASE_URL. Failure is logged and
+// or a hosted server configured through the database_url key. Failure is logged and
 // left to surface as an unavailable engine rather than silently falling back to
 // the privileged connection.
 func ensureLearnerRole(ctx context.Context, log *slog.Logger, dsn, password string) {
@@ -444,59 +477,14 @@ func ensureLearnerRole(ctx context.Context, log *slog.Logger, dsn, password stri
 	}
 }
 
-func env(key, fallback string) string {
-	if v := os.Getenv(key); v != "" {
-		return v
-	}
-	return fallback
-}
-
-func envInt(key string, fallback int) int {
-	if v := os.Getenv(key); v != "" {
-		if n, err := strconv.Atoi(v); err == nil {
-			return n
-		}
-	}
-	return fallback
-}
-
-func envBool(key string, fallback bool) bool {
-	v := os.Getenv(key)
-	if v == "" {
-		return fallback
-	}
-	switch strings.ToLower(strings.TrimSpace(v)) {
-	case "1", "true", "yes", "on":
-		return true
-	case "0", "false", "no", "off":
-		return false
-	}
-	return fallback
-}
-
-// envDuration reads a Go duration string ("15m", "1h") and keeps the fallback
-// when it is unset or unparseable, so a typo narrows or widens the window rather
-// than disabling the bound.
-func envDuration(key string, fallback time.Duration) time.Duration {
-	v := strings.TrimSpace(os.Getenv(key))
-	if v == "" {
-		return fallback
-	}
-	d, err := time.ParseDuration(v)
-	if err != nil || d <= 0 {
-		return fallback
-	}
-	return d
-}
-
-// sqliteOptionsFromEnv reads the SQLite store's bound and idle window. The cap
-// is a budget on cached pools, not on accounts: an evicted account keeps its
-// file, and its next statement re-opens it, so a deployment with more accounts
-// than QC_SQLITE_MAX_ACCOUNTS is still correct — it just re-opens more often.
-// Zero or an unparseable value keeps the store's own default.
-func sqliteOptionsFromEnv() httpapi.SQLiteOptions {
-	return httpapi.SQLiteOptions{
-		MaxAccounts: envInt("QC_SQLITE_MAX_ACCOUNTS", 0),
-		IdleTTL:     envDuration("QC_SQLITE_IDLE", 0),
+// sqliteOptions reads the SQLite store's bound and idle window from the
+// resolved settings. The cap is a budget on cached pools, not on accounts: an
+// evicted account keeps its file, and its next statement re-opens it, so a
+// deployment with more accounts than sqlite_max_accounts is still correct; it
+// just re-opens more often. Zero keeps the store's own default.
+func sqliteOptions(settings config.Settings) envdb.SQLiteOptions {
+	return envdb.SQLiteOptions{
+		MaxAccounts: settings.SQLiteMaxAccounts,
+		IdleTTL:     settings.SQLiteIdle,
 	}
 }

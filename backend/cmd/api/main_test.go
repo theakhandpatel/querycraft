@@ -10,6 +10,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/querycraft/sqlquery/backend/internal/config"
 	"github.com/querycraft/sqlquery/backend/internal/engine"
 	"github.com/querycraft/sqlquery/backend/internal/store"
 )
@@ -50,9 +51,7 @@ func TestIsLoopbackAddr(t *testing.T) {
 
 func TestNewStoreSQLiteIsExplicitAndDefaultStaysMemory(t *testing.T) {
 	log := slog.New(slog.NewTextHandler(io.Discard, nil))
-	t.Setenv("QC_ADMIN_DATABASE_URL", "")
-	t.Setenv("QC_METADATA", "")
-	st, err := newStore(context.Background(), log, "")
+	st, err := newStore(context.Background(), log, "", config.Defaults())
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -62,9 +61,10 @@ func TestNewStoreSQLiteIsExplicitAndDefaultStaysMemory(t *testing.T) {
 	_ = st.Close()
 
 	path := filepath.Join(t.TempDir(), "nested", "metadata.sqlite")
-	t.Setenv("QC_METADATA", "sqlite")
-	t.Setenv("QC_METADATA_PATH", path)
-	st, err = newStore(context.Background(), log, "postgres://ignored-by-sqlite-selection")
+	sqlite := config.Defaults()
+	sqlite.Metadata = "sqlite"
+	sqlite.MetadataPath = path
+	st, err = newStore(context.Background(), log, "postgres://ignored-by-sqlite-selection", sqlite)
 	if err != nil {
 		t.Fatalf("select sqlite: %v", err)
 	}
@@ -81,9 +81,34 @@ func TestNewStoreSQLiteIsExplicitAndDefaultStaysMemory(t *testing.T) {
 	// Explicit selection must fail visibly when its file cannot be opened,
 	// rather than falsely reporting that metadata was made durable in memory.
 	badPath := t.TempDir() // A directory cannot be opened as the database file.
-	t.Setenv("QC_METADATA_PATH", badPath)
-	if _, err := newStore(context.Background(), log, ""); err == nil {
+	sqlite.MetadataPath = badPath
+	if _, err := newStore(context.Background(), log, "", sqlite); err == nil {
 		t.Fatal("unopenable explicit SQLite store silently succeeded")
+	}
+}
+
+// applyAddrFlag is the command-line layer of the precedence order, and this is
+// its empirical proof: a flag that was passed beats the config file, and an
+// absent flag leaves the file's value standing. The earlier layers
+// (default < file) are proven in internal/config's own tests.
+func TestAddrFlagBeatsConfigFile(t *testing.T) {
+	dir := t.TempDir()
+	t.Chdir(dir)
+	if err := os.WriteFile("querycraft.json", []byte(`{"addr": "127.0.0.1:9001"}`), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	resolved, err := config.Load("")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if resolved.Addr != "127.0.0.1:9001" {
+		t.Fatalf("file layer broken: Addr = %q, want 127.0.0.1:9001", resolved.Addr)
+	}
+	if got := applyAddrFlag(resolved, "127.0.0.1:9002").Addr; got != "127.0.0.1:9002" {
+		t.Errorf("flagged Addr = %q, want the flag's 127.0.0.1:9002 over the file's 9001", got)
+	}
+	if got := applyAddrFlag(resolved, "").Addr; got != "127.0.0.1:9001" {
+		t.Errorf("unflagged Addr = %q, want the file's 9001", got)
 	}
 }
 

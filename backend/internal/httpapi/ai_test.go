@@ -8,6 +8,7 @@ import (
 	"time"
 
 	"github.com/querycraft/sqlquery/backend/internal/ai"
+	"github.com/querycraft/sqlquery/backend/internal/schema"
 	"github.com/querycraft/sqlquery/backend/internal/store"
 )
 
@@ -21,55 +22,55 @@ import (
 
 // recordingDepot captures what the owner-scoped wrapper writes.
 type recordingDepot struct {
-	saved        []ai.Record
-	savedCourses []ai.CourseRecord
-	savedRuns    []ai.RunTranscript
+	saved        []schema.Record
+	savedCourses []schema.CourseRecord
+	savedRuns    []schema.RunTranscript
 }
 
-func (d *recordingDepot) SaveChallenge(_ context.Context, rec ai.Record) error {
+func (d *recordingDepot) SaveChallenge(_ context.Context, rec schema.Record) error {
 	d.saved = append(d.saved, rec)
 	return nil
 }
-func (d *recordingDepot) Challenge(context.Context, string) (ai.Record, bool, error) {
-	return ai.Record{}, false, nil
+func (d *recordingDepot) Challenge(context.Context, string) (schema.Record, bool, error) {
+	return schema.Record{}, false, nil
 }
-func (d *recordingDepot) Challenges(context.Context) ([]ai.Record, error) { return nil, nil }
-func (d *recordingDepot) ChallengesFor(context.Context, string) ([]ai.Record, error) {
+func (d *recordingDepot) Challenges(context.Context) ([]schema.Record, error) { return nil, nil }
+func (d *recordingDepot) ChallengesFor(context.Context, string) ([]schema.Record, error) {
 	return nil, nil
 }
 func (d *recordingDepot) DeleteChallenge(context.Context, string) error { return nil }
-func (d *recordingDepot) SavePatch(context.Context, ai.PatchProposal) error {
+func (d *recordingDepot) SavePatch(context.Context, schema.PatchProposal) error {
 	return nil
 }
-func (d *recordingDepot) Patch(context.Context, string) (ai.PatchProposal, bool, error) {
-	return ai.PatchProposal{}, false, nil
+func (d *recordingDepot) Patch(context.Context, string) (schema.PatchProposal, bool, error) {
+	return schema.PatchProposal{}, false, nil
 }
 func (d *recordingDepot) ApprovePatch(context.Context, string, string) error { return nil }
 
-func (d *recordingDepot) SaveCourse(_ context.Context, rec ai.CourseRecord) error {
+func (d *recordingDepot) SaveCourse(_ context.Context, rec schema.CourseRecord) error {
 	d.savedCourses = append(d.savedCourses, rec)
 	return nil
 }
-func (d *recordingDepot) Course(context.Context, string) (ai.CourseRecord, bool, error) {
-	return ai.CourseRecord{}, false, nil
+func (d *recordingDepot) Course(context.Context, string) (schema.CourseRecord, bool, error) {
+	return schema.CourseRecord{}, false, nil
 }
-func (d *recordingDepot) Courses(context.Context) ([]ai.CourseRecord, error) {
+func (d *recordingDepot) Courses(context.Context) ([]schema.CourseRecord, error) {
 	return nil, nil
 }
-func (d *recordingDepot) CoursesFor(context.Context, string) ([]ai.CourseRecord, error) {
+func (d *recordingDepot) CoursesFor(context.Context, string) ([]schema.CourseRecord, error) {
 	return nil, nil
 }
 func (d *recordingDepot) DeleteCourse(context.Context, string) error { return nil }
 
-func (d *recordingDepot) SaveRun(_ context.Context, rec ai.RunTranscript) error {
+func (d *recordingDepot) SaveRun(_ context.Context, rec schema.RunTranscript) error {
 	d.savedRuns = append(d.savedRuns, rec)
 	return nil
 }
-func (d *recordingDepot) Run(context.Context, string) (ai.RunTranscript, bool, error) {
-	return ai.RunTranscript{}, false, nil
+func (d *recordingDepot) Run(context.Context, string) (schema.RunTranscript, bool, error) {
+	return schema.RunTranscript{}, false, nil
 }
-func (d *recordingDepot) Runs(context.Context) ([]ai.RunSummary, error) { return nil, nil }
-func (d *recordingDepot) RunsFor(context.Context, string) ([]ai.RunSummary, error) {
+func (d *recordingDepot) Runs(context.Context) ([]schema.RunSummary, error) { return nil, nil }
+func (d *recordingDepot) RunsFor(context.Context, string) ([]schema.RunSummary, error) {
 	return nil, nil
 }
 
@@ -78,8 +79,8 @@ func TestOwnerScopedDepotStampsTheSessionOwner(t *testing.T) {
 	depot := ownerScopedDepot{Depot: inner, owner: "user-1"}
 	// A caller can never name the owner: a record that arrives claiming someone
 	// else is overwritten with the session's id.
-	err := depot.SaveChallenge(context.Background(), ai.Record{
-		Artifact: ai.Artifact{ID: "c1"},
+	err := depot.SaveChallenge(context.Background(), schema.Record{
+		Artifact: schema.Artifact{ID: "c1"},
 		OwnerID:  "someone-else",
 	})
 	if err != nil {
@@ -159,10 +160,10 @@ func TestAIOffIsReportedAsACapabilityNotAFailure(t *testing.T) {
 		if w.Code != http.StatusServiceUnavailable {
 			t.Fatalf("%s status = %d, want 503", path, w.Code)
 		}
-		var out ai.Outcome
+		var out schema.Outcome
 		mustDecode(t, w, &out)
-		if out.Status != ai.StatusUnavailable {
-			t.Fatalf("%s status = %q, want %q", path, out.Status, ai.StatusUnavailable)
+		if out.Status != schema.StatusUnavailable {
+			t.Fatalf("%s status = %q, want %q", path, out.Status, schema.StatusUnavailable)
 		}
 		if out.Artifact != nil {
 			t.Fatalf("%s returned an artifact while AI is off", path)
@@ -234,8 +235,8 @@ func TestOwnerScopedDepotStampsTheCourseOwner(t *testing.T) {
 	depot := ownerScopedDepot{Depot: inner, owner: "user-1"}
 	// The same rule as challenges: a generated course is stored for the
 	// session's account, whatever the pipeline or the request claims.
-	if err := depot.SaveCourse(context.Background(), ai.CourseRecord{
-		Plan:    ai.CoursePlan{ID: "course-1"},
+	if err := depot.SaveCourse(context.Background(), schema.CourseRecord{
+		Plan:    schema.CoursePlan{ID: "course-1"},
 		OwnerID: "someone-else",
 	}); err != nil {
 		t.Fatalf("SaveCourse: %v", err)
@@ -273,12 +274,12 @@ func userIDFor(t *testing.T, s *Server, token string) string {
 
 // seedCourse writes a course the way the pipeline does — through the
 // owner-scoped wrapper — so the reads below exercise really stored state.
-func seedCourse(t *testing.T, depot ai.Depot, owner, id, title string, created time.Time) {
+func seedCourse(t *testing.T, depot schema.Depot, owner, id, title string, created time.Time) {
 	t.Helper()
-	err := ownerScopedDepot{Depot: depot, owner: owner}.SaveCourse(context.Background(), ai.CourseRecord{
-		Plan:      ai.CoursePlan{ID: id, Title: title},
-		Outcome:   ai.Outcome{Status: ai.StatusActive, Kind: "course"},
-		Status:    ai.StatusActive,
+	err := ownerScopedDepot{Depot: depot, owner: owner}.SaveCourse(context.Background(), schema.CourseRecord{
+		Plan:      schema.CoursePlan{ID: id, Title: title},
+		Outcome:   schema.Outcome{Status: schema.StatusActive, Kind: "course"},
+		Status:    schema.StatusActive,
 		CreatedAt: created,
 	})
 	if err != nil {
@@ -288,7 +289,7 @@ func seedCourse(t *testing.T, depot ai.Depot, owner, id, title string, created t
 
 // courseServer is a gateway with AI attached to an in-memory depot, so the
 // stored-course routes have somewhere real to read from.
-func courseServer(t *testing.T) (*Server, ai.Depot) {
+func courseServer(t *testing.T) (*Server, schema.Depot) {
 	t.Helper()
 	depot := store.NewMemory()
 	s := newTestServer(&fakeExecutor{})
@@ -313,8 +314,8 @@ func TestStoredCoursesAreScopedToTheirOwner(t *testing.T) {
 		t.Fatalf("list status = %d body = %s", w.Code, w.Body.String())
 	}
 	var list struct {
-		OK      bool              `json:"ok"`
-		Courses []ai.CourseRecord `json:"courses"`
+		OK      bool                  `json:"ok"`
+		Courses []schema.CourseRecord `json:"courses"`
 	}
 	mustDecode(t, w, &list)
 	if !list.OK {
@@ -336,8 +337,8 @@ func TestStoredCoursesAreScopedToTheirOwner(t *testing.T) {
 		t.Fatalf("get status = %d body = %s", w.Code, w.Body.String())
 	}
 	var got struct {
-		OK     bool            `json:"ok"`
-		Course ai.CourseRecord `json:"course"`
+		OK     bool                `json:"ok"`
+		Course schema.CourseRecord `json:"course"`
 	}
 	mustDecode(t, w, &got)
 	if !got.OK || got.Course.Plan.ID != "course-alice" {
@@ -372,7 +373,7 @@ func TestCourseListIsNewestFirst(t *testing.T) {
 
 	w := doAs(t, s, token, http.MethodGet, "/courses", "")
 	var list struct {
-		Courses []ai.CourseRecord `json:"courses"`
+		Courses []schema.CourseRecord `json:"courses"`
 	}
 	mustDecode(t, w, &list)
 	if len(list.Courses) != 2 {
@@ -422,7 +423,7 @@ func TestDeleteCourseRemovesOnlyTheCallersCourse(t *testing.T) {
 	// Bob's list is untouched by any of it.
 	w = doAs(t, s, bobToken, http.MethodGet, "/courses", "")
 	var list struct {
-		Courses []ai.CourseRecord `json:"courses"`
+		Courses []schema.CourseRecord `json:"courses"`
 	}
 	mustDecode(t, w, &list)
 	if len(list.Courses) != 1 || list.Courses[0].Plan.ID != "course-bob" {
@@ -462,8 +463,8 @@ func TestStoredCourseRoutesAreHonestWithAIOff(t *testing.T) {
 		t.Fatalf("list body = %s, want an empty courses array", w.Body.String())
 	}
 	var list struct {
-		OK      bool              `json:"ok"`
-		Courses []ai.CourseRecord `json:"courses"`
+		OK      bool                  `json:"ok"`
+		Courses []schema.CourseRecord `json:"courses"`
 	}
 	mustDecode(t, w, &list)
 	if list.OK || len(list.Courses) != 0 {

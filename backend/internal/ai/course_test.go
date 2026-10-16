@@ -10,6 +10,7 @@ import (
 	"github.com/querycraft/sqlquery/backend/internal/dataset"
 	"github.com/querycraft/sqlquery/backend/internal/engine"
 	"github.com/querycraft/sqlquery/backend/internal/eval"
+	"github.com/querycraft/sqlquery/backend/internal/schema"
 )
 
 /* The M7 gate. Every test here is about one promise: a course is never shown to
@@ -21,24 +22,24 @@ import (
 // coursePlanFixture is a valid two-chapter course built from the same authored
 // topics the built-in provider uses, so its SQL really runs on the commerce
 // dataset. Mutations in the tests below start from this and change one thing.
-func coursePlanFixture() CoursePlan {
+func coursePlanFixture() schema.CoursePlan {
 	first, second := fakeTopics[0], fakeTopics[1]
-	return CoursePlan{
+	return schema.CoursePlan{
 		Title:      "Trusting a query",
 		Subtitle:   "Two chapters on reading the answer instead of the SQL.",
 		Level:      "intermediate",
 		Dialect:    "postgresql",
 		Objectives: []string{"Answer a question with one statement.", "Check the answer against the question."},
-		Setup:      SetupPlan{Dataset: "commerce", SchemaVersion: 1, SeedVersion: 1, Statements: []string{}},
-		Chapters: []CourseChapter{
+		Setup:      schema.SetupPlan{Dataset: "commerce", SchemaVersion: 1, SeedVersion: 1, Statements: []string{}},
+		Chapters: []schema.CourseChapter{
 			chapterFixture("gen.one", 1, first),
 			chapterFixture("gen.two", 2, second),
 		},
 	}
 }
 
-func chapterFixture(id string, n int, t fakeTopic) CourseChapter {
-	return CourseChapter{
+func chapterFixture(id string, n int, t fakeTopic) schema.CourseChapter {
+	return schema.CourseChapter{
 		ID:         id,
 		N:          n,
 		Title:      t.title,
@@ -46,32 +47,32 @@ func chapterFixture(id string, n int, t fakeTopic) CourseChapter {
 		Kind:       "Practice",
 		Minutes:    10,
 		Objectives: t.objectives,
-		Sections: []CourseSection{
+		Sections: []schema.CourseSection{
 			{Title: "The question", Body: "Read the question twice and write down the grain of the answer: one row per what? Every clause after that is about producing exactly those rows, and nothing else.\n\n" + t.prompt},
 		},
-		Exercises: []CourseExercise{{
+		Exercises: []schema.CourseExercise{{
 			ID:                 id + ".1",
 			Title:              t.title,
 			Prompt:             t.prompt,
-			Difficulty:         Intermediate,
+			Difficulty:         schema.Intermediate,
 			Type:               "write",
 			Objectives:         t.objectives,
 			Hints:              t.hints,
 			ReferenceSolution:  t.reference,
 			CrossCheckSolution: t.crossCheck,
-			ResultContract: ResultContract{
+			ResultContract: schema.ResultContract{
 				Columns:          t.columns,
 				ColumnOrder:      "exact",
 				RowOrder:         "exact",
 				Duplicates:       "preserved",
 				NumericTolerance: 0,
 			},
-			Checks: []Check{},
+			Checks: []schema.Check{},
 		}},
 	}
 }
 
-func planJSON(t *testing.T, plan CoursePlan) string {
+func planJSON(t *testing.T, plan schema.CoursePlan) string {
 	t.Helper()
 	raw, err := json.Marshal(plan)
 	if err != nil {
@@ -88,13 +89,13 @@ func TestCoursePipelineActivatesAVerifiedCourse(t *testing.T) {
 	depot := newTestDepot()
 	svc := testService(NewFakeProvider(), depot, engineEx)
 
-	out := svc.GenerateCourse(ctx, GenerationRequest{
+	out := svc.GenerateCourse(ctx, schema.GenerationRequest{
 		Title:         "I want to get good at answering product questions with SQL",
-		Difficulty:    Intermediate,
+		Difficulty:    schema.Intermediate,
 		ExerciseCount: 3,
 	})
-	if out.Status != StatusActive {
-		t.Fatalf("status = %q, want %q (error = %v, stages = %+v)", out.Status, StatusActive, out.Error, out.Stages)
+	if out.Status != schema.StatusActive {
+		t.Fatalf("status = %q, want %q (error = %v, stages = %+v)", out.Status, schema.StatusActive, out.Error, out.Stages)
 	}
 	if out.Plan == nil {
 		t.Fatal("an active course must carry its plan")
@@ -153,8 +154,8 @@ func TestCoursePipelineActivatesAVerifiedCourse(t *testing.T) {
 			if res.ReferenceRows == 0 || res.CrossCheckRows != res.ReferenceRows {
 				t.Errorf("exercise %s evidence = %+v, want a measured reference and an agreeing cross-check", res.ID, res)
 			}
-			if res.FixturesTotal == 0 || res.FixturesPassed != res.FixturesTotal {
-				t.Errorf("exercise %s fixtures = %d/%d, want every wrong query rejected", res.ID, res.FixturesPassed, res.FixturesTotal)
+			if res.FixturesTotal == 0 || res.FixturesRejected != res.FixturesTotal {
+				t.Errorf("exercise %s fixtures = %d/%d, want every wrong query rejected", res.ID, res.FixturesRejected, res.FixturesTotal)
 			}
 		}
 	}
@@ -179,7 +180,7 @@ func TestCoursePipelineActivatesAVerifiedCourse(t *testing.T) {
 	if err != nil || !found {
 		t.Fatalf("Course(%q) found = %v err = %v", plan.ID, found, err)
 	}
-	if rec.Status != StatusActive || len(rec.Plan.Chapters) != len(plan.Chapters) {
+	if rec.Status != schema.StatusActive || len(rec.Plan.Chapters) != len(plan.Chapters) {
 		t.Fatalf("stored course = %+v, want the active plan", rec.Status)
 	}
 	if len(rec.Outcome.Chapters) != len(out.Chapters) {
@@ -195,8 +196,8 @@ func TestCourseGradingUsesTheMeasuredRows(t *testing.T) {
 	ctx := testContext(t)
 	svc := testService(NewFakeProvider(), newTestDepot(), ex)
 
-	out := svc.GenerateCourse(ctx, GenerationRequest{Title: "Practice grading", Difficulty: Intermediate, ExerciseCount: 3})
-	if out.Status != StatusActive || out.Plan == nil {
+	out := svc.GenerateCourse(ctx, schema.GenerationRequest{Title: "Practice grading", Difficulty: schema.Intermediate, ExerciseCount: 3})
+	if out.Status != schema.StatusActive || out.Plan == nil {
 		t.Fatalf("status = %q, want an active course (error = %v)", out.Status, out.Error)
 	}
 	plan := out.Plan
@@ -226,24 +227,24 @@ func TestCourseGateRefusesPlanShapes(t *testing.T) {
 	tooLong := strings.Repeat("x", minSectionChars-1)
 	cases := []struct {
 		name   string
-		break_ func(*CoursePlan)
+		break_ func(*schema.CoursePlan)
 		field  string
 	}{
-		{"stub section", func(p *CoursePlan) { p.Chapters[0].Sections[0].Body = tooLong }, "chapters[0].sections[0].body"},
-		{"no chapters", func(p *CoursePlan) { p.Chapters = nil }, "chapters"},
-		{"no exercises at all", func(p *CoursePlan) {
+		{"stub section", func(p *schema.CoursePlan) { p.Chapters[0].Sections[0].Body = tooLong }, "chapters[0].sections[0].body"},
+		{"no chapters", func(p *schema.CoursePlan) { p.Chapters = nil }, "chapters"},
+		{"no exercises at all", func(p *schema.CoursePlan) {
 			for ci := range p.Chapters {
 				p.Chapters[ci].Exercises = nil
 			}
 		}, "chapters"},
-		{"duplicate exercise id", func(p *CoursePlan) { p.Chapters[1].Exercises[0].ID = p.Chapters[0].Exercises[0].ID }, "chapters[1].exercises[0].id"},
-		{"drop in setup", func(p *CoursePlan) { p.Setup.Statements = []string{"DROP TABLE dataset.orders"} }, "setup.statements"},
-		{"two statements in one reference", func(p *CoursePlan) {
+		{"duplicate exercise id", func(p *schema.CoursePlan) { p.Chapters[1].Exercises[0].ID = p.Chapters[0].Exercises[0].ID }, "chapters[1].exercises[0].id"},
+		{"drop in setup", func(p *schema.CoursePlan) { p.Setup.Statements = []string{"DROP TABLE dataset.orders"} }, "setup.statements"},
+		{"two statements in one reference", func(p *schema.CoursePlan) {
 			p.Chapters[0].Exercises[0].ReferenceSolution = "SELECT 1 AS \"customer_name\", 1 AS \"order_count\"; SELECT 2"
 		}, "chapters[0].exercises[0].reference_solution"},
-		{"empty expected columns", func(p *CoursePlan) { p.Chapters[0].Exercises[0].ResultContract.Columns = nil }, "chapters[0].exercises[0].result_contract.columns"},
-		{"setup dataset missing", func(p *CoursePlan) { p.Setup.Dataset = " " }, "setup.dataset"},
-		{"unknown dialect", func(p *CoursePlan) { p.Dialect = "mysql" }, "dialect"},
+		{"empty expected columns", func(p *schema.CoursePlan) { p.Chapters[0].Exercises[0].ResultContract.Columns = nil }, "chapters[0].exercises[0].result_contract.columns"},
+		{"setup dataset missing", func(p *schema.CoursePlan) { p.Setup.Dataset = " " }, "setup.dataset"},
+		{"unknown dialect", func(p *schema.CoursePlan) { p.Dialect = "mysql" }, "dialect"},
 	}
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {
@@ -266,11 +267,11 @@ func TestCourseGateRefusesPlanShapes(t *testing.T) {
 // TestCourseGateAcceptsTheBuiltInPlan keeps the gate and the built-in provider
 // from drifting: the plan the fake emits must pass the real gate.
 func TestCourseGateAcceptsTheBuiltInPlan(t *testing.T) {
-	raw, err := NewFakeProvider().courseBundle(coursePrompt(GenerationRequest{Title: "analytics", Difficulty: Intermediate}))
+	raw, err := NewFakeProvider().courseBundle(coursePrompt(schema.GenerationRequest{Title: "analytics", Difficulty: schema.Intermediate}))
 	if err != nil {
 		t.Fatalf("courseBundle: %v", err)
 	}
-	var plan CoursePlan
+	var plan schema.CoursePlan
 	if err := decodeJSON(raw, &plan); err != nil {
 		t.Fatalf("decode: %v", err)
 	}
@@ -286,7 +287,7 @@ func TestCourseGateAcceptsTheBuiltInPlan(t *testing.T) {
 // cannot guess: what the environment already contains, and that a course is the
 // unit of work.
 func TestCoursePromptCarriesTheSchemaAndTheDataset(t *testing.T) {
-	prompt := coursePrompt(GenerationRequest{Title: "cohort retention", Difficulty: Advanced, ExerciseCount: 6})
+	prompt := coursePrompt(schema.GenerationRequest{Title: "cohort retention", Difficulty: schema.Advanced, ExerciseCount: 6})
 	if !strings.HasPrefix(prompt, coursePromptMarker) {
 		t.Errorf("prompt does not open with the course marker: %q", prompt[:40])
 	}

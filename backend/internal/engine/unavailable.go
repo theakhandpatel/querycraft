@@ -41,7 +41,20 @@ func (u UnavailableExecutor) Ready(ctx context.Context) (bool, string) {
 	return false, u.reason()
 }
 
-// Diagnostics implements Diagnostician.
+// Dialect implements Executor. No statement can run here, and the results this
+// executor refuses still name the default dialect they always named.
+func (u UnavailableExecutor) Dialect() string { return DialectPostgres }
+
+// EngineLabel implements Executor, with the default engine's label. Nothing
+// ran, so the label describes the dialect the gateway would have used.
+func (u UnavailableExecutor) EngineLabel() string { return EngineName }
+
+// ClassifyError implements Executor. There is no engine here to describe an
+// error, so this executor has no opinion and execute.go's shared table decides.
+func (u UnavailableExecutor) ClassifyError(err error) (string, bool) { return "", false }
+
+// Diagnostics implements Executor. It reports itself as unavailable in the same
+// words Ready uses, because the reason is the same fact.
 func (u UnavailableExecutor) Diagnostics(ctx context.Context) map[string]any {
 	return map[string]any{"unavailable": true, "reason": u.reason()}
 }

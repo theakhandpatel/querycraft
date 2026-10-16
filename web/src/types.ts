@@ -1,6 +1,6 @@
 /* Shared domain types for Querycraft. These describe the shape of the course
    content, learner progress and the ExecutionService contract that both the
-   in-browser mock and the Go gateway satisfy. */
+   in-browser engine and the Go gateway satisfy. */
 
 import type { ExplainRequest, PerfContract, PlanBundle } from './api/planContract';
 import type {
@@ -34,7 +34,8 @@ export interface ResultSet {
 export interface ExerciseCheck {
   label: string;
   code: string;
-  /** Reference-implementation check over the learner's SQL text (mock only). */
+  /** Authored text check over the learner's SQL text. Adapters grade by
+      comparing results, so nothing runs this field at run time. */
   test: (sql: string) => boolean;
 }
 
@@ -81,7 +82,8 @@ export interface Block {
       the block is the escape hatch for a single exercise that steps outside its
       chapter's engine; a chapter that mixes the two is two chapters (D15). */
   dialect?: Dialect;
-  /** Reference result the mock engine returns for correct SQL. */
+  /** The authored expected rows. The browser adapter grades against a live
+      reference run and falls back to these rows when a block has no solution. */
   result?: ResultSet;
 }
 
@@ -226,18 +228,31 @@ export interface Progress {
 
 /* ---------- ExecutionService contract ---------- */
 
-export type QueryErrorCode =
-  | 'EMPTY_QUERY'
-  | 'QUERY_SYNTAX_ERROR'
-  | 'QUERY_RUNTIME_ERROR'
-  | 'QUERY_TIMEOUT'
-  | 'RESULT_LIMIT_EXCEEDED'
-  | 'ENVIRONMENT_UNAVAILABLE'
+/** The closed error-code set, in contract order, from
+    contracts/query-result.schema.json. The type derives from these values and
+    a runtime check reads them, so the set is stated once. */
+export const QUERY_ERROR_CODES = [
+  'EMPTY_QUERY',
+  'QUERY_SYNTAX_ERROR',
+  'QUERY_RUNTIME_ERROR',
+  'QUERY_TIMEOUT',
+  'RESULT_LIMIT_EXCEEDED',
+  'ENVIRONMENT_UNAVAILABLE',
   /** A product refusal, not an engine fault: the chapter was written for the
       other dialect. It is a closed code so the UI can name the fix. */
-  | 'DIALECT_MISMATCH'
-  | 'PERSISTENCE_FAILED'
-  | 'EVALUATION_ERROR';
+  'DIALECT_MISMATCH',
+  'PERSISTENCE_FAILED',
+  'EVALUATION_ERROR',
+] as const;
+
+export type QueryErrorCode = (typeof QUERY_ERROR_CODES)[number];
+
+/** Narrows a code that arrived as data, from a gateway body or the SQLite
+    dialect profile, to the closed set. A code outside the contract must not
+    pass as one. */
+export function isQueryErrorCode(code: string): code is QueryErrorCode {
+  return QUERY_ERROR_CODES.some((known) => known === code);
+}
 
 /** The dialects the app can run, in contract order (contracts/query-result.schema.json). */
 export type Dialect = 'postgresql' | 'sqlite';
@@ -261,7 +276,7 @@ export type DatasetId = 'commerce' | 'perf';
 export const DEFAULT_DATASET: DatasetId = 'commerce';
 
 export interface QueryErrorShape {
-  code: QueryErrorCode | string;
+  code: QueryErrorCode;
   message: string;
   detail?: string | null;
 }
@@ -338,11 +353,11 @@ export interface EngineCapabilities {
   hardTimeout: boolean;
   timeoutMs: number;
   /** Whether learner SQL may change data. True for the PGlite workspace and for
-      a signed-in gateway environment (ADR 0003); false for canned results. */
+      a signed-in gateway environment (ADR 0003). */
   writable: boolean;
-  /** Whether the engine can produce a plan at all (M5). False for the mock
-      adapter, which runs no engine; the plan action is disabled with a reason
-      rather than pretending, exactly like an unavailable AI lab. */
+  /** Whether the engine can produce a plan at all (M5). An engine that cannot
+      plan leaves the action disabled with a reason shown, rather than
+      pretending, exactly like an unavailable AI lab. */
   explain: boolean;
   /** The dialect this engine runs. The honest source for "what am I about to
       run on" on a screen that has no chapter in hand yet. */
@@ -473,7 +488,7 @@ export interface LoginInput {
 
 /** The single seam every screen depends on. Promise-shaped for React. */
 export interface ExecutionApi {
-  mode: 'mock' | 'pglite' | 'http';
+  mode: 'pglite' | 'http';
   baseUrl: string;
   config: ApiConfig;
   log: ApiLogEntry[];

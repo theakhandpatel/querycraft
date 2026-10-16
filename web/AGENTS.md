@@ -1,45 +1,50 @@
-# web/ — frontend
+# web/ (frontend)
 
 React 18 + TypeScript + Vite. Strict `tsconfig.json`.
 
 ## Layout
 
-- `src/types.ts` — shared domain types (course content, progress, the
+- `src/types.ts`: shared domain types (course content, progress, the
   ExecutionService contract). Import from here instead of re-declaring shapes.
-- `src/api/` — the single execution seam:
-  - `contract.ts` — Effect `Schema` decoders mirroring `contracts/*.schema.json`.
-  - `pglite.ts` — the default engine: real PostgreSQL compiled to WebAssembly
+- `src/api/`: the single execution seam:
+  - `contract.ts`: Effect `Schema` decoders mirroring `contracts/*.schema.json`.
+  - `pglite.ts`: the default engine: real PostgreSQL compiled to WebAssembly
     (`@electric-sql/pglite`) in the page, seeded from the Go dataset SQL.
-  - `dataset.ts` — imports `backend/internal/dataset/*.sql` with Vite `?raw`
+  - `dataset.ts`: imports `backend/internal/dataset/*.sql` with Vite `?raw`
     (one schema/seed shared with the Go evaluator).
-  - `content.ts` — splits `src/data/content/*.md` into sections and seeds them
+  - `content.ts`: splits `src/data/content/*.md` into sections and seeds them
     into the `content_docs` table on first run (the bundle is only the seeder).
-  - `compare.ts` — result-contract comparison, mirroring the Go evaluator
+  - `compare.ts`: result-contract comparison, mirroring the Go evaluator
     (`backend/internal/eval/compare.go`).
-  - `engine.ts` — pure in-browser SQL engine behind the mock adapter.
-  - `execution.ts` — `ExecutionService` (Effect `Context.Service`) with
-    `pgliteLayer` / `mockLayer` / `httpLayer`, plus `createExecutionApi()` which
+  - `execution/`: `ExecutionService` (Effect `Context.Service`) with
+    `pgliteLayer` / `httpLayer`, plus `createExecutionApi()` which
     exposes the promise-shaped `ExecutionApi` the screens use.
-  - `index.ts` — `createApi()` picks pglite (default), mock or http from
+  - `index.ts`: `createApi()` picks pglite (default) or http from
     `VITE_API_MODE`; in a production build with no explicit mode it probes its
     own origin `/health` and uses `http` when the gateway answers.
-- `src/data/curriculum.ts` — courses, chapters and the prose blocks used when a
+- `src/data/curriculum.ts`: courses, chapters and the prose blocks used when a
   module has no authored markdown.
-- `src/data/content/*.md` — authored chapter markdown, one file per module id.
-  Eight courses ship complete, including `sql-analytics` (`m1`–`m8`), `joins`
-  (`j1`–`j3`), `subqueries` (`q1`–`q4`), `plans` (`p1`–`p8`), `sqlite-essentials`,
-  `sqlite-in-production`, and `postgres-to-sqlite`. The list of record is
-  `web/src/data/curriculum.ts` (`COURSES`). See `docs/content-authoring.md`.
-- `src/state/store.tsx` — the single provider; `useStore()` returns the
+- `src/data/content/*.md`: authored chapter markdown, one file per module id.
+  **Eight courses, 52 chapters** ship complete: `sql-analytics` (`m1`–`m9`),
+  `joins` (`j1`–`j3`), `subqueries` (`q1`–`q4`), `plans` (`p1`–`p8`),
+  `foundations` (`f1`–`f7`), `sqlite-essentials` (`s1`–`s7`),
+  `sqlite-in-production` (`r1`–`r7`), `postgres-to-sqlite` (`x1`–`x7`). The list
+  of record is `web/src/data/curriculum.ts` (`COURSES`). See
+  `docs/content-authoring.md`.
+- `src/state/store.tsx`: the single provider; `useStore()` returns the
   exported `StoreValue`.
-- `src/lib/markdown.ts` — markdown to sanitised HTML (DOMPurify); fenced
+- `src/lib/markdown.ts`: markdown to sanitised HTML (DOMPurify); fenced
   ```mermaid blocks render to SVG in-browser via mermaid `securityLevel: 'strict'`.
-- `src/lib/` — pure derivations (`model.ts`, `progress.ts`, `pipeline.ts`).
-- `src/components/` — screens and UI. Presentational; no direct `fetch`.
+- `src/lib/`: pure derivations (`model.ts`, `progress.ts`, `pipeline.ts`).
+- `src/components/`: screens and UI. Presentational; no direct `fetch`.
+- `oxlint.config.ts`: the rule severities for `npm run lint`, each with its
+  reason. Every rule that is off says why.
+- `tools/oxlint/anti-slop/`: the vendored anti-slop rules. `PROVENANCE.md`
+  records the upstream revision.
 
-`VITE_API_MODE` accepts `pglite` (default), `mock`, `http`; `http` also reads
+`VITE_API_MODE` accepts `pglite` (default) or `http`; `http` also reads
 `VITE_API_BASE` (default `http://localhost:8080`) for the Go gateway. Docker is
-not required for the default flow — PGlite runs in the browser tab.
+not required for the default flow, because PGlite runs in the browser tab.
 
 ## Effect
 
@@ -51,5 +56,11 @@ Effect v4. When unsure of an API, read the vendored source at
 
 ```sh
 npm run typecheck   # tsc --noEmit, strict
+npm run lint        # oxlint + the vendored anti-slop rules
 npm run build
+npm run doctor      # React Doctor diagnostics; informational, not a gate
 ```
+
+`oxlint.config.ts` decides each rule's severity and says why. The rules
+themselves are vendored at `tools/oxlint/anti-slop/`, so a rule can be read and
+changed here instead of tracked upstream.

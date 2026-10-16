@@ -222,9 +222,7 @@ export default function TablesDrawer() {
               ? 'Checking the execution environment…'
               : env?.writable
                 ? 'Your own database. Writes are kept for this session until you reset.'
-                : s.api.mode === 'mock'
-                  ? 'Canned results. There is no database to change, and nothing to reset.'
-                  : 'The shared dataset. Your SQL cannot change it.'}
+                : 'The shared dataset. Your SQL cannot change it.'}
           </p>
           {resetStep === 'idle' ? (
             <div style={{ marginTop: 10 }}>

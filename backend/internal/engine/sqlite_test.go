@@ -19,14 +19,10 @@ import (
 )
 
 // SQLiteExecutor must satisfy the same seam as the PostgreSQL engine, including
-// the two optional interfaces engine.Execute consults for the result's dialect
-// and engine labels: that is the whole point of M6 step 4, and a compile-time
+// the capability methods engine.Execute reads for the result's dialect and
+// engine labels: that is the whole point of M6 step 4, and a compile-time
 // assertion is the cheapest way to keep it true.
-var (
-	_ Executor        = (*SQLiteExecutor)(nil)
-	_ Dialecter       = (*SQLiteExecutor)(nil)
-	_ LabeledExecutor = (*SQLiteExecutor)(nil)
-)
+var _ Executor = (*SQLiteExecutor)(nil)
 
 /* ---------- fixtures ---------- */
 
@@ -400,7 +396,8 @@ func TestSQLiteExecuteOwnsTheRowCap(t *testing.T) {
 		t.Fatalf("status = %q (%v), want succeeded: the row cap is a soft cap", qr.Status, qr.Error)
 	}
 	// A result produced by SQLite must say so: engine comes from the executor
-	// (LabeledExecutor) and dialect from Dialecter, not from a default.
+	// (Executor.EngineLabel) and dialect from Executor.Dialect, not from a
+	// default.
 	if !strings.HasPrefix(qr.Engine, "SQLite 3.") {
 		t.Errorf("engine = %q, want the SQLite adapter's own label", qr.Engine)
 	}
@@ -1065,11 +1062,11 @@ func TestSQLiteMultiStatementSubmissionCannotWrite(t *testing.T) {
 // gap the SQLite adapter used to document.
 //
 // execute.go's classify is the PostgreSQL SQLSTATE table with a runtime
-// catch-all, so before the ErrorClassifier hook a SQLite syntax error reached
-// the learner as QUERY_RUNTIME_ERROR — advice about the wrong thing, because
-// "look at your SQL" is only useful for a parse failure. Execute now asks the
-// executor first (engine.ErrorClassifier), so the dialect profile's verdict is
-// what the learner reads, and this test asserts the two agree.
+// catch-all, so before Executor.ClassifyError existed a SQLite syntax error
+// reached the learner as QUERY_RUNTIME_ERROR — advice about the wrong thing,
+// because "look at your SQL" is only useful for a parse failure. Execute now
+// asks the executor first, so the dialect profile's verdict is what the learner
+// reads, and this test asserts the two agree.
 func TestSQLiteSyntaxErrorThroughExecuteIsSyntaxError(t *testing.T) {
 	ex := sqliteExecutor(t, sqliteDatasetFile(t))
 
@@ -1250,6 +1247,12 @@ func TestSQLiteVersionReadyAndStatsChecks(t *testing.T) {
 	if got, want := DialectOf(ex), "sqlite"; got != want {
 		t.Errorf("DialectOf = %q, want %q", got, want)
 	}
+	// Diagnostics returns nil, which is what the old probe fell back to: with no
+	// server-side session to describe, /diagnostics leaves its learner block out
+	// rather than publishing fields this engine cannot measure.
+	if d := ex.Diagnostics(ctx); d != nil {
+		t.Errorf("Diagnostics = %v, want nil so /diagnostics omits the learner block", d)
+	}
 
 	if err := ex.Close(); err != nil {
 		t.Fatalf("Close: %v", err)
@@ -1310,13 +1313,13 @@ func TestBlankSQLRefusalNamesTheEngineNotJustTheDialect(t *testing.T) {
 func TestIsBlankSQLStripsBlockComments(t *testing.T) {
 	blank := []string{"", "  \t\n", "-- x", "/* x */", " /* a */ -- b\n", "/**/"}
 	for _, s := range blank {
-		if !isBlankSQL(s) {
+		if !IsBlankSQL(s) {
 			t.Errorf("isBlankSQL(%q) = false, want true", s)
 		}
 	}
 	notBlank := []string{"SELECT 1", "/* c */ SELECT 1", "SELECT '/* not a comment */'", "-- x\nSELECT 1"}
 	for _, s := range notBlank {
-		if isBlankSQL(s) {
+		if IsBlankSQL(s) {
 			t.Errorf("isBlankSQL(%q) = true, want false", s)
 		}
 	}

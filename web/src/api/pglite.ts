@@ -2,7 +2,7 @@ import type { PGliteInterface } from '@electric-sql/pglite';
 import { perfSql, schemaSql, seedSql } from './dataset';
 import { seedContentDocs } from './content';
 import { DEFAULT_DATASET } from '../types';
-import type { ContentSection, DatasetId, Dialect, EngineCapabilities, QueryErrorShape, RowValue } from '../types';
+import type { ContentSection, DatasetId, Dialect, EngineCapabilities, QueryErrorCode, QueryErrorShape, RowValue } from '../types';
 import {
   buildPlanBundle,
   emptyEnvironment,
@@ -13,22 +13,20 @@ import {
 
 /* The real engine: PostgreSQL compiled to WebAssembly, running in the page.
 
-   This is what makes "Run" honest. The old mock adapter returned the result the
-   exercise already contained, so it never executed anything. Here every
-   statement is executed by a real Postgres server against the same schema and
-   seed the Go gateway serves.
+   This is what makes "Run" honest. Every statement runs on a real Postgres
+   server against the same schema and seed the Go gateway serves.
 
    The workspace is writable (ADR 0003). A statement runs in an ordinary
-   transaction, and a statement that succeeds is committed — so an INSERT in one
-   Run is visible to the next Run in the same session. That is what makes the
-   writing half of SQL teachable, and resetEnvironment() is how the learner gets
-   the original dataset back. A statement that manages its own transaction
-   (`BEGIN`/`COMMIT`/`ROLLBACK`) is executed exactly as written, unwrapped, so a
-   transaction chapter can be practised.
+   transaction, and the engine commits a statement that succeeds, so an INSERT
+   in one Run stays visible to the next Run in the same session. That fact
+   makes the writing half of SQL teachable, and resetEnvironment() is how the
+   learner gets the original dataset back. A statement that manages its own
+   transaction (`BEGIN`/`COMMIT`/`ROLLBACK`) runs exactly as written, unwrapped,
+   so a transaction chapter can be practised.
 
-   Postgres runs in a Web Worker (./pglite.worker.ts), so a runaway statement can
-   be terminated by the host instead of freezing the tab. Results are capped as
-   well. */
+   Postgres runs in a Web Worker (./pglite.worker.ts), so a runaway statement
+   can be terminated by the host instead of freezing the tab. Results are
+   capped as well. */
 
 export const PGLITE_ENGINE = 'PostgreSQL 18 · PGlite (in-browser)';
 
@@ -187,7 +185,7 @@ function emptyResult(): EngineResult {
   return { status: 'succeeded', columns: [], rows: [], row_count: 0, truncated: false, error: null, dialect: PGLITE_DIALECT };
 }
 
-function failed(code: string, message: string, detail?: string | null): EngineResult {
+function failed(code: QueryErrorCode, message: string, detail?: string | null): EngineResult {
   return { status: 'failed', columns: [], rows: [], row_count: 0, truncated: false, error: { code, message, detail: detail ?? null }, dialect: PGLITE_DIALECT };
 }
 
@@ -240,15 +238,14 @@ const slots: Record<DatasetId, EngineSlot> = {
  * databases" is true of the browser too.
  *
  * The suffix is per page load, so two *tabs* are two elections as well. Tabs
- * used to share an id "by construction", and that is what made the app look
- * like a mock: the tab that loses the election proxies every query to the
- * leader, so when the leader tab is reloaded or closed the follower waits on a
- * leader that will never answer. Measured in a follower tab: a single
- * `fetchModuleContent('s3')` was still pending after 53 s, all 52 reading
- * documents never arrived, and every lesson rendered the short curriculum prose
- * in place of the authored chapter — with no error anywhere. Sharing one
- * in-memory database between tabs buys nothing (there is no file behind it) and
- * costs exactly that, so each tab takes its own. */
+ * used to share an id "by construction". The tab that loses an election then
+ * proxies every query to the leader, so when the leader tab is reloaded or
+ * closed the follower waits on a leader that will never answer. Measured in a
+ * follower tab: a single `fetchModuleContent('s3')` was still pending after
+ * 53 s, all 52 reading documents never arrived, and every lesson rendered the
+ * short curriculum prose in place of the authored chapter, with no error
+ * anywhere. Sharing one in-memory database between tabs buys nothing (there is
+ * no file behind it) and costs exactly that, so each tab takes its own. */
 const TAB_ID = Math.random().toString(36).slice(2, 10);
 const WORKER_ID: Record<DatasetId, string> = {
   commerce: `querycraft-dataset-commerce:${TAB_ID}`,
@@ -267,7 +264,7 @@ export function engineCapabilities(): EngineCapabilities | null {
   if (placement === null) return null;
   /* `writable` is what lets the UI offer EXPLAIN ANALYZE (ADR 0003); `explain`
      is the plan capability itself. The page engine is a real PostgreSQL, so it
-     can do both — unlike the mock adapter, which can do neither. */
+     can do both. */
   return {
     placement,
     hardTimeout: placement === 'worker',
