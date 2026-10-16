@@ -198,6 +198,42 @@ re-verified with the full gates; two commits `542c4808c`, `18c13a94e`):
 - **R2#3 (flake) — fixed.** The goroutine-count test now asserts "no per-call
   leak" instead of an exact baseline, which is inherently non-deterministic.
 
+**Reviewer 3 (Go internals) — completed; findings verified, high-value ones fixed
+in `8f2f4dd` (engine layer).** Real faults fixed:
+
+- **Operator config silently ignored (measured).** `Execute` re-merged
+  `DefaultLimits()`, which clamps *down*, so `QC_MAX_ROWS=2000` ran at the
+  compiled 500. Added `Limits.Fill` (fills unset, never lowers); `Execute` uses
+  it, the caller's `Merge` still enforces request-vs-server. Proved with a test
+  that drives `Execute` for 600 rows — **it reads 500 with the old code**.
+- **Contract honesty:** the blank-SQL refusal hardcoded `engine=postgresql`
+  while naming `dialect=sqlite`; both now come from the executor.
+- **Interface contract:** `Explain` used `classify()` not `classifyFor()`, so a
+  dialect with its own error vocabulary would never be consulted.
+- **Adapter parity:** `isBlankSQL` stripped `--` but not `/* */`, so
+  `/* nothing */` was `EMPTY_QUERY` in the browser and a syntax error over HTTP.
+- **`Facts.ResetAt` was structurally always zero** — the field was read, never
+  written (reset drops the environment that would hold it). Now recorded per
+  account and read by `Facts`.
+
+Go-internals findings recorded but deferred (real, not v1-breaking): #4 (`Values`
+path skips `sqliteErrorOf` on a scan error), #6 (envdb holds one mutex across the
+pool connect + probe — F5, the brief's addition is that the pool/probe half does
+not need the lock), #7 (perf template never pre-warmed despite its comment), #8
+(`ReapEnvironmentDatabases` not wired), #9 (`eval` keeps boolean+detailed
+grading pairs, and production runs the detailed one), #10 (`dataset/template.go`
+exports a test-only surface), #11 (`parseSQLiteDSN` unreachable), #13 (`classify`
+`ctx` param unused), plus taste items (a mojibake in `metrics.go:311`).
+
+Explicitly protected: `sqlite_raw.go` (measured DATE defect), the single
+`Execute` cap path, the classify table, dialect-as-data, ADR 0002/0003/0004/0006.
+
+**Multi-agent review pass complete.** Five reviewers, every finding re-verified in
+source before acting, all five areas reviewed. Fixes landed across four commits
+(`542c4808c`, `18c13a94e`, `ccf14b2bd`, `118eee28e`, `27d3c8dd1`); `make test`
+and `make verify` green on the final tree. Deferred items are listed above and in
+the sections below, as a deliberate post-v1 tidy rather than dropped.
+
 **Deliberately deferred from Reviewers 1–2 (recorded, not silently dropped):**
 R1-F3 (malformed JSON returns query error codes on every route), R1-F5 (OpenAPI
 per-route security/401 + status-schema drift), R1-F7 (route-shape asymmetry),
