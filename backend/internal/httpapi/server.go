@@ -290,21 +290,54 @@ func (s *Server) limits(l engine.Limits) engine.Limits {
 
 const maxBodyBytes = 8 << 20 // 8 MiB request cap
 
+// requestErrorCode returns the code a route answers for an unreadable body.
+// A statement route's body IS a statement, so it keeps the query vocabulary
+// (EMPTY_QUERY / QUERY_SYNTAX_ERROR). Every other route has no statement, and
+// answering e.g. /tutor with EMPTY_QUERY put a query code on a route whose
+// client branches on the AI error enum. The codes chosen already exist in the
+// gateway's closed set, so no new code is invented.
+func requestErrorCode(r *http.Request, empty bool) string {
+	switch {
+	case isStatementRoute(r):
+		if empty {
+			return "EMPTY_QUERY"
+		}
+		return "QUERY_SYNTAX_ERROR"
+	case strings.HasPrefix(r.URL.Path, "/courses/"), strings.HasPrefix(r.URL.Path, "/challenges/"), r.URL.Path == "/tutor":
+		return "AI_INVALID_REQUEST"
+	case strings.HasPrefix(r.URL.Path, "/auth/"):
+		return "AUTH_INVALID_INPUT"
+	default:
+		return "INVALID_REQUEST"
+	}
+}
+
 func readJSON(w http.ResponseWriter, r *http.Request, dst any) bool {
 	dec := json.NewDecoder(io.LimitReader(r.Body, maxBodyBytes))
 	if err := dec.Decode(dst); err != nil {
-		if errors.Is(err, io.EOF) {
-			writeJSON(w, http.StatusBadRequest, map[string]any{
-				"error": map[string]string{"code": "EMPTY_QUERY", "message": "Request body is empty."},
-			})
-			return false
+		empty := errors.Is(err, io.EOF)
+		message := "Malformed JSON: " + err.Error()
+		if empty {
+			message = "Request body is empty."
 		}
 		writeJSON(w, http.StatusBadRequest, map[string]any{
-			"error": map[string]string{"code": "QUERY_SYNTAX_ERROR", "message": "Malformed JSON: " + err.Error()},
+			"ok":    false,
+			"error": map[string]string{"code": requestErrorCode(r, empty), "message": message},
 		})
 		return false
 	}
 	return true
+}
+
+// isStatementRoute reports whether the request's route is one whose body is
+// itself a SQL statement, and therefore one whose unreadable-body refusal should
+// keep the query error vocabulary.
+func isStatementRoute(r *http.Request) bool {
+	switch r.URL.Path {
+	case "/query", "/answers/evaluate", "/explain":
+		return true
+	}
+	return false
 }
 
 // writeJSON writes a JSON body, and — when the body carries a stable error code

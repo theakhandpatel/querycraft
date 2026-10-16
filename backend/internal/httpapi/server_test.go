@@ -534,3 +534,61 @@ func mustDecode(t *testing.T, w *httptest.ResponseRecorder, dst any) {
 		t.Fatalf("decode %q: %v", w.Body.String(), err)
 	}
 }
+
+// TestUnreadableBodyCodesMatchTheRoute pins R1-F3: a non-statement route must
+// not answer an unreadable body with a SQL code. readJSON used to return
+// EMPTY_QUERY / QUERY_SYNTAX_ERROR on every route, so bad JSON to /tutor carried
+// a code absent from the AI error enum the client branches on.
+func TestUnreadableBodyCodesMatchTheRoute(t *testing.T) {
+	s := newTestServer(&fakeExecutor{})
+	token := signupUser(t, s, "bodycodes@example.com")
+	cases := []struct {
+		path, body, wantCode string
+	}{
+		// A statement route's body IS a statement: keep the query vocabulary.
+		{"/query", "", "EMPTY_QUERY"},
+		{"/query", "{not json", "QUERY_SYNTAX_ERROR"},
+		{"/answers/evaluate", "{oops", "QUERY_SYNTAX_ERROR"},
+		{"/explain", "", "EMPTY_QUERY"},
+		// A non-statement route gets a request-level code from its own domain.
+		{"/auth/login", "", "AUTH_INVALID_INPUT"},
+		{"/auth/signup", "{broken", "AUTH_INVALID_INPUT"},
+	}
+	for _, tc := range cases {
+		w := do(t, s, http.MethodPost, tc.path, tc.body)
+		if w.Code != http.StatusBadRequest {
+			t.Errorf("%s %q: status = %d, want 400", tc.path, tc.body, w.Code)
+			continue
+		}
+		var out struct {
+			Error struct {
+				Code string `json:"code"`
+			} `json:"error"`
+		}
+		mustDecode(t, w, &out)
+		if out.Error.Code != tc.wantCode {
+			t.Errorf("%s %q: code = %q, want %q", tc.path, tc.body, out.Error.Code, tc.wantCode)
+		}
+	}
+
+	// The AI routes require a session, then answer the body with an AI code.
+	for _, tc := range []struct{ path, body string }{
+		{"/tutor", ""},
+		{"/courses/generate", "{broken"},
+	} {
+		w := doAs(t, s, token, http.MethodPost, tc.path, tc.body)
+		if w.Code != http.StatusBadRequest {
+			t.Errorf("%s %q: status = %d, want 400; body = %s", tc.path, tc.body, w.Code, w.Body.String())
+			continue
+		}
+		var out struct {
+			Error struct {
+				Code string `json:"code"`
+			} `json:"error"`
+		}
+		mustDecode(t, w, &out)
+		if out.Error.Code != "AI_INVALID_REQUEST" {
+			t.Errorf("%s %q: code = %q, want AI_INVALID_REQUEST", tc.path, tc.body, out.Error.Code)
+		}
+	}
+}
