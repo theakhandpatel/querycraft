@@ -104,6 +104,42 @@ and separate found from assumed; and end with a "deliberate and fine — do not
 touch" list so a later pass does not undo deliberate choices. Status: running,
 tree untouched.
 
+**Reviewer 1 (Go API surface + contracts) — completed; findings re-verified in
+source here before recording.** Real faults:
+
+- **F1 (security, real): `POST /challenges/{id}/patches/{patchID}` ignores the
+  route's challenge id.** `handlePatch` (`httpapi/ai.go`) sets
+  `dec.PatchID = r.PathValue("patchID")` and never reads `id`; `applyPatch`
+  (`ai/review.go`) loads the patch and applies it to `patch.ChallengeID`. So a
+  patch belonging to challenge B can be applied through the route for A. Fix:
+  bind the patch to the route's challenge and reject a mismatch.
+- **F2 (real): patch approval is not atomic with the artifact write.**
+  `ApprovePatch` (`review.go:307`) records the approval **before**
+  `SaveChallenge` (`:313`); a failed save reports failure but leaves the patch
+  approved, and two concurrent approvals can both pass verification. Fix: one
+  transactional, version-checked depot operation.
+- **F3 (real): malformed JSON returns query-error codes on every route.**
+  `readJSON` (`server.go`) answers `EMPTY_QUERY` / `QUERY_SYNTAX_ERROR` for any
+  endpoint, so bad JSON to `/tutor` gets a code absent from the AI error enum.
+- **F4 (real): `/capabilities` reports a false isolation mode.** `handlers.go`
+  says `"isolation": "read_only_tx"`, but signed-in statements run in writable
+  per-account workspaces (ADRs 0003/0006) — cosmetic-but-dishonest.
+- **F6 (real contract fault): `evaluation.schema.json:29` omits
+  `DIALECT_MISMATCH`** while `query-result.schema.json:24` has it, though
+  `/answers/evaluate` can return it — a contract the gateway can violate.
+- F5 (OpenAPI drift: missing per-route `security`/401 on `/courses/generate`,
+  `AICourseRecord.status` lacking `building`, AI codes missing from an error
+  enum), F7 (route-shape asymmetry: `GET /challenges/{id}` bare vs
+  `GET /courses/{id}` `{ok,course}`; reset-by-delete vs DELETE), F8 (`Store` is
+  27 methods; `Courses`/`Runs` load every owner then filter in the handler) —
+  verified as described, worth fixing, not v1-breaking.
+- Assumed (not confirmed): challenge lists/reads/deletes are not owner-filtered
+  (courses/runs are) — either add owner-scoped depot ops or document challenges
+  as a shared catalog.
+- Called deliberate and fine: separate AI error vocabulary (ADR 0005),
+  writable-workspace model (ADR 0003/0006), Postgres `app` schema, the
+  provider-neutral AI interface.
+
 ### Parallel worktrees (owner-set, 2026-10-16)
 
 The owner asked for parallel work in separate worktrees, merged when done.
