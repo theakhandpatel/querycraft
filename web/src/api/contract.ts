@@ -37,7 +37,10 @@ export const EvaluationSchema = Schema.Struct({
   qr: QueryResultSchema,
   checks: Schema.Array(CheckResultSchema),
   passed: Schema.Boolean,
-  duration_ms: Schema.Union([Schema.Number, Schema.String]),
+  /* Milliseconds as a string, matching contracts/evaluation.schema.json and what
+     both the gateway and the browser adapters now emit. The union that was here
+     existed only because the adapters disagreed. */
+  duration_ms: Schema.String,
 });
 
 export const decodeQueryResult = (u: unknown): Effect.Effect<QueryResult, Schema.SchemaError> =>

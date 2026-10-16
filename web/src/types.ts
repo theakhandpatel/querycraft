@@ -292,7 +292,10 @@ export interface Evaluation {
   qr: QueryResult;
   checks: CheckResult[];
   passed: boolean;
-  duration_ms: number | string;
+  /** Milliseconds, formatted as a string by every adapter (the gateway emits
+      "8.4"). It was a number|string union, which only papered over the browser
+      adapters disagreeing with the gateway; both now emit the same string. */
+  duration_ms: string;
 }
 
 export interface TablesResponse {

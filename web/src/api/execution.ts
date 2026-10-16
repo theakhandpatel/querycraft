@@ -132,6 +132,11 @@ type NoteFn = (method: string, path: string, status: number, ms: number) => void
 
 const nowMs = (): number => (typeof performance !== 'undefined' && performance.now ? performance.now() : Date.now());
 const round = (n: number): number => Number(n.toFixed(1));
+/* The OUTER Evaluation.duration_ms is a string on the contract (the gateway
+   emits milliseconds as "8.4"); the QueryResult's own duration_ms is a number.
+   This formats the outer one the way the gateway does, so the two adapters agree
+   and the TS type does not need a number|string union. */
+const secs = (n: number): string => round(n).toFixed(1);
 const rid = (): string => 'rq_' + Math.random().toString(36).slice(2, 8);
 
 /* ---------- bearer token storage ----------
@@ -419,7 +424,7 @@ export function mockLayer(config: ApiConfig = MOCK_CONFIG, note: NoteFn = () => 
         const t0 = nowMs();
         yield* Effect.sleep(delayMs(config));
         if (datasetFor({ dataset: cell.dataset, course: cell.course, block: cell.item }) === 'perf') {
-          return { qr: perfRefusal('/answers/evaluate'), checks: [], passed: false, duration_ms: 0 };
+          return { qr: perfRefusal('/answers/evaluate'), checks: [], passed: false, duration_ms: '0' };
         }
         const out = engineExecute(sql, cell.item);
         const checks = (cell.item?.checks ?? []).map((chk) => {
@@ -437,7 +442,7 @@ export function mockLayer(config: ApiConfig = MOCK_CONFIG, note: NoteFn = () => 
           qr: { ...out, request_id: rid(), engine: config.engine, dialect: config.dialect, duration_ms: round(ms) },
           checks,
           passed: out.status === 'succeeded' && checks.every((c) => c.ok),
-          duration_ms: round(ms),
+          duration_ms: secs(ms),
         };
       }),
     getTables: (dataset = DEFAULT_DATASET) =>
@@ -740,7 +745,7 @@ export function pgliteLayer(config: ApiConfig = PGLITE_CONFIG, note: NoteFn = ()
         const qr = { ...out, request_id: rid(), engine: out.engine ?? config.engine, dialect: out.dialect, duration_ms: round(ms) };
 
         if (out.status !== 'succeeded') {
-          return { qr, checks: [], passed: false, duration_ms: round(ms) };
+          return { qr, checks: [], passed: false, duration_ms: secs(ms) };
         }
 
         const actual = { columns: out.columns.map((c) => c.name), rows: out.rows };
@@ -774,7 +779,7 @@ export function pgliteLayer(config: ApiConfig = PGLITE_CONFIG, note: NoteFn = ()
         }
 
         const checks = checksFromComparison(comparison, block?.contract);
-        return { qr, checks, passed: comparison.ok, duration_ms: round(ms) };
+        return { qr, checks, passed: comparison.ok, duration_ms: secs(ms) };
       }),
     getTables: (dataset = DEFAULT_DATASET, dialect: Dialect = DEFAULT_DIALECT) =>
       Effect.gen(function* () {
