@@ -302,6 +302,10 @@ const openAPISpec = `{
           "content": {"application/json": {"schema": {"$ref": "#/components/schemas/ProgressSnapshot"}}}
         },
         "responses": {
+          "401": {
+            "description": "No session (AUTH_REQUIRED).",
+            "content": {"application/json": {"schema": {"$ref": "#/components/schemas/ErrorEnvelope"}}}
+          },
           "200": {
             "description": "Snapshot saved.",
             "content": {"application/json": {"schema": {"$ref": "#/components/schemas/OkResponse"}}}
@@ -328,6 +332,10 @@ const openAPISpec = `{
           "content": {"application/json": {"schema": {"$ref": "#/components/schemas/EventRequest"}}}
         },
         "responses": {
+          "401": {
+            "description": "No session (AUTH_REQUIRED).",
+            "content": {"application/json": {"schema": {"$ref": "#/components/schemas/ErrorEnvelope"}}}
+          },
           "202": {
             "description": "Event accepted.",
             "content": {"application/json": {"schema": {"$ref": "#/components/schemas/EventResponse"}}}
@@ -410,6 +418,10 @@ const openAPISpec = `{
         "description": "A course that belongs to another learner is reported as 404, never 403, so its existence cannot be confirmed.",
         "parameters": [{"name": "id", "in": "path", "required": true, "schema": {"type": "string"}}],
         "responses": {
+          "401": {
+            "description": "No session (AUTH_REQUIRED).",
+            "content": {"application/json": {"schema": {"$ref": "#/components/schemas/ErrorEnvelope"}}}
+          },
           "200": {
             "description": "The stored record.",
             "content": {"application/json": {"schema": {"$ref": "#/components/schemas/AICourseResponse"}}}
@@ -432,6 +444,10 @@ const openAPISpec = `{
         "description": "Removes the generated plan only. Learner attempts and progress are the learner's data and are not touched. A course that belongs to another learner is reported as 404, never 403.",
         "parameters": [{"name": "id", "in": "path", "required": true, "schema": {"type": "string"}}],
         "responses": {
+          "401": {
+            "description": "No session (AUTH_REQUIRED).",
+            "content": {"application/json": {"schema": {"$ref": "#/components/schemas/ErrorEnvelope"}}}
+          },
           "200": {
             "description": "Removed.",
             "content": {"application/json": {"schema": {"$ref": "#/components/schemas/OkResponse"}}}
@@ -459,6 +475,10 @@ const openAPISpec = `{
           {"name": "Prefer", "in": "header", "required": false, "schema": {"type": "string"}, "description": "Send a Prefer header of 'respond-async' (or pass async=1) to get a 202 with a job id instead of waiting for the envelope."}
         ],
         "responses": {
+          "401": {
+            "description": "No session (AUTH_REQUIRED).",
+            "content": {"application/json": {"schema": {"$ref": "#/components/schemas/ErrorEnvelope"}}}
+          },
           "202": {
             "description": "The continuation was accepted and runs in the background. Poll GET /generation/{id}.",
             "content": {"application/json": {"schema": {"$ref": "#/components/schemas/AIJobSubmitted"}}}
@@ -575,6 +595,10 @@ const openAPISpec = `{
         "summary": "Read one stored challenge with the evidence that admitted it.",
         "parameters": [{"name": "id", "in": "path", "required": true, "schema": {"type": "string"}}],
         "responses": {
+          "401": {
+            "description": "No session (AUTH_REQUIRED).",
+            "content": {"application/json": {"schema": {"$ref": "#/components/schemas/ErrorEnvelope"}}}
+          },
           "200": {
             "description": "The stored record.",
             "content": {"application/json": {"schema": {"$ref": "#/components/schemas/AIRecord"}}}
@@ -595,6 +619,10 @@ const openAPISpec = `{
         "description": "Removes the generated definition only. Learner attempts are the learner's data and are not touched.",
         "parameters": [{"name": "id", "in": "path", "required": true, "schema": {"type": "string"}}],
         "responses": {
+          "401": {
+            "description": "No session (AUTH_REQUIRED).",
+            "content": {"application/json": {"schema": {"$ref": "#/components/schemas/ErrorEnvelope"}}}
+          },
           "200": {
             "description": "Removed.",
             "content": {"application/json": {"schema": {"$ref": "#/components/schemas/OkResponse"}}}
@@ -619,6 +647,10 @@ const openAPISpec = `{
           "content": {"application/json": {"schema": {"$ref": "#/components/schemas/AICritiqueRequest"}}}
         },
         "responses": {
+          "401": {
+            "description": "No session (AUTH_REQUIRED).",
+            "content": {"application/json": {"schema": {"$ref": "#/components/schemas/ErrorEnvelope"}}}
+          },
           "200": {
             "description": "A critique.",
             "content": {"application/json": {"schema": {"$ref": "#/components/schemas/AICritiqueResponse"}}}
@@ -643,6 +675,10 @@ const openAPISpec = `{
           "content": {"application/json": {"schema": {"$ref": "#/components/schemas/AIDefectReport"}}}
         },
         "responses": {
+          "401": {
+            "description": "No session (AUTH_REQUIRED).",
+            "content": {"application/json": {"schema": {"$ref": "#/components/schemas/ErrorEnvelope"}}}
+          },
           "200": {
             "description": "A verdict, with evidence for either outcome.",
             "content": {"application/json": {"schema": {"$ref": "#/components/schemas/AIDefectVerdict"}}}
@@ -666,6 +702,10 @@ const openAPISpec = `{
           "content": {"application/json": {"schema": {"$ref": "#/components/schemas/AIPatchDecision"}}}
         },
         "responses": {
+          "401": {
+            "description": "No session (AUTH_REQUIRED).",
+            "content": {"application/json": {"schema": {"$ref": "#/components/schemas/ErrorEnvelope"}}}
+          },
           "200": {
             "description": "The decision was applied.",
             "content": {"application/json": {"schema": {"$ref": "#/components/schemas/AIPatchResult"}}}
@@ -689,6 +729,10 @@ const openAPISpec = `{
           "content": {"application/json": {"schema": {"$ref": "#/components/schemas/AITutorRequest"}}}
         },
         "responses": {
+          "401": {
+            "description": "No session (AUTH_REQUIRED).",
+            "content": {"application/json": {"schema": {"$ref": "#/components/schemas/ErrorEnvelope"}}}
+          },
           "200": {
             "description": "A hint.",
             "content": {"application/json": {"schema": {"$ref": "#/components/schemas/AITutorResponse"}}}
@@ -817,6 +861,10 @@ const openAPISpec = `{
         "summary": "Revoke the caller's session token.",
         "security": [{"bearerAuth": []}],
         "responses": {
+          "401": {
+            "description": "No session (AUTH_REQUIRED).",
+            "content": {"application/json": {"schema": {"$ref": "#/components/schemas/ErrorEnvelope"}}}
+          },
           "200": {
             "description": "Token revoked (an anonymous call is also a no-op 200).",
             "content": {"application/json": {"schema": {"$ref": "#/components/schemas/OkResponse"}}}

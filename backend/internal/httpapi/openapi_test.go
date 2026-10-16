@@ -120,6 +120,16 @@ func TestDocumentedSecurityMatchesTheHandlers(t *testing.T) {
 		if len(body.Security) == 0 {
 			t.Errorf("%s %s requires a session but declares no security", op.method, op.path)
 		}
+		// A secured route must also document the 401 a client will see without a
+		// token; the set that declared security but not 401 was the drift here.
+		var full struct {
+			Responses map[string]json.RawMessage `json:"responses"`
+		}
+		if err := json.Unmarshal(raw, &full); err == nil {
+			if _, ok := full.Responses["401"]; !ok {
+				t.Errorf("%s %s requires a session but documents no 401 response", op.method, op.path)
+			}
+		}
 	}
 
 	// The public routes must NOT claim a bearer requirement.
