@@ -961,3 +961,170 @@ func TestSchemaValidator(t *testing.T) {
 		}
 	})
 }
+
+/* ---------- error-code enum consistency ---------- */
+
+// TestTheQueryErrorEnumIsOneSetEverywhere closes the whole class of drift that
+// already shipped once: the closed query-error code set is hand-copied into
+// several contract files and the OpenAPI document, and each copy can fall behind
+// independently. It reads every copy from disk and asserts set equality with the
+// canonical query-result.schema.json, so adding a code in one place and not the
+// others fails here instead of at a learner.
+//
+// plan.schema.json is deliberately EXCLUDED: the plan lab refuses a foreign
+// dialect with EVALUATION_ERROR rather than DIALECT_MISMATCH (httpapi/plan.go),
+// so its error enum is intentionally the set-minus-DIALECT_MISMATCH. That
+// exception is asserted explicitly below rather than left implicit.
+func TestTheQueryErrorEnumIsOneSetEverywhere(t *testing.T) {
+	// The canonical set, from query-result.schema.json (oneOf[null,object]).
+	canonical := enumFromOneOf(t,
+		loadContract(t, "query-result.schema.json")["properties"].(map[string]any)["error"].(map[string]any))
+	canonicalSet := strings.Join(canonical, ",")
+
+	// evaluation.schema.json: nested qr.error.code (oneOf[null,object]).
+	evalErr := loadContract(t, "evaluation.schema.json")["properties"].(map[string]any)["qr"].(map[string]any)["properties"].(map[string]any)["error"].(map[string]any)
+	if got := enumFromOneOf(t, evalErr); strings.Join(got, ",") != canonicalSet {
+		t.Errorf("evaluation.schema.json qr.error.code drifted:\n got %v\n want %v", got, canonical)
+	}
+
+	// dialect.schema.json: queryResultErrorCode is a bare enum.
+	dialectErr := loadContract(t, "dialect.schema.json")["$defs"].(map[string]any)["queryResultErrorCode"].(map[string]any)
+	if got := enumOf(t, dialectErr); strings.Join(got, ",") != canonicalSet {
+		t.Errorf("dialect.schema.json queryResultErrorCode drifted:\n got %v\n want %v", got, canonical)
+	}
+
+	// The exception, asserted rather than left implicit: plan.schema.json omits
+	// DIALECT_MISMATCH on purpose (the plan lab refuses a foreign dialect with
+	// EVALUATION_ERROR, httpapi/plan.go), so it must equal canonical minus that
+	// one code — no more, no less.
+	planCodes := planErrorCodes(t)
+	want := make([]string, 0, len(canonical))
+	for _, c := range canonical {
+		if c != "DIALECT_MISMATCH" {
+			want = append(want, c)
+		}
+	}
+	if strings.Join(planCodes, ",") != strings.Join(want, ",") {
+		t.Errorf("plan.schema.json error enum is neither the canonical set nor that set minus DIALECT_MISMATCH:\n got %v\n want %v", planCodes, want)
+	}
+
+	// The OpenAPI document embeds two copies: QueryError (the QueryResult shape)
+	// and ErrorEnvelope (adds NON-query codes). QueryError must equal canonical;
+	// ErrorEnvelope must be a superset of it.
+	var spec map[string]any
+	if err := json.Unmarshal([]byte(openAPISpec), &spec); err != nil {
+		t.Fatalf("decode the OpenAPI document: %v", err)
+	}
+	schemas := spec["components"].(map[string]any)["schemas"].(map[string]any)
+
+	qrCode := schemas["QueryError"].(map[string]any)["properties"].(map[string]any)["code"].(map[string]any)
+	if got := enumOf(t, qrCode); strings.Join(got, ",") != canonicalSet {
+		t.Errorf("OpenAPI QueryError.code drifted from query-result.schema.json:\n got %v\n want %v", got, canonical)
+	}
+
+	envCodes := schemas["ErrorEnvelope"].(map[string]any)["properties"].(map[string]any)["error"].(map[string]any)["properties"].(map[string]any)["code"].(map[string]any)
+	envSet := map[string]bool{}
+	for _, c := range enumOf(t, envCodes) {
+		envSet[c] = true
+	}
+	for _, c := range canonical {
+		if !envSet[c] {
+			t.Errorf("OpenAPI ErrorEnvelope.code is missing the canonical code %s", c)
+		}
+	}
+}
+
+// planErrorCodes reads the plan schema's query-error enum, which lives under a
+// nested error object rather than a $defs entry.
+func planErrorCodes(t *testing.T) []string {
+	t.Helper()
+	schema := loadContract(t, "plan.schema.json")
+	// Walk every object looking for the code enum; the plan schema nests it under
+	// properties.error.oneOf[0].properties.code.
+	var find func(v any) []string
+	find = func(v any) []string {
+		switch node := v.(type) {
+		case map[string]any:
+			if raw, ok := node["enum"].([]any); ok {
+				out := make([]string, 0, len(raw))
+				for _, e := range raw {
+					s, _ := e.(string)
+					out = append(out, s)
+				}
+				if containsString(out, "QUERY_SYNTAX_ERROR") {
+					sort.Strings(out)
+					return out
+				}
+			}
+			for _, child := range node {
+				if got := find(child); got != nil {
+					return got
+				}
+			}
+		case []any:
+			for _, child := range node {
+				if got := find(child); got != nil {
+					return got
+				}
+			}
+		}
+		return nil
+	}
+	got := find(schema)
+	if got == nil {
+		t.Fatal("plan.schema.json has no query-error enum")
+	}
+	return got
+}
+
+func containsString(list []string, want string) bool {
+	for _, s := range list {
+		if s == want {
+			return true
+		}
+	}
+	return false
+}
+
+// enumFromOneOf reads the code enum from an error schema shaped
+// oneOf: [null, {properties.code.enum}].
+func enumFromOneOf(t *testing.T, errSchema map[string]any) []string {
+	t.Helper()
+	branches, ok := errSchema["oneOf"].([]any)
+	if !ok {
+		t.Fatalf("error schema has no oneOf: %v", errSchema)
+	}
+	for _, b := range branches {
+		obj, ok := b.(map[string]any)
+		if !ok {
+			continue
+		}
+		props, ok := obj["properties"].(map[string]any)
+		if !ok {
+			continue
+		}
+		code, ok := props["code"].(map[string]any)
+		if !ok {
+			continue
+		}
+		return enumOf(t, code)
+	}
+	t.Fatalf("no code enum under the error oneOf: %v", errSchema)
+	return nil
+}
+
+// enumOf reads a sorted copy of a schema's enum.
+func enumOf(t *testing.T, schema map[string]any) []string {
+	t.Helper()
+	raw, ok := schema["enum"].([]any)
+	if !ok {
+		t.Fatalf("schema has no enum: %v", schema)
+	}
+	out := make([]string, 0, len(raw))
+	for _, v := range raw {
+		s, _ := v.(string)
+		out = append(out, s)
+	}
+	sort.Strings(out)
+	return out
+}
