@@ -82,6 +82,28 @@ isolation, the full tree, real CPU load, shuffled order, or 20× repeated
 forcing another guessing round. Not claimed fixed; watched, not dismissed, and
 the F4 eviction path (`MaxAccounts` 8) cannot be the cause in a 2-account test.
 
+### Multi-agent review pass (owner-set, 2026-10-16)
+
+The owner asked for a code review / quality / readability / simplification /
+API-standardisation / maintainability pass, with multiple agents on different
+parts. Five **read-only** reviewers were dispatched in parallel, each owning a
+disjoint area so their findings can be consolidated without conflicts (they
+report; they do not edit — the safe changes get applied here under the gates):
+
+| Reviewer | Area | Model |
+| --- | --- | --- |
+| Go internals | `engine/ eval/ perf/ dataset/ dialect/ envdb/ localdb/ metrics/` | Haiku 5.5 (Codex), `max` |
+| Go API surface + contracts | `httpapi/ store/ ai/ contracts/*.json` | GPT-6-Luna (Codex), `xhigh` |
+| Frontend TypeScript | `web/src/**`, `web/scripts/` | deepseek-v4.1-flash, high |
+| Tests, scripts, build, docs | all `*_test.go`, `scripts/`, `Makefile`, `docs/` | kimi-k2.7-code, high |
+| Cross-cutting API design | the seam: contracts ↔ Go ↔ TS ↔ adapters | mimo-v2.6-pro, high |
+
+Each was told: read AGENTS.md + the ADRs before calling a settled decision a
+mistake; rank findings real-fault / worth-fixing / taste; give file:line evidence
+and separate found from assumed; and end with a "deliberate and fine — do not
+touch" list so a later pass does not undo deliberate choices. Status: running,
+tree untouched.
+
 ### Parallel worktrees (owner-set, 2026-10-16)
 
 The owner asked for parallel work in separate worktrees, merged when done.
