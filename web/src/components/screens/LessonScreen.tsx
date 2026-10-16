@@ -7,7 +7,7 @@ import DialectBadge, { useChapterDialect } from '../ui/DialectBadge';
 import { chapterOutline, lessonPercent, activeModules } from '../../lib/model';
 import { accrueStudyTime } from '../../lib/progress';
 import { scrollToNode } from '../../lib/scroll';
-import type { Block, ModalName } from '../../types';
+import type { Block } from '../../types';
 
 type OutlineBlock = Block | { type: 'list'; items: string[] };
 

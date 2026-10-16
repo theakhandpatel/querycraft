@@ -1,4 +1,3 @@
-import React from 'react';
 import Icon from '../ui/Icon';
 import Ring from '../ui/Ring';
 import DialectBadge, { useChapterDialect } from '../ui/DialectBadge';
@@ -8,7 +7,7 @@ import {
   activeModules, courseAttempts, courseDoneCount, courseExerciseTotal, coursePassed,
   exerciseIdsOfModule, lessonPercent, nextChapterIndex,
 } from '../../lib/model';
-import type { Course, CourseModule, ModalName } from '../../types';
+import type { Course, CourseModule } from '../../types';
 
 /* One chapter row's badge. It is its own component because a chapter list
    renders one badge per row and each subscribes to the learner's dialect
@@ -78,7 +77,6 @@ export default function CourseScreen() {
           <div className="lessonlist">
             {ms.map((m, i) => {
               const exs = exerciseIdsOfModule(m);
-              const done = exs.filter((id) => progress.passed[id]).length;
               const isDone = progress.done[m.id];
               return (
                 <div className={`lessonrow${isDone ? ' done' : ''}`} key={m.id}>

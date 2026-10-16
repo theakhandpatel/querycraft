@@ -3,7 +3,6 @@ import Icon from './ui/Icon';
 import { useStore } from '../state/store';
 import { MODULES } from '../data/curriculum';
 import { activeModules } from '../lib/model';
-import type { ModalName } from '../types';
 
 function Backdrop({ id, children }: { id: string; children: React.ReactNode }) {
   const s = useStore();
@@ -17,7 +16,7 @@ function Backdrop({ id, children }: { id: string; children: React.ReactNode }) {
   );
 }
 
-function Head({ eyebrow, title, sub, id }: { eyebrow: string; title: string; sub: string; id?: string }) {
+function Head({ eyebrow, title, sub }: { eyebrow: string; title: string; sub: string; id?: string }) {
   const s = useStore();
   return (
     <div className="modalhead">

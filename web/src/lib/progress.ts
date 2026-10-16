@@ -172,9 +172,15 @@ export function rebuildProgressFromEvents(p: Progress): Progress {
     p.accepted[id] = true;
   });
   p.attempts = p.events.filter((e) => e.kind === 'passed' || e.kind === 'failed').length;
+  /* `manuallyDone` carries the learner's explicit "mark chapter complete"
+     across the rebuild. Without it, recomputing `done` from passed exercises
+     wholesale dropped that signal on the next graded attempt anywhere, and a
+     chapter with no exercises could never read as done. The two are unioned:
+     done = every exercise passed OR the learner said so. */
+  const manual = p.manuallyDone || {};
   allModules().forEach((m) => {
     const exs = exerciseIdsOfModule(m);
-    p.done[m.id] = exs.length > 0 && exs.every((id) => passedIds[id]);
+    p.done[m.id] = Boolean(manual[m.id]) || (exs.length > 0 && exs.every((id) => passedIds[id]));
   });
   p.attemptsByDay = attemptsByDay(p.events);
   return p;

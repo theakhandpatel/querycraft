@@ -1,11 +1,10 @@
-import React from 'react';
 import Icon from '../ui/Icon';
 import Schema from '../Schema';
 import { useStore } from '../../state/store';
 import { COURSES, MODULES, TABLES } from '../../data/curriculum';
 import { chapterOutline, courseExerciseTotal, moduleExerciseBlocks } from '../../lib/model';
 import type { DraftReport } from '../../lib/draft';
-import type { Course, ModalName } from '../../types';
+import type { Course } from '../../types';
 
 const TABS = [
   ['overview', 'Overview'],

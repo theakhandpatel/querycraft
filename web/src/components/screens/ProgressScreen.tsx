@@ -1,4 +1,4 @@
-import React, { useState } from 'react';
+import { useState } from 'react';
 import Icon from '../ui/Icon';
 import { useStore } from '../../state/store';
 import { activeModules, courseExerciseIds, coursePassed, exerciseIdsOfModule, courseShort, findExercise } from '../../lib/model';

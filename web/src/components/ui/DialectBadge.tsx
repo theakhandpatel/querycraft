@@ -1,4 +1,4 @@
-import React, { useEffect, useState, useSyncExternalStore } from 'react';
+import { useEffect, useState, useSyncExternalStore } from 'react';
 import Icon from './Icon';
 import { useStore } from '../../state/store';
 import { dialectLabel, dialectSupported } from '../../lib/dialect';

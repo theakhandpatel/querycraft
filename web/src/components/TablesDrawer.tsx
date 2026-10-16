@@ -1,4 +1,4 @@
-import React, { useEffect, useRef, useState } from 'react';
+import { useEffect, useRef, useState } from 'react';
 import Icon from './ui/Icon';
 import Schema from './Schema';
 import { useChapterDialect } from './ui/DialectBadge';

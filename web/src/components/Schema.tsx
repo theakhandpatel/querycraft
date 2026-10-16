@@ -1,4 +1,4 @@
-import React, { useEffect, useState } from 'react';
+import { useEffect, useState } from 'react';
 import { DEFAULT_DATASET, DEFAULT_DIALECT } from '../types';
 import type { DatasetId, Dialect, ExecutionApi, TableDef } from '../types';
 

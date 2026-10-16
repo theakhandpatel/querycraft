@@ -1,4 +1,3 @@
-import React from 'react';
 import Icon from '../ui/Icon';
 import Ring from '../ui/Ring';
 import DialectBadge from '../ui/DialectBadge';

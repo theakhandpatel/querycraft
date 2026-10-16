@@ -8,7 +8,7 @@ import { gradePlan, type PlanBundle, type PlanCheck } from '../api/planContract'
 import { datasetFor } from '../lib/dataset';
 import { dialectLabel } from '../lib/dialect';
 import { servedDialects } from '../lib/dialectChoice';
-import type { Block, CheckResult, Course, CourseModule, EventKind, QueryResult } from '../types';
+import type { Block, CheckResult, Course, CourseModule, QueryResult } from '../types';
 
 type Feedback =
   | { kind: 'pending' }

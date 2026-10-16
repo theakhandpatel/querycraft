@@ -1,4 +1,3 @@
-import React from 'react';
 import Icon from '../ui/Icon';
 import { useStore } from '../../state/store';
 import ImportControl from '../ui/ImportControl';
@@ -29,6 +28,17 @@ export default function AppearanceScreen() {
       : s.engineCaps?.placement === 'none'
         ? 'hard_timeout n/a — canned results'
         : 'hard_timeout 5s (host-enforced)';
+  /* The isolation row was a hardcoded "rolled-back transaction per query",
+     which is false for the default PGlite workspace and for every signed-in
+     gateway learner — both are writable by design (ADR 0003/0006). Derive it
+     from the capability the adapter actually reports, and say "unknown" rather
+     than guessing before the engine has booted. */
+  const isolationLine =
+    !s.engineCaps
+      ? 'checking…'
+      : s.engineCaps.writable
+        ? 'writable workspace — your own database; reset restores the fixture'
+        : 'read-only — the shared dataset; writes are refused';
   return (
     <div className="content" style={{ maxWidth: 760 }}>
       <div className="pagehead">
@@ -78,7 +88,7 @@ export default function AppearanceScreen() {
         <h2>Engine &amp; storage</h2>
         <div className="reportrow"><span>Execution engine</span><span className="mono">{engineLine}</span></div>
         <div className="reportrow"><span>Deadline</span><span className="mono">{deadlineLine}</span></div>
-        <div className="reportrow"><span>Isolation</span><span>rolled-back transaction per query</span></div>
+        <div className="reportrow"><span>Isolation</span><span>{isolationLine}</span></div>
         <div className="reportrow"><span>Workbook storage</span><span className="mono">{storageLine}</span></div>
         <div className="mt-14 togglerow">
           <button className="ghost" onClick={s.loadSampleProgress}>Load sample data</button>

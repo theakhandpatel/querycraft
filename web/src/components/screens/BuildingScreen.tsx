@@ -1,13 +1,13 @@
-import React, { useEffect, useRef, useState } from 'react';
+import { useEffect, useRef, useState } from 'react';
 import Icon from '../ui/Icon';
 import { useStore } from '../../state/store';
-import { COURSES } from '../../data/curriculum';
+
 import { courseExerciseTotal, moduleExerciseBlocks } from '../../lib/model';
 import { executionEngineLabel, generationProvenance, provenanceLabel } from '../../lib/provenance';
 import { runPipeline } from '../../lib/pipeline';
 import { authoredReport, courseFromPlan, reportFromOutcome, type DraftReport } from '../../lib/draft';
 import { jobIsRunning, outcomeFromJob } from '../../api/ai';
-import type { AiCourseRecord, AiJob, AiJobHandle, AiOutcome, AiStage } from '../../api/aiContract';
+import type { AiCourseRecord, AiJob, AiJobHandle, AiOutcome } from '../../api/aiContract';
 import type { Block, Course } from '../../types';
 
 /* Stage names and details arrive from the gateway (and, behind it, a model), so

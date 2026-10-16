@@ -1,4 +1,4 @@
-import React, { useEffect } from 'react';
+import { useEffect } from 'react';
 import { IconSprite } from './components/ui/Icon';
 import Toast from './components/ui/Toast';
 import PromptDialog from './components/ui/PromptDialog';

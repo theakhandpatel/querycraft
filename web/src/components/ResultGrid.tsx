@@ -1,4 +1,3 @@
-import React from 'react';
 import { engineLabelFor } from '../lib/dialectChoice';
 import type { QueryResult } from '../types';
 
@@ -46,7 +45,7 @@ export default function ResultGrid({ qr, showFooter = true }: { qr: QueryResult 
           </thead>
           <tbody>
             {!qr.rows.length ? (
-              <tr>{qr.columns.map((c, i) => <td key={i} className="null">(no rows)</td>)}</tr>
+              <tr>{qr.columns.map((_c, i) => <td key={i} className="null">(no rows)</td>)}</tr>
             ) : (
               rows.map((r, ri) => (
                 <tr key={ri}>

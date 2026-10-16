@@ -1,4 +1,3 @@
-import React from 'react';
 
 export default function Ring({ pct, className = 'cring', label = 'complete' }: { pct: number; className?: string; label?: string }) {
   const offset = 264 - (264 * pct) / 100;

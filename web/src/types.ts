@@ -209,6 +209,12 @@ export interface Progress {
   accepted: Record<string, boolean>;
   firstTry: Record<string, boolean>;
   done: Record<string, boolean>;
+  /** Chapters the learner marked complete by hand. `done` is recomputed from
+      graded attempts on every event, which used to silently erase an explicit
+      "Mark chapter complete" (and made a chapter with no exercises impossible to
+      complete). This set is the learner's own signal; `rebuildProgressFromEvents`
+      preserves it, and `markLessonDone` toggles it. */
+  manuallyDone?: Record<string, boolean>;
   notes: NoteItem[];
   saved: SavedItem[];
   attempts: number;

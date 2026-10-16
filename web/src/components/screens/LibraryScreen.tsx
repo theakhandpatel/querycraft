@@ -1,4 +1,3 @@
-import React from 'react';
 import Icon from '../ui/Icon';
 import DialectBadge from '../ui/DialectBadge';
 import { useStore } from '../../state/store';

@@ -24,9 +24,8 @@ import { clearRun, readRun, writeRun } from '../lib/runResume';
 import { jobIsRunning } from '../api/ai';
 import type { AiAvailability, AiOutcome } from '../api/aiContract';
 import type { AiCourseRecord } from '../api/aiContract';
-import { authoredReport, courseFromPlan, reportFromOutcome, type DraftReport } from '../lib/draft';
+import { courseFromPlan, reportFromOutcome, type DraftReport } from '../lib/draft';
 import {
-  PROGRESS_VERSION,
   emptyProgress,
   isSampleProgress,
   migrateProgress,
@@ -1054,14 +1053,25 @@ export function StoreProvider({ children }: { children: React.ReactNode }) {
   const markLessonDone = useCallback(() => {
     const m = modules[activeLesson];
     if (!m) return;
-    const next = { ...progress, done: { ...progress.done, [m.id]: !progress.done[m.id] } };
+    /* The learner's explicit signal lives in `manuallyDone`, not `done`: a
+       rebuild of `done` from graded attempts runs on every event and would
+       otherwise erase this. `done` is the union (see rebuildProgressFromEvents). */
+    const manual = { ...(progress.manuallyDone || {}) };
+    const nowDone = !(progress.done[m.id] || manual[m.id]);
+    if (nowDone) manual[m.id] = true;
+    else delete manual[m.id];
+    const next = {
+      ...progress,
+      manuallyDone: manual,
+      done: { ...progress.done, [m.id]: nowDone },
+    };
     setProgress(next);
     persistProgress(next);
     /* Chapter completion is progress like any other mutation, so it must reach
        the gateway too — otherwise the server snapshot disagrees with the UI and
        the signal is lost on a different browser or a cleared cache. */
     syncProgress(next, uiState.selectedCourseId);
-    toast(next.done[m.id] ? 'Chapter marked complete.' : 'Chapter marked incomplete.');
+    toast(nowDone ? 'Chapter marked complete.' : 'Chapter marked incomplete.');
   }, [modules, activeLesson, progress, persistProgress, syncProgress, uiState.selectedCourseId, toast]);
 
   const stepLesson = useCallback(

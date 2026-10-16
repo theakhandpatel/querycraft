@@ -25,10 +25,8 @@ import {
   warmUpDataset,
 } from './pglite';
 import {
-  disposeSqlite,
   executeSqlite,
   fetchSqliteTables,
-  getSqliteTransport,
   resetSqliteEnvironment,
   sqliteEngineCapabilities,
   warmUpSqlite,
@@ -47,7 +45,6 @@ import type {
   ApiConfig,
   ApiLogEntry,
   AuthSession,
-  Block,
   Cell,
   ContentSection,
   Course,
@@ -904,7 +901,13 @@ export function httpLayer(opts: {
             detail: cause instanceof Error ? cause.message : String(cause),
           }),
       }).pipe(
-        Effect.retry(Schedule.recurs(opts?.retries ?? 2)),
+        /* Retry only idempotent reads. This path serves every http call, so a
+           blanket retry also re-sent PUT /progress/:course, POST /events and
+           POST /answers/evaluate on a transport failure — if the first write
+           landed but its response was lost, the retry applied it twice. A GET
+           is safe to repeat; a write is not. Callers can still override with
+           opts.retries (the AI long calls set 0, which is preserved). */
+        Effect.retry(Schedule.recurs(opts?.retries ?? (method === 'GET' ? 2 : 0))),
         Effect.timeout(opts?.timeoutMs ?? timeoutMs),
         /* A deadline that expires is a transport failure like any other; keep
            the error channel to the one typed error the callers branch on. */
