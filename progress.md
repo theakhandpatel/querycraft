@@ -198,7 +198,47 @@ re-verified with the full gates; two commits `542c4808c`, `18c13a94e`):
 - **R2#3 (flake) — fixed.** The goroutine-count test now asserts "no per-call
   leak" instead of an exact baseline, which is inherently non-deterministic.
 
-**Deliberately deferred (recorded, not silently dropped):** R1-F3 (malformed
+**Deliberately deferred from Reviewers 1–2 (recorded, not silently dropped):**
+R1-F3 (malformed JSON returns query error codes on every route), R1-F5 (OpenAPI
+per-route security/401 + status-schema drift), R1-F7 (route-shape asymmetry),
+R1-F8 (`Store` width; owner-filtered list reads), R2#4 (`SMOKE_ADDR` fixed port —
+24 occurrences across the `verify` recipes; only bites when 18080 is taken, so not
+worth risking the primary gate).
+
+**Reviewer 5 (cross-cutting API design / the seam) — completed, pinned to
+`2f64865fb` and re-verified.** Highest-value findings fixed in `ccf14b2bd`:
+
+- **#3 (real) one error taxonomy:** `PERSISTENCE_UNAVAILABLE` was a client-only
+  code outside the closed enum while `errors.ts` claims codes are contract codes.
+  Renamed to `PERSISTENCE_FAILED` across `idb.ts`/`execution.ts`/`store.tsx` and
+  the storage-audit assertions.
+- **#4 (real) one feedback-code set:** the mock emits authored `checks[].code`
+  straight through, but **8 of 24** authored codes were outside
+  `evaluation.schema.json`'s enum (CASE_MISSING, DISTINCT_MISSING, NULL_SAFETY,
+  NULL_TRAP, RECURSION_MISSING, SET_OP_MISSING, SUBQUERY_MISSING, TABLE_MISSING),
+  so the same exercise showed different feedback per adapter. Added to the
+  contract enum and to Go's `validFeedbackCodes`, plus a **non-vacuous guard**
+  (`content-audit`) that reads the enum from the schema and asserts every
+  authored code is in it — proved to fail when one is removed.
+- **#5 (worth fixing):** extended nothing yet, but recorded — the enum guard
+  compares enums only; `evaluation.qr.required` still omits `dialect` while
+  `query-result.required` includes it.
+
+Deferred, recorded (real but structural / not v1-breaking): #1 (`/environment/
+reset` 400 documented as `ErrorEnvelope` but returns a `QueryResult`, and
+`DIALECT_MISMATCH` is outside the documented envelope enum), #2
+(`exercise.schema.json` is not the request contract the client sends — Go decodes
+`Setup`/`Type`/`Prompt` and never reads them), #6 (`duration_ms` is string in the
+contract, number in the mock), #7 (the closed enum is hand-copied in 6+ places;
+only some are guarded).
+
+Also praised and told us not to touch: the fixture-suite architecture, the
+separate AI/plan error vocabularies, and the dialect/dataset resolution modules.
+
+**Reviewer 3 (Go internals) and Reviewer 4 (frontend) — still running** on the
+re-dispatch.
+
+
 JSON returns query error codes on every route), R1-F5 (OpenAPI per-route
 security/401 + status-schema drift), R1-F7 (route-shape asymmetry), R1-F8
 (`Store` width; owner-filtered list reads), R2#4 (`SMOKE_ADDR` fixed port — it
