@@ -183,10 +183,13 @@ async function main() {
   const again = await getJSON(`${base}/challenges/${id}`, 15_000, auth(token));
   const listed = await getJSON(`${base}/challenges`, 15_000, auth(token));
   report.section('gate 4 — generated challenges survive a restart and can be reset');
-  report.check('the challenge is still there after a restart', again.status === 200 && again.json?.artifact?.id === id, `HTTP ${again.status}`);
-  report.check('the stored record keeps its evidence', Array.isArray(again.json?.outcome?.stages) && again.json.outcome.stages.length > 0);
+  // GET /challenges/{id} returns the {ok, challenge} envelope, matching
+  // GET /courses/{id}; the record is under .challenge.
+  const record = again.json?.challenge;
+  report.check('the challenge is still there after a restart', again.status === 200 && record?.artifact?.id === id, `HTTP ${again.status}`);
+  report.check('the stored record keeps its evidence', Array.isArray(record?.outcome?.stages) && record.outcome.stages.length > 0);
   report.check('the list includes it', (listed.json?.challenges ?? []).some((c) => c.artifact?.id === id));
-  const recordViolations = violations(recordValidator, again.json);
+  const recordViolations = violations(recordValidator, record);
   report.check('the stored record validates', recordViolations.length === 0, recordViolations.join('; '));
 
   /* ---------- phase 3: the defect flow ---------- */

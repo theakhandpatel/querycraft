@@ -600,8 +600,8 @@ const openAPISpec = `{
             "content": {"application/json": {"schema": {"$ref": "#/components/schemas/ErrorEnvelope"}}}
           },
           "200": {
-            "description": "The stored record.",
-            "content": {"application/json": {"schema": {"$ref": "#/components/schemas/AIRecord"}}}
+            "description": "The stored record, in the {ok, challenge} envelope.",
+            "content": {"application/json": {"schema": {"$ref": "#/components/schemas/AIRecordResponse"}}}
           },
           "404": {
             "description": "No such challenge.",
@@ -1542,6 +1542,14 @@ const openAPISpec = `{
         "properties": {
           "ok": {"type": "boolean"},
           "course": {"$ref": "#/components/schemas/AICourseRecord"}
+        }
+      },
+      "AIRecordResponse": {
+        "type": "object",
+        "description": "The {ok, challenge} envelope, matching AICourseResponse. One resource-read shape, not two.",
+        "properties": {
+          "ok": {"type": "boolean"},
+          "challenge": {"$ref": "#/components/schemas/AIRecord"}
         }
       },
       "AIJobStage": {

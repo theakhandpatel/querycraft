@@ -333,7 +333,9 @@ func (s *Server) handleGetChallenge(w http.ResponseWriter, r *http.Request) {
 		notFound(w, "unknown challenge: "+r.PathValue("id"))
 		return
 	}
-	writeJSON(w, http.StatusOK, rec)
+	// The {ok, challenge} envelope, matching GET /courses/{id}'s {ok, course}.
+	// The two resource reads differed here for no reason; one shape is the rule.
+	writeJSON(w, http.StatusOK, map[string]any{"ok": true, "challenge": rec})
 }
 
 // handleResetChallenge implements POST /challenges/{id}/reset. It removes the

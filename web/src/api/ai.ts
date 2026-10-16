@@ -815,7 +815,12 @@ export function gatewayAiMethods(opts: AiGatewayOptions): AiServiceShape {
           if (err.code === 'AI_NOT_FOUND' || err.status === 404) return Effect.succeed(null);
           return Effect.fail(err);
         }),
-        Effect.map((body) => (body === null ? null : asAiRecord(body))),
+        /* The {ok, challenge} envelope, matching GET /courses/{id}. */
+        Effect.map((body) => {
+          if (body === null) return null;
+          const inner = isRecord(body) && 'challenge' in body ? body.challenge : body;
+          return asAiRecord(inner);
+        }),
       ),
     resetChallenge: (id) =>
       requireOk('POST', `/challenges/${encodeURIComponent(id)}/reset`, {}, 'challenge reset').pipe(
