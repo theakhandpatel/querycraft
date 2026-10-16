@@ -110,9 +110,24 @@ func (p *Postgres) Run(ctx context.Context, id string) (ai.RunTranscript, bool, 
 // Runs implements ai.Depot, newest first. Only the summaries are read: a list
 // of every transcript's entries would be the whole database on one request.
 func (p *Postgres) Runs(ctx context.Context) ([]ai.RunSummary, error) {
-	rows, err := p.pool.Query(ctx,
-		`SELECT id, kind, owner_id, status, entry_count, bytes, truncated, error, started_at, finished_at
-		   FROM app.runs ORDER BY started_at DESC, id DESC`)
+	return p.runsWhere(ctx, "")
+}
+
+// RunsFor is Runs filtered to one owner in SQL (see CoursesFor).
+func (p *Postgres) RunsFor(ctx context.Context, ownerID string) ([]ai.RunSummary, error) {
+	return p.runsWhere(ctx, ownerID)
+}
+
+func (p *Postgres) runsWhere(ctx context.Context, ownerID string) ([]ai.RunSummary, error) {
+	query := `SELECT id, kind, owner_id, status, entry_count, bytes, truncated, error, started_at, finished_at
+		   FROM app.runs`
+	args := []any{}
+	if ownerID != "" {
+		query += ` WHERE owner_id = $1`
+		args = append(args, ownerID)
+	}
+	query += ` ORDER BY started_at DESC, id DESC`
+	rows, err := p.pool.Query(ctx, query, args...)
 	if err != nil {
 		return nil, err
 	}

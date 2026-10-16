@@ -94,10 +94,22 @@ func (m *Memory) Challenge(_ context.Context, id string) (ai.Record, bool, error
 
 // Challenges implements ai.Depot, newest first, matching Postgres.
 func (m *Memory) Challenges(_ context.Context) ([]ai.Record, error) {
+	return m.challengesFor("")
+}
+
+// ChallengesFor filters to one owner, matching the Postgres store.
+func (m *Memory) ChallengesFor(_ context.Context, ownerID string) ([]ai.Record, error) {
+	return m.challengesFor(ownerID)
+}
+
+func (m *Memory) challengesFor(ownerID string) ([]ai.Record, error) {
 	m.mu.RLock()
 	defer m.mu.RUnlock()
 	out := make([]ai.Record, 0, len(m.challenges))
 	for _, rec := range m.challenges {
+		if ownerID != "" && rec.OwnerID != ownerID {
+			continue
+		}
 		out = append(out, cloneRecord(rec))
 	}
 	sort.Slice(out, func(i, j int) bool {
@@ -150,10 +162,22 @@ func (m *Memory) Course(_ context.Context, id string) (ai.CourseRecord, bool, er
 
 // Courses implements ai.Depot, newest first, matching Postgres.
 func (m *Memory) Courses(_ context.Context) ([]ai.CourseRecord, error) {
+	return m.coursesFor("")
+}
+
+// CoursesFor filters to one owner, matching CoursesFor on the Postgres store.
+func (m *Memory) CoursesFor(_ context.Context, ownerID string) ([]ai.CourseRecord, error) {
+	return m.coursesFor(ownerID)
+}
+
+func (m *Memory) coursesFor(ownerID string) ([]ai.CourseRecord, error) {
 	m.mu.RLock()
 	defer m.mu.RUnlock()
 	out := make([]ai.CourseRecord, 0, len(m.courses))
 	for _, rec := range m.courses {
+		if ownerID != "" && rec.OwnerID != ownerID {
+			continue
+		}
 		out = append(out, cloneCourse(rec))
 	}
 	sort.Slice(out, func(i, j int) bool {
@@ -330,10 +354,22 @@ func (m *Memory) Run(_ context.Context, id string) (ai.RunTranscript, bool, erro
 
 // Runs implements ai.Depot, newest first, matching Postgres.
 func (m *Memory) Runs(_ context.Context) ([]ai.RunSummary, error) {
+	return m.runsFor("")
+}
+
+// RunsFor filters to one owner, matching the Postgres store.
+func (m *Memory) RunsFor(_ context.Context, ownerID string) ([]ai.RunSummary, error) {
+	return m.runsFor(ownerID)
+}
+
+func (m *Memory) runsFor(ownerID string) ([]ai.RunSummary, error) {
 	m.mu.RLock()
 	defer m.mu.RUnlock()
 	out := make([]ai.RunSummary, 0, len(m.runs))
 	for _, rec := range m.runs {
+		if ownerID != "" && rec.OwnerID != ownerID {
+			continue
+		}
 		out = append(out, rec.Summary())
 	}
 	sort.Slice(out, func(i, j int) bool {

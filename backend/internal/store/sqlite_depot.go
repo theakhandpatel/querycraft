@@ -61,7 +61,23 @@ func (s *SQLite) Challenge(ctx context.Context, id string) (ai.Record, bool, err
 }
 
 func (s *SQLite) Challenges(ctx context.Context) ([]ai.Record, error) {
-	rows, err := s.db.QueryContext(ctx, `SELECT id,owner_id,status,artifact,outcome,created_at FROM challenges ORDER BY created_at DESC,id DESC`)
+	return s.challengesWhere(ctx, "")
+}
+
+// ChallengesFor filters to one owner in SQL (see ai.Depot.ChallengesFor).
+func (s *SQLite) ChallengesFor(ctx context.Context, ownerID string) ([]ai.Record, error) {
+	return s.challengesWhere(ctx, ownerID)
+}
+
+func (s *SQLite) challengesWhere(ctx context.Context, ownerID string) ([]ai.Record, error) {
+	q := `SELECT id,owner_id,status,artifact,outcome,created_at FROM challenges`
+	args := []any{}
+	if ownerID != "" {
+		q += ` WHERE owner_id=?`
+		args = append(args, ownerID)
+	}
+	q += ` ORDER BY created_at DESC,id DESC`
+	rows, err := s.db.QueryContext(ctx, q, args...)
 	if err != nil {
 		return nil, err
 	}
@@ -159,7 +175,23 @@ func (s *SQLite) Course(ctx context.Context, id string) (ai.CourseRecord, bool, 
 }
 
 func (s *SQLite) Courses(ctx context.Context) ([]ai.CourseRecord, error) {
-	rows, err := s.db.QueryContext(ctx, `SELECT id,owner_id,status,plan,outcome,request,created_at FROM courses ORDER BY created_at DESC,id DESC`)
+	return s.coursesWhere(ctx, "")
+}
+
+// CoursesFor filters to one owner in SQL (see ai.Depot.CoursesFor).
+func (s *SQLite) CoursesFor(ctx context.Context, ownerID string) ([]ai.CourseRecord, error) {
+	return s.coursesWhere(ctx, ownerID)
+}
+
+func (s *SQLite) coursesWhere(ctx context.Context, ownerID string) ([]ai.CourseRecord, error) {
+	q := `SELECT id,owner_id,status,plan,outcome,request,created_at FROM courses`
+	args := []any{}
+	if ownerID != "" {
+		q += ` WHERE owner_id=?`
+		args = append(args, ownerID)
+	}
+	q += ` ORDER BY created_at DESC,id DESC`
+	rows, err := s.db.QueryContext(ctx, q, args...)
 	if err != nil {
 		return nil, err
 	}
@@ -318,7 +350,23 @@ func (s *SQLite) Run(ctx context.Context, id string) (ai.RunTranscript, bool, er
 }
 
 func (s *SQLite) Runs(ctx context.Context) ([]ai.RunSummary, error) {
-	rows, err := s.db.QueryContext(ctx, `SELECT id,kind,owner_id,status,entry_count,bytes,truncated,error,started_at,finished_at FROM runs ORDER BY started_at DESC,id DESC`)
+	return s.runsWhere(ctx, "")
+}
+
+// RunsFor filters to one owner in SQL (see ai.Depot.RunsFor).
+func (s *SQLite) RunsFor(ctx context.Context, ownerID string) ([]ai.RunSummary, error) {
+	return s.runsWhere(ctx, ownerID)
+}
+
+func (s *SQLite) runsWhere(ctx context.Context, ownerID string) ([]ai.RunSummary, error) {
+	q := `SELECT id,kind,owner_id,status,entry_count,bytes,truncated,error,started_at,finished_at FROM runs`
+	args := []any{}
+	if ownerID != "" {
+		q += ` WHERE owner_id=?`
+		args = append(args, ownerID)
+	}
+	q += ` ORDER BY started_at DESC,id DESC`
+	rows, err := s.db.QueryContext(ctx, q, args...)
 	if err != nil {
 		return nil, err
 	}

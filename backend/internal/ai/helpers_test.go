@@ -83,10 +83,21 @@ func (d *testDepot) Run(_ context.Context, id string) (RunTranscript, bool, erro
 }
 
 func (d *testDepot) Runs(_ context.Context) ([]RunSummary, error) {
+	return d.runsFor("")
+}
+
+func (d *testDepot) RunsFor(_ context.Context, ownerID string) ([]RunSummary, error) {
+	return d.runsFor(ownerID)
+}
+
+func (d *testDepot) runsFor(ownerID string) ([]RunSummary, error) {
 	d.mu.Lock()
 	defer d.mu.Unlock()
 	out := make([]RunSummary, 0, len(d.runs))
 	for _, rec := range d.runs {
+		if ownerID != "" && rec.OwnerID != ownerID {
+			continue
+		}
 		out = append(out, rec.Summary())
 	}
 	return out, nil
@@ -132,10 +143,21 @@ func (d *testDepot) Challenge(_ context.Context, id string) (Record, bool, error
 }
 
 func (d *testDepot) Challenges(_ context.Context) ([]Record, error) {
+	return d.challengesFor("")
+}
+
+func (d *testDepot) ChallengesFor(_ context.Context, ownerID string) ([]Record, error) {
+	return d.challengesFor(ownerID)
+}
+
+func (d *testDepot) challengesFor(ownerID string) ([]Record, error) {
 	d.mu.Lock()
 	defer d.mu.Unlock()
 	out := make([]Record, 0, len(d.challenges))
 	for _, rec := range d.challenges {
+		if ownerID != "" && rec.OwnerID != ownerID {
+			continue
+		}
 		out = append(out, rec)
 	}
 	return out, nil
@@ -175,10 +197,21 @@ func (d *testDepot) Course(_ context.Context, id string) (CourseRecord, bool, er
 }
 
 func (d *testDepot) Courses(_ context.Context) ([]CourseRecord, error) {
+	return d.coursesFor("")
+}
+
+func (d *testDepot) CoursesFor(_ context.Context, ownerID string) ([]CourseRecord, error) {
+	return d.coursesFor(ownerID)
+}
+
+func (d *testDepot) coursesFor(ownerID string) ([]CourseRecord, error) {
 	d.mu.Lock()
 	defer d.mu.Unlock()
 	out := make([]CourseRecord, 0, len(d.courses))
 	for _, rec := range d.courses {
+		if ownerID != "" && rec.OwnerID != ownerID {
+			continue
+		}
 		out = append(out, rec)
 	}
 	return out, nil

@@ -85,9 +85,25 @@ func (p *Postgres) Course(ctx context.Context, id string) (ai.CourseRecord, bool
 
 // Courses implements ai.Depot, newest first.
 func (p *Postgres) Courses(ctx context.Context) ([]ai.CourseRecord, error) {
-	rows, err := p.pool.Query(ctx,
-		`SELECT owner_id, status, plan, outcome, request, created_at
-		   FROM app.courses ORDER BY created_at DESC, id DESC`)
+	return p.coursesWhere(ctx, "")
+}
+
+// CoursesFor is Courses filtered to one owner in SQL, so the owner-scoped list
+// route does not load every learner's courses and discard them in the handler.
+func (p *Postgres) CoursesFor(ctx context.Context, ownerID string) ([]ai.CourseRecord, error) {
+	return p.coursesWhere(ctx, ownerID)
+}
+
+func (p *Postgres) coursesWhere(ctx context.Context, ownerID string) ([]ai.CourseRecord, error) {
+	query := `SELECT owner_id, status, plan, outcome, request, created_at
+		   FROM app.courses`
+	args := []any{}
+	if ownerID != "" {
+		query += ` WHERE owner_id = $1`
+		args = append(args, ownerID)
+	}
+	query += ` ORDER BY created_at DESC, id DESC`
+	rows, err := p.pool.Query(ctx, query, args...)
 	if err != nil {
 		return nil, err
 	}

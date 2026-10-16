@@ -63,18 +63,16 @@ func (s *Server) handleListRuns(w http.ResponseWriter, r *http.Request) {
 		runsOff(w)
 		return
 	}
-	summaries, err := depot.Runs(r.Context())
+	summaries, err := depot.RunsFor(r.Context(), u.ID)
 	if err != nil {
 		writeAIError(w, err)
 		return
 	}
-	// The depot is scoped on write, not on read, so a list is filtered here to
-	// the caller's own runs: a list is never another learner's evidence.
+	/* The store filters by owner in SQL, so this list never loads another
+	   learner's runs only to discard them. `mine` is already only this owner's;
+	   the bound is still applied here. */
 	mine := make([]ai.RunSummary, 0, len(summaries))
 	for _, sm := range summaries {
-		if sm.OwnerID != u.ID {
-			continue
-		}
 		mine = append(mine, runSummaryView(sm))
 		if len(mine) >= ai.MaxRunList {
 			break

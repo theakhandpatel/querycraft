@@ -74,9 +74,24 @@ func (p *Postgres) Challenge(ctx context.Context, id string) (ai.Record, bool, e
 // Challenges implements ai.Depot. Newest first, because the lab lists what was
 // just generated at the top.
 func (p *Postgres) Challenges(ctx context.Context) ([]ai.Record, error) {
-	rows, err := p.pool.Query(ctx,
-		`SELECT owner_id, status, artifact, outcome, created_at
-		   FROM app.challenges ORDER BY created_at DESC, id DESC`)
+	return p.challengesWhere(ctx, "")
+}
+
+// ChallengesFor is Challenges filtered to one owner in SQL (see CoursesFor).
+func (p *Postgres) ChallengesFor(ctx context.Context, ownerID string) ([]ai.Record, error) {
+	return p.challengesWhere(ctx, ownerID)
+}
+
+func (p *Postgres) challengesWhere(ctx context.Context, ownerID string) ([]ai.Record, error) {
+	query := `SELECT owner_id, status, artifact, outcome, created_at
+		   FROM app.challenges`
+	args := []any{}
+	if ownerID != "" {
+		query += ` WHERE owner_id = $1`
+		args = append(args, ownerID)
+	}
+	query += ` ORDER BY created_at DESC, id DESC`
+	rows, err := p.pool.Query(ctx, query, args...)
 	if err != nil {
 		return nil, err
 	}

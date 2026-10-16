@@ -34,7 +34,10 @@ func (d *recordingDepot) Challenge(context.Context, string) (ai.Record, bool, er
 	return ai.Record{}, false, nil
 }
 func (d *recordingDepot) Challenges(context.Context) ([]ai.Record, error) { return nil, nil }
-func (d *recordingDepot) DeleteChallenge(context.Context, string) error   { return nil }
+func (d *recordingDepot) ChallengesFor(context.Context, string) ([]ai.Record, error) {
+	return nil, nil
+}
+func (d *recordingDepot) DeleteChallenge(context.Context, string) error { return nil }
 func (d *recordingDepot) SavePatch(context.Context, ai.PatchProposal) error {
 	return nil
 }
@@ -53,6 +56,9 @@ func (d *recordingDepot) Course(context.Context, string) (ai.CourseRecord, bool,
 func (d *recordingDepot) Courses(context.Context) ([]ai.CourseRecord, error) {
 	return nil, nil
 }
+func (d *recordingDepot) CoursesFor(context.Context, string) ([]ai.CourseRecord, error) {
+	return nil, nil
+}
 func (d *recordingDepot) DeleteCourse(context.Context, string) error { return nil }
 
 func (d *recordingDepot) SaveRun(_ context.Context, rec ai.RunTranscript) error {
@@ -63,6 +69,9 @@ func (d *recordingDepot) Run(context.Context, string) (ai.RunTranscript, bool, e
 	return ai.RunTranscript{}, false, nil
 }
 func (d *recordingDepot) Runs(context.Context) ([]ai.RunSummary, error) { return nil, nil }
+func (d *recordingDepot) RunsFor(context.Context, string) ([]ai.RunSummary, error) {
+	return nil, nil
+}
 
 func TestOwnerScopedDepotStampsTheSessionOwner(t *testing.T) {
 	inner := &recordingDepot{}

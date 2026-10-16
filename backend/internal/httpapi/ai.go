@@ -94,6 +94,20 @@ func (d ownerScopedDepot) SaveRun(ctx context.Context, rec ai.RunTranscript) err
 	return d.Depot.SaveRun(ctx, rec)
 }
 
+// The list reads are filtered to the session's owner by the store, so a list
+// route never loads every learner's records and discards them in the handler.
+// Overriding the *For methods here is what makes the service's own calls
+// owner-scoped without the service needing to know the caller.
+func (d ownerScopedDepot) ChallengesFor(ctx context.Context, _ string) ([]ai.Record, error) {
+	return d.Depot.ChallengesFor(ctx, d.owner)
+}
+func (d ownerScopedDepot) CoursesFor(ctx context.Context, _ string) ([]ai.CourseRecord, error) {
+	return d.Depot.CoursesFor(ctx, d.owner)
+}
+func (d ownerScopedDepot) RunsFor(ctx context.Context, _ string) ([]ai.RunSummary, error) {
+	return d.Depot.RunsFor(ctx, d.owner)
+}
+
 /* ---------- generation ---------- */
 
 // handleGenerateChallenge implements POST /challenges/generate.
@@ -291,7 +305,7 @@ func (s *Server) handleListChallenges(w http.ResponseWriter, r *http.Request) {
 		})
 		return
 	}
-	recs, err := svc.Challenges(r.Context())
+	recs, err := svc.ChallengesFor(r.Context(), u.ID)
 	if err != nil {
 		writeAIError(w, err)
 		return
@@ -375,18 +389,16 @@ func (s *Server) handleListCourses(w http.ResponseWriter, r *http.Request) {
 		})
 		return
 	}
-	recs, err := depot.Courses(r.Context())
+	recs, err := depot.CoursesFor(r.Context(), u.ID)
 	if err != nil {
 		writeAIError(w, err)
 		return
 	}
-	// The depot is scoped on write, not on read, so the caller's own courses
-	// are picked out here: a list is never another learner's evidence.
+	/* The store filters by owner in SQL; nothing another learner owns is loaded
+	   only to be discarded. */
 	mine := make([]ai.CourseRecord, 0, len(recs))
 	for _, rec := range recs {
-		if rec.OwnerID == u.ID {
-			mine = append(mine, courseView(rec))
-		}
+		mine = append(mine, courseView(rec))
 	}
 	writeJSON(w, http.StatusOK, map[string]any{"ok": true, "courses": mine})
 }

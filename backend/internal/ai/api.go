@@ -417,12 +417,19 @@ type Depot interface {
 	SaveChallenge(ctx context.Context, rec Record) error
 	Challenge(ctx context.Context, id string) (Record, bool, error)
 	Challenges(ctx context.Context) ([]Record, error)
+	// ChallengesFor filters to one owner in the store, for the owner-scoped list
+	// route (see CoursesFor).
+	ChallengesFor(ctx context.Context, ownerID string) ([]Record, error)
 	DeleteChallenge(ctx context.Context, id string) error
 	// Courses are the M7 counterpart of challenges: a generated course is
 	// stored whole, with the outcome that admitted it, for the same reason.
 	SaveCourse(ctx context.Context, rec CourseRecord) error
 	Course(ctx context.Context, id string) (CourseRecord, bool, error)
 	Courses(ctx context.Context) ([]CourseRecord, error)
+	// CoursesFor is Courses filtered to one owner by the STORE, so a list read
+	// does not load every learner's courses and discard them in the handler. The
+	// list routes are owner-scoped, so this is the query they should run.
+	CoursesFor(ctx context.Context, ownerID string) ([]CourseRecord, error)
 	DeleteCourse(ctx context.Context, id string) error
 	// SavePatch stores an unapplied proposal, so an approval can find it later.
 	SavePatch(ctx context.Context, p PatchProposal) error
@@ -437,6 +444,10 @@ type Depot interface {
 	SaveRun(ctx context.Context, rec RunTranscript) error
 	Run(ctx context.Context, id string) (RunTranscript, bool, error)
 	Runs(ctx context.Context) ([]RunSummary, error)
+	// RunsFor is Runs filtered to one owner by the store, for the same reason
+	// CoursesFor exists: the list route is owner-scoped and should not load (and
+	// then discard) every learner's runs.
+	RunsFor(ctx context.Context, ownerID string) ([]RunSummary, error)
 }
 
 /* ---------- scratch environments ---------- */
@@ -653,6 +664,15 @@ func (s *Service) Challenges(ctx context.Context) ([]Record, error) {
 		return nil, newError(CodeUnavailable, "", "No challenge store is configured.", "")
 	}
 	return s.cfg.Depot.Challenges(ctx)
+}
+
+// ChallengesFor lists one owner's challenges, filtered by the store so the
+// owner-scoped list route does not load every learner's records and discard them.
+func (s *Service) ChallengesFor(ctx context.Context, ownerID string) ([]Record, error) {
+	if s == nil || s.cfg.Depot == nil {
+		return nil, newError(CodeUnavailable, "", "No challenge store is configured.", "")
+	}
+	return s.cfg.Depot.ChallengesFor(ctx, ownerID)
 }
 
 // Challenge fetches one stored challenge.
