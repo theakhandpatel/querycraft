@@ -365,12 +365,14 @@ export function StoreProvider({ children }: { children: React.ReactNode }) {
     if (entry.courseId) s.selectedCourseId = entry.courseId;
     return s;
   });
+  /* initialProgress reads AND writes (it seeds the stored snapshot), so it is
+     evaluated once here rather than in two separate state initializers. */
   const [progress, setProgress] = useState<Progress>(() => initialProgress(readAuthUser()));
   const [screen, setScreen] = useState<Screen>(entry.screen);
   const [challengeId, setChallengeId] = useState<string | null>(entry.challengeId);
   const [activeLesson, setActiveLesson] = useState(() => {
     if (entry.chapterIndex != null) return entry.chapterIndex;
-    return nextChapterIndexOf(entry.courseId ? courseById(entry.courseId) : COURSES[0], initialProgress(readAuthUser()));
+    return nextChapterIndexOf(entry.courseId ? courseById(entry.courseId) : COURSES[0], progress);
   });
   const [theme, setThemeState] = useState<ThemeName>(() => loadJSON<ThemeName>(THEME_KEY, 'light'));
   const [motion, setMotionState] = useState<boolean>(() => loadJSON<boolean>(MOTION_KEY, false));

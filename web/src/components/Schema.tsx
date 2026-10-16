@@ -24,6 +24,7 @@ export default function Schema({
   dialect?: Dialect;
 }) {
   const [tables, setTables] = useState<TableDef[] | null>(tablesProp || null);
+  const [failed, setFailed] = useState(false);
   useEffect(() => {
     if (tablesProp) return;
     let alive = true;
@@ -31,15 +32,24 @@ export default function Schema({
        not a preview of this one, and leaving them up would label perf columns
        with commerce row counts. */
     setTables(null);
+    setFailed(false);
     api.getTables(dataset, dialect).then((res) => {
-      if (alive) setTables(res.tables);
+      if (!alive) return;
+      setTables(res.tables);
+    }).catch(() => {
+      /* A failed read is not an empty schema. Without this the panel rendered a
+         blank region with no loading and no error, so "the read failed" and
+         "this workspace has no tables" looked identical. */
+      if (alive) setFailed(true);
     });
     return () => {
       alive = false;
     };
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [dataset, dialect]);
+  if (failed) return <div className="empty">Could not read the schema. It is still loading… try reopening the drawer.</div>;
   if (!tables) return <div className="empty">Loading schema…</div>;
+  if (tables.length === 0) return <div className="empty">This workspace has no tables yet. Create one and reopen the drawer.</div>;
   return (
     <div className="schema">
       {tables.map((t) => {

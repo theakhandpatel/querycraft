@@ -96,7 +96,9 @@ export function dialectFor(ref?: DialectRef | null): Dialect {
   return dialectChoice(ref).dialect;
 }
 
-/** Why `dialectFor` returned what it did. */
+/** Why `dialectFor` returned what it did. Same status as datasetReason: the UI
+    does not surface it yet, kept as the reader for the "unknown-name is
+    reported, not swallowed" rule. */
 export function dialectReason(ref?: DialectRef | null): DialectReason {
   return dialectChoice(ref).reason;
 }

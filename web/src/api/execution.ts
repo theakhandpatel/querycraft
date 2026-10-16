@@ -445,11 +445,18 @@ export function mockLayer(config: ApiConfig = MOCK_CONFIG, note: NoteFn = () => 
           duration_ms: secs(ms),
         };
       }),
-    getTables: (dataset = DEFAULT_DATASET) =>
+    getTables: (dataset = DEFAULT_DATASET, dialect: Dialect = DEFAULT_DIALECT) =>
       Effect.gen(function* () {
         const t0 = nowMs();
         yield* Effect.sleep(delayMs(config));
         note('GET', `/datasets/${dataset}/tables`, 200, nowMs() - t0);
+        /* This adapter runs no engine, so it cannot describe a SQLite workspace:
+           the declared types it would have to print are the PostgreSQL ones.
+           Listing them under a "SQLite" label was the mismatch the drawer's own
+           comment warns about, so a sqlite request returns no tables and the
+           drawer says so rather than showing the wrong schema under the right
+           name. */
+        if (dialect === 'sqlite') return { dataset, version: 1, tables: [], rows: 0 };
         /* `TABLES` is the commerce schema's authored metadata. The perf fixture
            is the same four relations at a larger scale and this adapter has no
            engine to count rows with, so it lists what it can honestly describe
@@ -1179,8 +1186,12 @@ export function httpLayer(opts: {
           }),
         ),
       ),
-    getTables: (dataset = DEFAULT_DATASET) =>
-      request('GET', `/datasets/${dataset}/tables`).pipe(
+    getTables: (dataset = DEFAULT_DATASET, dialect: Dialect = DEFAULT_DIALECT) =>
+      /* The dialect travels with the request: a SQLite chapter's drawer must
+         list the SQLite relations (declared types are affinities, not the same
+         claim as PostgreSQL's). The gateway serves ?dialect=sqlite over the
+         workspace the caller is in. */
+      request('GET', `/datasets/${dataset}/tables?dialect=${encodeURIComponent(dialect)}`).pipe(
         Effect.map((json) => json as TablesResponse),
         Effect.catch(() => Effect.succeed({ dataset, version: 1, tables: [], rows: 0 })),
       ),

@@ -4,6 +4,7 @@ import Schema from './Schema';
 import { useChapterDialect } from './ui/DialectBadge';
 import { useStore } from '../state/store';
 import { datasetFor } from '../lib/dataset';
+import { datasetVersion } from '../api/dataset';
 import { dialectLabel } from '../lib/dialect';
 import { DEFAULT_DATASET } from '../types';
 import type { EnvironmentInfo } from '../types';
@@ -202,7 +203,7 @@ export default function TablesDrawer() {
         <div className="drawerhead">
           <div>
             <div className="eyebrow">Course dataset</div>
-            <h2>{dataset} · {dialectLabel(dialect)} · dataset_version 1</h2>
+            <h2>{dataset} · {dialectLabel(dialect)} · dataset_version {datasetVersion}</h2>
             <p className="muted" style={{ fontSize: 12, marginTop: 4 }}>
               {dataset === DEFAULT_DATASET
                 ? 'Generated with this course · 4 tables · ~290 rows'

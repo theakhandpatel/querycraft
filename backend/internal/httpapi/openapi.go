@@ -230,6 +230,13 @@ const openAPISpec = `{
             "required": true,
             "description": "Dataset identifier, e.g. commerce.",
             "schema": {"type": "string"}
+          },
+          {
+            "name": "dialect",
+            "in": "query",
+            "required": false,
+            "schema": {"type": "string", "enum": ["postgresql", "sqlite"]},
+            "description": "Which engine's workspace to describe. Absent means postgresql. \"sqlite\" introspects the SQLite workspace over the executor seam — the learner's own file when signed in, the shared fixture otherwise — so a SQLite chapter's drawer lists SQLite relations and their declared types (affinities), not PostgreSQL's."
           }
         ],
         "responses": {

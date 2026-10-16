@@ -451,3 +451,48 @@ func TestResetRefusesAnUnservedDialectWithTheEnvelope(t *testing.T) {
 		t.Errorf("refusal carries a top-level dialect field (QueryResult shape): %v", out)
 	}
 }
+
+// TestTablesServeTheSQLiteSchemaWhenAsked pins the drawer's dialect honesty. A
+// SQLite chapter's drawer labels the panel SQLite, so it must list the SQLite
+// relations and their declared types (affinities), not PostgreSQL's. Before the
+// dialect travelled with the request, the gateway always answered PostgreSQL
+// introspection, so the panel named one engine and described another.
+func TestTablesServeTheSQLiteSchemaWhenAsked(t *testing.T) {
+	s := sqliteTestServer(t, &fakeExecutor{})
+
+	// Anonymous: the shared read-only fixture.
+	w := do(t, s, http.MethodGet, "/datasets/commerce/tables?dialect=sqlite", "")
+	if w.Code != http.StatusOK {
+		t.Fatalf("status = %d, want 200; body = %s", w.Code, w.Body.String())
+	}
+	var out struct {
+		Tables []struct {
+			Name string     `json:"name"`
+			Cols [][]string `json:"cols"`
+		} `json:"tables"`
+	}
+	mustDecode(t, w, &out)
+	if len(out.Tables) == 0 {
+		t.Fatal("no SQLite tables returned; the drawer would be blank")
+	}
+	names := map[string]bool{}
+	for _, tbl := range out.Tables {
+		names[tbl.Name] = true
+	}
+	if !names["customers"] {
+		t.Errorf("the SQLite workspace should list `customers`; got %v", names)
+	}
+	// The declared type is SQLite's affinity spelling, which is the whole point.
+	if tbl := out.Tables[0]; len(tbl.Cols) > 0 {
+		decl := strings.ToUpper(tbl.Cols[0][1])
+		if !strings.Contains(decl, "INT") && !strings.Contains(decl, "TEXT") && !strings.Contains(decl, "REAL") {
+			t.Errorf("first column declared type = %q, want a SQLite affinity", tbl.Cols[0][1])
+		}
+	}
+
+	// PostgreSQL remains the default when no dialect is named.
+	pg := do(t, s, http.MethodGet, "/datasets/commerce/tables", "")
+	if pg.Code != http.StatusOK {
+		t.Fatalf("postgres tables status = %d", pg.Code)
+	}
+}

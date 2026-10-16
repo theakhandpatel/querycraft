@@ -80,7 +80,9 @@ export function datasetFor(ref?: DatasetRef | null): DatasetId {
   return datasetChoice(ref).dataset;
 }
 
-/** Why `datasetFor` returned what it did. */
+/** Why `datasetFor` returned what it did. Public surface, but no screen reads it
+    yet — kept because datasetChoice computes it and the module promises the
+    "unknown-name is reported, not swallowed" rule. */
 export function datasetReason(ref?: DatasetRef | null): DatasetReason {
   return datasetChoice(ref).reason;
 }
