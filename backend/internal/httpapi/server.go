@@ -320,7 +320,10 @@ func writeJSON(w http.ResponseWriter, status int, v any) {
 }
 
 func notFound(w http.ResponseWriter, message string) {
+	// ok:false like every other error envelope on this gateway. It used to omit
+	// the field, so a client that consistently reads `ok` saw undefined here.
 	writeJSON(w, http.StatusNotFound, map[string]any{
+		"ok":    false,
 		"error": map[string]string{"code": "NOT_FOUND", "message": message},
 	})
 }

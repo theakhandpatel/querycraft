@@ -126,6 +126,12 @@ type SQLiteConfig struct {
 	// DSN, when set, is used verbatim — pragmas included — instead of the one
 	// built from Path, Pragmas and ReadOnly. It exists for a caller that must
 	// reach something this struct cannot describe, such as a custom VFS.
+	//
+	// UNUSED BY PRODUCTION: no production path sets it (grep: every
+	// engine.SQLiteConfig literal in httpapi/sqlite.go uses Path). It is a tested
+	// escape hatch, kept because the parser below refuses an unhonourable DSN by
+	// name rather than silently dropping it — but a reader should not assume a
+	// live caller. Wire one, or delete this and parseSQLiteDSN, if it stays unused.
 	DSN string
 
 	// ReadOnly opens the file with SQLite's own mode=ro and adds
@@ -570,7 +576,11 @@ func (r *sqliteRows) Values() ([]any, error) {
 		r.raw[i] = nil
 	}
 	if err := r.rows.Scan(r.ptrs...); err != nil {
-		return nil, err
+		// Wrap the driver's framing so ClassifyError can unwrap it, exactly as
+		// Query and Err already do. Without this a Scan failure reached the
+		// classifier as raw database/sql text, so the learner read the driver's
+		// sentence instead of the engine's.
+		return nil, sqliteErrorOf(err)
 	}
 	out := make([]any, len(r.raw))
 	for i, v := range r.raw {

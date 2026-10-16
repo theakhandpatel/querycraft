@@ -2,16 +2,24 @@
   "$schema": "https://json-schema.org/draft/2020-12/schema",
   "$id": "https://querycraft.app/contracts/exercise.schema.json",
   "title": "ExerciseSpec",
+  "description": "The exercise bundle a client sends with POST /answers/evaluate (and /query's optional exercise). It is the REQUEST shape, so it describes what the client actually sends rather than the full authored record: id, version, lesson_id, the result contract and the reference solution are the fields the gateway reads and grades with. `type`, `prompt` and `setup` are accepted for authored/fixture records that carry them, but the gateway does not grade on them and a live client does not send them.",
   "type": "object",
-  "required": ["id", "version", "lesson_id", "type", "prompt", "setup", "result_contract"],
+  "required": ["id", "version", "lesson_id"],
   "properties": {
     "id": { "type": "string" },
     "version": { "type": "integer", "minimum": 1 },
     "lesson_id": { "type": "string" },
-    "type": { "enum": ["complete", "write", "modify", "predict", "fix", "combine", "solve"] },
-    "prompt": { "type": "string" },
+    "type": {
+      "enum": ["complete", "write", "modify", "predict", "fix", "combine", "solve"],
+      "description": "Authored exercise kind. Accepted and carried, but not a grading input: grading compares results, never SQL text or exercise type."
+    },
+    "prompt": {
+      "type": "string",
+      "description": "Authored prompt. Accepted and carried, not a grading input."
+    },
     "setup": {
       "type": "object",
+      "description": "The environment an authored record runs against. Optional on a live evaluate request — the client sends `dataset` and `dialect` as siblings of `exercise` instead — but present on authored and fixture records.",
       "required": ["dataset", "schema_version", "seed_version", "dialect"],
       "properties": {
         "dataset": { "type": "string" },
@@ -23,7 +31,27 @@
         }
       }
     },
+    "contract": {
+      "$ref": "#/$defs/resultContract",
+      "description": "The result contract the client actually sends. This is the key POST /answers/evaluate reads (the Go evaluator prefers it over result_contract when both are present)."
+    },
     "result_contract": {
+      "$ref": "#/$defs/resultContract",
+      "description": "The authored spelling of the same contract. A fixture or an older client may send this instead of `contract`; the gateway accepts either."
+    },
+    "reference_solution": {
+      "type": "string",
+      "description": "The query the gateway executes to produce the oracle rows. Without it the gateway can only check column names, which made every answer pass."
+    },
+    "solution": {
+      "type": "string",
+      "description": "An alias for reference_solution accepted from authored records."
+    },
+    "hints": { "type": "array", "items": { "type": "string" } },
+    "difficulty": { "enum": ["beginner", "intermediate", "advanced"] }
+  },
+  "$defs": {
+    "resultContract": {
       "type": "object",
       "required": ["columns", "column_order", "row_order", "duplicates", "numeric_tolerance"],
       "properties": {
@@ -33,9 +61,6 @@
         "duplicates": { "enum": ["preserved", "ignored"] },
         "numeric_tolerance": { "type": "number", "minimum": 0 }
       }
-    },
-    "reference_solution": { "type": "string" },
-    "hints": { "type": "array", "items": { "type": "string" } },
-    "difficulty": { "enum": ["beginner", "intermediate", "advanced"] }
+    }
   }
 }

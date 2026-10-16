@@ -308,7 +308,9 @@ func escapeLabel(s string) string {
 	return strings.NewReplacer("\\", "\\\\", "\"", "\\\"", "\n", "\\n").Replace(s)
 }
 
-// labelsOnly renders `{a="b"}` or “ when there are no labels.
+// labelsOnly renders `{a="b"}` or the empty string when there are no labels.
+// (The empty case is what joinLabels returns; the comment used to carry a
+// stray U+201C where the word "nothing" belonged.)
 func labelsOnly(l Labels) string {
 	return joinLabels(l, "", "")
 }

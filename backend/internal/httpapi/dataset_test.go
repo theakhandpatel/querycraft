@@ -345,12 +345,20 @@ func TestEnvironmentResetServesBothDatasets(t *testing.T) {
 	}
 
 	// An unknown dataset is refused by name rather than silently resetting the
-	// challenge workspace the learner did not ask about.
+	// challenge workspace the learner did not ask about. The shape is the
+	// route's own {ok:false,error} envelope (a reset is not a statement), not a
+	// QueryResult.
 	w := doAs(t, s, token, http.MethodPost, "/environment/reset?dataset=warehouse", "")
-	var refusal engine.QueryResult
+	var refusal struct {
+		OK    bool `json:"ok"`
+		Error struct {
+			Code    string `json:"code"`
+			Message string `json:"message"`
+		} `json:"error"`
+	}
 	mustDecode(t, w, &refusal)
-	if w.Code != http.StatusBadRequest || refusal.Error.Code != engine.CodeEnvironmentUnavailable {
-		t.Fatalf("unknown dataset reset: status = %d, error = %+v", w.Code, refusal.Error)
+	if w.Code != http.StatusBadRequest || refusal.OK || refusal.Error.Code != engine.CodeEnvironmentUnavailable {
+		t.Fatalf("unknown dataset reset: status = %d, body = %s", w.Code, w.Body.String())
 	}
 	if !strings.Contains(refusal.Error.Message, "commerce") || !strings.Contains(refusal.Error.Message, dataset.PerfDatasetID) {
 		t.Errorf("refusal message %q does not name the datasets the gateway serves", refusal.Error.Message)

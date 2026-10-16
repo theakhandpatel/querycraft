@@ -210,6 +210,14 @@ func classify(ctx context.Context, err error) *QueryError {
 	if errors.Is(err, context.DeadlineExceeded) || errors.Is(err, context.Canceled) {
 		return NewError(CodeTimeout, "Query exceeded the time limit and was stopped.", "")
 	}
+	// The context's own state is consulted too: the deadline this process
+	// imposed is the fact, and a driver may return its own error shape rather
+	// than wrapping context.DeadlineExceeded. Without this the parameter was
+	// accepted and ignored — a deadline miss that arrived in another dialect
+	// was reported as a runtime error.
+	if ctx != nil && ctx.Err() != nil {
+		return NewError(CodeTimeout, "Query exceeded the time limit and was stopped.", "")
+	}
 	if errors.Is(err, ErrEnvironmentUnavailable) {
 		return NewError(CodeEnvironmentUnavailable, "The execution environment is unavailable.", err.Error())
 	}

@@ -213,6 +213,27 @@ func run() int {
 			defer m.Close()
 			api.UseEnvironments(m)
 			envManager = m
+
+			// Pay for both sealed templates at boot rather than on a learner's
+			// first request. ensureTemplate/ensurePerfTemplate are both called
+			// lazily under the manager's mutex, so the first challenge request
+			// and the first plan request each built their template while every
+			// other account waited. The perf template comment already claimed a
+			// boot caller; this is it. A failure is logged, not fatal: the lazy
+			// path still builds it on demand, so the gateway stays usable.
+			if err := m.EnsureTemplate(ctx); err != nil {
+				log.Warn("challenge template could not be pre-built; it will be built on first use", "err", err)
+			}
+			if err := m.EnsurePerfTemplate(ctx); err != nil {
+				log.Warn("plan template could not be pre-built; it will be built on first use", "err", err)
+			}
+
+			// ADR 0002's orphan mitigation: a crash between creating an
+			// environment database and recording it leaked the database forever.
+			// Reap every qc environment the store no longer references at boot.
+			// Best-effort and logged: a reaper that cannot run must not stop the
+			// gateway from serving.
+			m.ReapUnreferenced(ctx, st)
 		}
 	}
 

@@ -294,6 +294,24 @@ func (s *SQLite) CountUsers(ctx context.Context) (int, error) {
 	return n, err
 }
 
+// UserIDs implements Store: every account id, for the environment reaper.
+func (s *SQLite) UserIDs(ctx context.Context) ([]string, error) {
+	rows, err := s.db.QueryContext(ctx, `SELECT id FROM users`)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	var ids []string
+	for rows.Next() {
+		var id string
+		if err := rows.Scan(&id); err != nil {
+			return nil, err
+		}
+		ids = append(ids, id)
+	}
+	return ids, rows.Err()
+}
+
 func (s *SQLite) SetPasswordHash(ctx context.Context, userID, hash string) error {
 	_, err := s.db.ExecContext(ctx, `UPDATE users SET password_hash=? WHERE id=?`, hash, userID)
 	return err

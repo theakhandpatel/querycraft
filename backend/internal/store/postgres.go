@@ -298,6 +298,24 @@ func (p *Postgres) CountUsers(ctx context.Context) (int, error) {
 	return n, nil
 }
 
+// UserIDs implements Store: every account id, for the environment reaper.
+func (p *Postgres) UserIDs(ctx context.Context) ([]string, error) {
+	rows, err := p.pool.Query(ctx, `SELECT id FROM app.users`)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	var ids []string
+	for rows.Next() {
+		var id string
+		if err := rows.Scan(&id); err != nil {
+			return nil, err
+		}
+		ids = append(ids, id)
+	}
+	return ids, rows.Err()
+}
+
 // SetPasswordHash implements Store.
 func (p *Postgres) SetPasswordHash(ctx context.Context, userID, hash string) error {
 	_, err := p.pool.Exec(ctx, `UPDATE app.users SET password_hash = $2 WHERE id = $1`, userID, hash)

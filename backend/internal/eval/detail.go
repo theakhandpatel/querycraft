@@ -72,8 +72,9 @@ func CompareDetailed(expected ExpectedResult, contract Contract, qr engine.Query
 	return cmp
 }
 
-// compareRowsDetailed applies the row rules and returns each verdict. Mirrors
-// compareRows, which stays the boolean-only entry point used by tests.
+// compareRowsDetailed applies the row rules and returns each verdict. It is the
+// single implementation of the row rules — the boolean Compare/CompareColumns
+// above are thin wrappers over the *Detailed forms, so a §6.1 change lands once.
 func compareRowsDetailed(expected, actual [][]any, contract Contract) (*bool, *bool, *bool, bool, []string) {
 	tol := contract.NumericTolerance
 	exact := contract.RowOrder == "exact"

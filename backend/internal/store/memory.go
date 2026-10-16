@@ -460,6 +460,17 @@ func (m *Memory) CountUsers(_ context.Context) (int, error) {
 	return len(m.users), nil
 }
 
+// UserIDs implements Store: every account id, for the environment reaper.
+func (m *Memory) UserIDs(_ context.Context) ([]string, error) {
+	m.mu.RLock()
+	defer m.mu.RUnlock()
+	ids := make([]string, 0, len(m.users))
+	for id := range m.users {
+		ids = append(ids, id)
+	}
+	return ids, nil
+}
+
 // SetPasswordHash implements Store.
 func (m *Memory) SetPasswordHash(_ context.Context, userID, hash string) error {
 	m.mu.Lock()

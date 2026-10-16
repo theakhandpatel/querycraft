@@ -54,6 +54,12 @@ type Store interface {
 	UserByID(ctx context.Context, id string) (User, bool, error)
 	CountUsers(ctx context.Context) (int, error)
 	SetPasswordHash(ctx context.Context, userID, hash string) error
+	// UserIDs lists every account id, which is what the environment reaper uses
+	// to decide which per-account databases the store still references. It is the
+	// honest input for "drop the ones not named here": an orphan is a database
+	// whose account was never recorded, so the set of recorded accounts is
+	// exactly the keep-set.
+	UserIDs(ctx context.Context) ([]string, error)
 
 	CreateSession(ctx context.Context, token, userID string, expiresAt time.Time) error
 	SessionUser(ctx context.Context, token string) (User, bool, error)

@@ -64,15 +64,13 @@ func NormalizeCode(code string) string {
 
 // CompareColumns checks only the column names of a successful result. It is the
 // fallback when an exercise ships no expected rows and no reference solution.
+//
+// It is a thin wrapper over CompareColumnsDetailed so the column rule lives in
+// exactly one place. The two used to be separate implementations of the same
+// rule, which meant a §6.1 change had to be made twice in the grading core.
 func CompareColumns(contract Contract, qr engine.QueryResult) (bool, []string) {
-	if qr.Status != "succeeded" || qr.Truncated {
-		return false, nil
-	}
-	contract = contract.normalized()
-	if len(contract.Columns) == 0 {
-		return true, nil
-	}
-	return matchColumns(contract.Columns, columnNames(qr.Columns), contract.ColumnOrder)
+	c := CompareColumnsDetailed(contract, qr)
+	return c.OK, c.Codes
 }
 
 // Compare applies every §6.1 rule:
@@ -85,35 +83,12 @@ func CompareColumns(contract Contract, qr engine.QueryResult) (bool, []string) {
 //  6. numeric comparison uses the contract's tolerance,
 //  7. no implicit text normalization,
 //  8. an empty result is compared like any other.
+//
+// It is a thin wrapper over CompareDetailed (the implementation production and
+// the fixture suite both run), for the same one-rule-one-place reason.
 func Compare(expected ExpectedResult, contract Contract, qr engine.QueryResult) (bool, []string) {
-	if qr.Status != "succeeded" {
-		return false, nil
-	}
-	if qr.Truncated {
-		return false, []string{CodeRowCount}
-	}
-	contract = contract.normalized()
-
-	wantCols := contract.Columns
-	if len(wantCols) == 0 {
-		wantCols = expected.Columns
-	}
-	gotCols := columnNames(qr.Columns)
-
-	if ok, codes := matchColumns(wantCols, gotCols, contract.ColumnOrder); !ok {
-		return false, codes
-	}
-
-	order := alignColumns(wantCols, gotCols, contract.ColumnOrder)
-	actRows := projectRows(qr.Rows, order)
-
-	if expected.Rows == nil {
-		return true, nil
-	}
-	if ok, codes := compareRows(expected.Rows, actRows, contract); !ok {
-		return false, dedupe(codes)
-	}
-	return true, nil
+	c := CompareDetailed(expected, contract, qr)
+	return c.OK, c.Codes
 }
 
 func matchColumns(want, got []string, order string) (bool, []string) {
@@ -189,62 +164,6 @@ func projectRows(rows [][]any, order []int) [][]any {
 		out[r] = proj
 	}
 	return out
-}
-
-func compareRows(expected, actual [][]any, contract Contract) (bool, []string) {
-	tol := contract.NumericTolerance
-
-	if contract.RowOrder == "exact" {
-		if len(expected) != len(actual) {
-			return false, []string{CodeRowCount}
-		}
-		var codes []string
-		for i := range expected {
-			if !rowsEqual(expected[i], actual[i], tol) {
-				codes = append(codes, CodeValueMismatch)
-			}
-		}
-		if len(codes) == 0 {
-			return true, nil
-		}
-		if multisetEqual(expected, actual, tol, contract.Duplicates) {
-			codes = append(codes, CodeRowOrder)
-		}
-		return false, codes
-	}
-
-	if contract.Duplicates == "ignored" {
-		expSet := uniqueRows(expected, tol)
-		actSet := uniqueRows(actual, tol)
-		if len(expSet) != len(actSet) {
-			return false, []string{CodeRowCount}
-		}
-		for _, e := range expSet {
-			if !containsRow(actSet, e, tol) {
-				return false, []string{CodeValueMismatch}
-			}
-		}
-		return true, nil
-	}
-
-	if len(expected) != len(actual) {
-		return false, []string{CodeRowCount}
-	}
-	used := make([]bool, len(actual))
-	for _, e := range expected {
-		found := false
-		for j := range actual {
-			if !used[j] && rowsEqual(e, actual[j], tol) {
-				used[j] = true
-				found = true
-				break
-			}
-		}
-		if !found {
-			return false, []string{CodeValueMismatch}
-		}
-	}
-	return true, nil
 }
 
 func rowsEqual(a, b []any, tol float64) bool {

@@ -200,7 +200,7 @@ const openAPISpec = `{
             "content": {"application/json": {"schema": {"$ref": "#/components/schemas/EnvironmentResetResponse"}}}
           },
           "400": {
-            "description": "The request named a course together with the perf dataset, or a dataset this gateway does not serve.",
+            "description": "The request named a course together with the perf dataset, a dataset this gateway does not serve, or a dialect it cannot reset (DIALECT_MISMATCH). The body is the route's own ErrorEnvelope ({ok:false,error}), not a QueryResult — a reset is not a statement.",
             "content": {"application/json": {"schema": {"$ref": "#/components/schemas/ErrorEnvelope"}}}
           },
           "401": {
@@ -1763,7 +1763,7 @@ const openAPISpec = `{
               "code": {
                 "type": "string",
                 "description": "Stable gateway error code. The envelope adds NOT_FOUND (unknown dataset) to the QueryResult error set.",
-                "enum": ["EMPTY_QUERY", "QUERY_SYNTAX_ERROR", "QUERY_RUNTIME_ERROR", "QUERY_TIMEOUT", "RESULT_LIMIT_EXCEEDED", "ENVIRONMENT_UNAVAILABLE", "PERSISTENCE_FAILED", "EVALUATION_ERROR", "NOT_FOUND", "AUTH_REQUIRED", "AUTH_INVALID_INPUT", "AUTH_INVALID_CREDENTIALS", "AUTH_EMAIL_TAKEN", "AUTH_RATE_LIMITED"]
+                "enum": ["EMPTY_QUERY", "QUERY_SYNTAX_ERROR", "QUERY_RUNTIME_ERROR", "QUERY_TIMEOUT", "RESULT_LIMIT_EXCEEDED", "ENVIRONMENT_UNAVAILABLE", "DIALECT_MISMATCH", "PERSISTENCE_FAILED", "EVALUATION_ERROR", "NOT_FOUND", "AUTH_REQUIRED", "AUTH_INVALID_INPUT", "AUTH_INVALID_CREDENTIALS", "AUTH_EMAIL_TAKEN", "AUTH_RATE_LIMITED"]
               },
               "message": {"type": "string"},
               "detail": {"type": ["string", "null"]}

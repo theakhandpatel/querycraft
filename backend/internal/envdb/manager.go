@@ -628,6 +628,51 @@ func (m *Manager) databaseName(accountID string) string {
 	return dataset.EnvironmentDatabaseName("acct_" + digest(accountID)[:32])
 }
 
+// AccountLister is the slice of store.Store the reaper needs: the set of account
+// ids the app still knows about. It is an interface here so envdb does not import
+// store (store already imports ai; this keeps the dependency one-way).
+type AccountLister interface {
+	UserIDs(ctx context.Context) ([]string, error)
+}
+
+// ReapUnreferenced drops every environment database the store no longer
+// references — ADR 0002's orphan mitigation, now wired. An orphan is a database
+// created for an account that was never recorded (a crash between CREATE and the
+// store write), so the recorded account ids are exactly the keep-set. It is
+// best-effort: a failure to list or drop is reported, never fatal, because a
+// reaper that cannot run must not stop the gateway serving.
+func (m *Manager) ReapUnreferenced(ctx context.Context, store AccountLister) {
+	if store == nil {
+		return
+	}
+	ids, err := store.UserIDs(ctx)
+	if err != nil {
+		m.opts.Log.Warn("environment reaper: could not list accounts; skipping", "err", err)
+		return
+	}
+	keep := make([]string, 0, len(ids)*2)
+	for _, id := range ids {
+		keep = append(keep, m.databaseName(id))
+		keep = append(keep, dataset.EnvironmentDatabaseName("perf_"+digest(id)[:32]))
+	}
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	if m.closed {
+		return
+	}
+	// The sealed templates must never be dropped: they are not account
+	// environments, but ListEnvironmentDatabases matches the qc prefix, so they
+	// are added to the keep-set explicitly.
+	keep = append(keep, m.opts.TemplateName, m.opts.PerfTemplateName)
+	dropped, derr := dataset.ReapEnvironmentDatabases(ctx, m.admin, keep)
+	if len(dropped) > 0 {
+		m.opts.Log.Info("environment reaper dropped orphaned databases", "count", len(dropped), "names", dropped)
+	}
+	if derr != nil {
+		m.opts.Log.Warn("environment reaper: some databases could not be dropped", "err", derr)
+	}
+}
+
 func digest(accountID string) string {
 	sum := sha256.Sum256([]byte(accountID))
 	return hex.EncodeToString(sum[:])

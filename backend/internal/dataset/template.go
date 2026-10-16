@@ -77,6 +77,11 @@ func ConnectToDatabase(ctx context.Context, admin *pgx.Conn, database string) (*
 // ConnectAsLearner opens an environment connection as the restricted role, which
 // is the only way learner SQL is ever executed. It exists so a spike or an
 // integration test can prove the grants travelled with the template.
+//
+// TEST/SPIKE-ONLY: no production path calls it — the gateway reaches learner
+// connections through envdb.Manager, never directly. Kept because
+// template_test.go/writable_test.go use it to assert the copy carried the
+// grants, which is a claim worth pinning.
 func ConnectAsLearner(ctx context.Context, admin *pgx.Conn, database, password string) (*pgx.Conn, error) {
 	cfg := admin.Config().Copy()
 	cfg.Database = database
@@ -127,6 +132,11 @@ func CreateDatabaseFromTemplate(ctx context.Context, admin *pgx.Conn, name, temp
 // none of them can change them. A challenge environment needs the learner to
 // write, and uses LoadWritableIntoTemplate instead. The two are deliberately
 // different grant sets on purpose — see roles.go for the gateway's database.
+//
+// TEST/SPIKE-ONLY: production templates are built by LoadWritableIntoTemplate
+// (challenge) and LoadPerfIntoTemplate (plan); this read-only variant has no
+// production caller and is kept because the spike tests pin the ungranted-copy
+// failure it exists to explain.
 func LoadIntoTemplate(ctx context.Context, admin *pgx.Conn, template, learnerPassword string) error {
 	return loadIntoTemplate(ctx, admin, template, learnerPassword, false)
 }
@@ -282,6 +292,9 @@ func ReapEnvironmentDatabases(ctx context.Context, admin *pgx.Conn, keep []strin
 // EnvironmentDatabaseSize reports the bytes a database occupies on disk, which
 // is what makes a leaked environment visible: an orphan costs disk forever and
 // nothing on the boot path notices it.
+//
+// TEST/SPIKE-ONLY: the reaper drops orphans by name; nothing in production
+// reports their size. Kept for the spike test that documents the 7.6 MiB cost.
 func EnvironmentDatabaseSize(ctx context.Context, admin *pgx.Conn, name string) (int64, error) {
 	var size int64
 	if err := admin.QueryRow(ctx, "SELECT pg_database_size($1)", name).Scan(&size); err != nil {

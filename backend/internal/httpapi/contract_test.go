@@ -843,6 +843,35 @@ func TestEvaluateRequestExerciseMatchesContract(t *testing.T) {
 	}
 }
 
+// TestTheRealClientExerciseShapeMatchesTheContract closes the gap the fixture
+// above leaves: that test validates a hand-written body that carries setup and
+// result_contract, while the shipped client (web/src/api/execution.ts) sends
+// {id, version, lesson_id, contract, reference_solution} and none of the
+// authored core. The schema used to require the authored fields, so the real
+// request would have failed it — and nothing noticed, because only the fixture
+// was ever validated. This pins the shape the client actually sends.
+func TestTheRealClientExerciseShapeMatchesTheContract(t *testing.T) {
+	exercise := loadContract(t, "exercise.schema.json")
+
+	// The exact body execution.ts builds for POST /answers/evaluate.
+	clientExercise := map[string]any{
+		"id":        "ex.sqlite.1",
+		"version":   float64(1),
+		"lesson_id": "sqlite-essentials",
+		"contract": map[string]any{
+			"columns":           []any{"n"},
+			"column_order":      "exact",
+			"row_order":         "ignored",
+			"duplicates":        "preserved",
+			"numeric_tolerance": float64(0),
+		},
+		"reference_solution": "SELECT count(*) AS n FROM customers",
+	}
+	if vs := validateSchema(exercise, clientExercise, ""); len(vs) > 0 {
+		t.Errorf("the shape the shipped client sends violates contracts/exercise.schema.json:\n%s", formatViolations(vs))
+	}
+}
+
 // TestSchemaValidator exercises the validator itself so a passing contract test
 // is trustworthy.
 func TestSchemaValidator(t *testing.T) {

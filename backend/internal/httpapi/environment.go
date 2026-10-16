@@ -86,6 +86,20 @@ func rfc3339(t time.Time) string {
 	return t.UTC().Format(time.RFC3339)
 }
 
+// errorEnvelope writes the {ok:false,error} shape the workspace routes use, for
+// a refusal that is the route's own rather than a statement's. It exists so a
+// non-statement route does not answer a 400 with a bare QueryResult, which is a
+// different contract shape (and the OpenAPI documents these as ErrorEnvelope).
+func errorEnvelope(w http.ResponseWriter, status int, code, message string) {
+	writeJSON(w, status, map[string]any{
+		"ok": false,
+		"error": map[string]string{
+			"code":    code,
+			"message": message,
+		},
+	})
+}
+
 // environmentUnavailable reports that no workspace can be provided. It uses the
 // contract's closed error enum, so the code is never invented.
 func environmentUnavailable(w http.ResponseWriter, err error) {
@@ -170,7 +184,13 @@ func (s *Server) handleEnvironmentReset(w http.ResponseWriter, r *http.Request) 
 		return
 	}
 	if dialect != engine.DialectPostgres {
-		writeJSON(w, http.StatusBadRequest, s.refusingDialect(r.Context(), dialect))
+		// The reset route answers in the {ok,error} envelope, not a QueryResult:
+		// a reset is not a statement, so a refusal is the route's own shape. The
+		// 400 used to carry a bare QueryResult (dialect+engine+request_id), which
+		// is the shape this route never returns elsewhere — and put
+		// DIALECT_MISMATCH in a body the OpenAPI documents as ErrorEnvelope.
+		errorEnvelope(w, http.StatusBadRequest, engine.CodeDialectMismatch,
+			fmt.Sprintf("This gateway cannot reset a %s workspace; it serves %s here.", dialect, engine.DialectPostgres))
 		return
 	}
 	if s.envs == nil {
@@ -191,9 +211,8 @@ func (s *Server) handleEnvironmentReset(w http.ResponseWriter, r *http.Request) 
 	var setup ai.SetupPlan
 	if courseID != "" {
 		if perf {
-			writeJSON(w, http.StatusBadRequest, engine.Failing(engine.CodeEnvironmentUnavailable,
-				"A course runs in its own workspace, so it cannot be combined with the "+dataset.PerfDatasetID+" dataset.",
-				"", engine.RequestIDFromContext(r.Context())))
+			errorEnvelope(w, http.StatusBadRequest, engine.CodeEnvironmentUnavailable,
+				"A course runs in its own workspace, so it cannot be combined with the "+dataset.PerfDatasetID+" dataset.")
 			return
 		}
 		found, err := s.courseSetup(r.Context(), u.ID, courseID, &setup)
@@ -213,8 +232,7 @@ func (s *Server) handleEnvironmentReset(w http.ResponseWriter, r *http.Request) 
 	if perf {
 		took, err = s.envs.ResetPerf(r.Context(), u.ID)
 	} else if requested != "" {
-		writeJSON(w, http.StatusBadRequest, engine.Failing(engine.CodeEnvironmentUnavailable,
-			unknownDatasetMessage(requested), "", engine.RequestIDFromContext(r.Context())))
+		errorEnvelope(w, http.StatusBadRequest, engine.CodeEnvironmentUnavailable, unknownDatasetMessage(requested))
 		return
 	} else {
 		took, err = s.envs.Reset(r.Context(), u.ID)

@@ -417,3 +417,37 @@ func TestHealthReportsEveryServedDialect(t *testing.T) {
 		t.Errorf("engine = %v, want the default dialect %q", withSQLite["engine"], engine.DialectPostgres)
 	}
 }
+
+// TestResetRefusesAnUnservedDialectWithTheEnvelope pins the shape: a reset
+// refusal is the route's own {ok:false,error} envelope, not a QueryResult. It
+// used to return a bare QueryResult (dialect+engine+request_id) carrying
+// DIALECT_MISMATCH — a shape this route never returns elsewhere, and one the
+// OpenAPI documents as ErrorEnvelope.
+func TestResetRefusesAnUnservedDialectWithTheEnvelope(t *testing.T) {
+	s := sqliteTestServer(t, &fakeExecutor{})
+	alice := signupUser(t, s, "reset-dialect@example.com")
+
+	w := doAs(t, s, alice, http.MethodPost, "/environment/reset?dialect=mysql", "")
+	var out map[string]any
+	mustDecode(t, w, &out)
+	if w.Code != http.StatusBadRequest {
+		t.Fatalf("status = %d, want 400; body = %s", w.Code, w.Body.String())
+	}
+	if ok, _ := out["ok"].(bool); ok {
+		t.Errorf("ok = true on a refusal: %v", out)
+	}
+	errObj, ok := out["error"].(map[string]any)
+	if !ok {
+		t.Fatalf("body has no error object: %v", out)
+	}
+	if errObj["code"] != engine.CodeDialectMismatch {
+		t.Errorf("error.code = %v, want %s", errObj["code"], engine.CodeDialectMismatch)
+	}
+	// The envelope shape, not a QueryResult: no top-level dialect/rows/engine.
+	if _, isQR := out["rows"]; isQR {
+		t.Errorf("refusal is a QueryResult, not the route's envelope: %v", out)
+	}
+	if _, isQR := out["dialect"]; isQR {
+		t.Errorf("refusal carries a top-level dialect field (QueryResult shape): %v", out)
+	}
+}
