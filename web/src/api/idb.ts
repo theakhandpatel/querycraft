@@ -7,7 +7,7 @@
    actually survive a reload instead of pretending a write succeeded.
 
    Every failure path is a typed `IdbError` carrying the code
-   PERSISTENCE_UNAVAILABLE — including "this browser has no IndexedDB"
+   PERSISTENCE_FAILED — including "this browser has no IndexedDB"
    (private mode, disabled storage) and "another tab blocked the upgrade". An
    open that never resolves is not an acceptable outcome, so the open is raced
    against a timeout. */
@@ -46,9 +46,13 @@ export const OFFLINE_STORES: readonly string[] = [
 /** How long to wait for `indexedDB.open` before declaring storage unusable. */
 const OPEN_TIMEOUT_MS = 4000;
 
-/** A storage failure the adapters can turn into a typed GatewayError. */
+/** A storage failure the adapters can turn into a typed GatewayError. The code
+    is PERSISTENCE_FAILED — the contract's own code for "a write did not land"
+    (contracts/query-result.schema.json). It was PERSISTENCE_UNAVAILABLE, a
+    client-only code outside the closed enum, which made errors.ts's claim that a
+    code is "a stable contract code" false. One concept, one name. */
 export class IdbError extends Error {
-  readonly code = 'PERSISTENCE_UNAVAILABLE' as const;
+  readonly code = 'PERSISTENCE_FAILED' as const;
 
   constructor(message: string, options?: { cause?: unknown }) {
     super(message, options);

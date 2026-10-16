@@ -7,7 +7,7 @@
  *   1. the store layout matches 8.1, by name, at version 2;
  *   2. one progress snapshot splits across those stores without loss, and reads
  *      back whole (attempts, evaluations, notes, bookmarks, saved queries, meta);
- *   3. a write that cannot land rejects with PERSISTENCE_UNAVAILABLE instead of
+ *   3. a write that cannot land rejects with PERSISTENCE_FAILED instead of
  *      resolving { ok: true } -- the "it's a mock" failure this guards against.
  *
  *   make audit-storage
@@ -115,7 +115,7 @@ try {
 } catch (e) {
   putCode = e && e.code;
 }
-check('a blocked write rejects PERSISTENCE_UNAVAILABLE', putCode === 'PERSISTENCE_UNAVAILABLE', String(putCode));
+check('a blocked write rejects PERSISTENCE_FAILED', putCode === 'PERSISTENCE_FAILED', String(putCode));
 
 let manyCode = null;
 try {
@@ -123,7 +123,7 @@ try {
 } catch (e) {
   manyCode = e && e.code;
 }
-check('a blocked bundle write is typed too', manyCode === 'PERSISTENCE_UNAVAILABLE', String(manyCode));
+check('a blocked bundle write is typed too', manyCode === 'PERSISTENCE_FAILED', String(manyCode));
 
 console.log(`stores: ${WANT_STORES.length}  rows: ${rows.length}  problems: ${problems.length}`);
 for (const p of problems) console.log(`  FAIL ${p}`);

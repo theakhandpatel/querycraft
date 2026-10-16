@@ -20,6 +20,10 @@ const (
 )
 
 // validFeedbackCodes is the feedback-code enum from evaluation.schema.json.
+// Keep in lockstep with that file — a code the contract declares but this set
+// omits would be silently clamped to VALUE_MISMATCH by NormalizeCode, changing
+// what the learner sees. The mock adapter emits these same authored codes, so
+// the two sides must agree on the whole set.
 var validFeedbackCodes = map[string]bool{
 	"VALUE_MISMATCH":         true,
 	"COLUMN_MISMATCH":        true,
@@ -38,6 +42,14 @@ var validFeedbackCodes = map[string]bool{
 	"RANK_FUNCTION_MISMATCH": true,
 	"GRAIN_ERROR":            true,
 	"EXPLANATION_MISSING":    true,
+	"CASE_MISSING":           true,
+	"DISTINCT_MISSING":       true,
+	"NULL_SAFETY":            true,
+	"NULL_TRAP":              true,
+	"RECURSION_MISSING":      true,
+	"SET_OP_MISSING":         true,
+	"SUBQUERY_MISSING":       true,
+	"TABLE_MISSING":          true,
 	"EVALUATION_ERROR":       true,
 }
 

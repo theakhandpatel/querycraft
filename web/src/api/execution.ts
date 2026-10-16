@@ -499,7 +499,7 @@ export const PGLITE_CONFIG: ApiConfig = {
 
 /* Offline learner data lives in IndexedDB (see ./idb) so the mock and PGlite
    layers share one honest store: a snapshot read back on the next boot, and a
-   failed write that surfaces as PERSISTENCE_UNAVAILABLE instead of a silent
+   failed write that surfaces as PERSISTENCE_FAILED instead of a silent
    { ok: true }. Course generation stays in memory; it is a draft, not data. */
 type LocalMethods = Pick<ExecutionServiceShape, 'getProgress' | 'saveProgress' | 'logEvent' | 'draftCourse' | 'draftChallenge' | 'getContent'>;
 
@@ -509,7 +509,7 @@ const SAVE_FAILURE = 'Could not save your progress in this browser (storage unav
 /** Offline storage failed: carry the contract code so callers can branch on it. */
 function persistenceFailure(message: string, cause: unknown): GatewayError {
   return new GatewayError({
-    code: 'PERSISTENCE_UNAVAILABLE',
+    code: 'PERSISTENCE_FAILED',
     message,
     detail: cause instanceof Error ? cause.message : String(cause),
   });

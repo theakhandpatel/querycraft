@@ -683,7 +683,7 @@ export function StoreProvider({ children }: { children: React.ReactNode }) {
       persistFailureNoticed.current = true;
       const code = (e as { code?: string } | null)?.code;
       toast(
-        code === 'PERSISTENCE_UNAVAILABLE'
+        code === 'PERSISTENCE_FAILED'
           ? 'This browser blocked local storage, so your work is kept in this tab only.'
           : 'Could not sync your progress to the account. It is still saved in this browser.'
       );
