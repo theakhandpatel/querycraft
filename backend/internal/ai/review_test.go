@@ -235,6 +235,65 @@ ORDER BY order_count DESC, customer_name ASC`
 	}
 }
 
+func TestAPatchCannotBeAppliedThroughAnotherChallengesRoute(t *testing.T) {
+	// Security regression: the patch is loaded by id and applied to the
+	// challenge named *inside the patch*, so without a route binding an approval
+	// sent to `/challenges/A/patches/<patch-for-B>` would modify B. The route
+	// challenge id must be a binding, not decoration.
+	ex := bootPG(t)
+	ctx := testContext(t)
+	depot := newTestDepot()
+	art := seedChallenge(t, ex, depot, NewFakeProvider())
+	svc := testService(NewFakeProvider(), depot, ex)
+
+	wrong := `SELECT c.name AS customer_name, count(o.id) + 1 AS order_count
+FROM "dataset"."customers" c
+JOIN "dataset"."orders" o ON o.customer_id = c.id
+GROUP BY c.name
+ORDER BY order_count DESC, customer_name ASC`
+	v, err := svc.ReportDefect(ctx, DefectReport{ChallengeID: art.ID, Description: "values differ", SQL: wrong})
+	if err != nil || v.Patch == nil {
+		t.Fatalf("could not seed a verified patch: %+v / %v", v, err)
+	}
+
+	// Approved and signed, but sent under a DIFFERENT challenge's route: refuse,
+	// and leave both the artifact and the approval record untouched.
+	res, err := svc.ApplyPatch(ctx, PatchDecision{
+		PatchID:     v.Patch.ID,
+		ChallengeID: "some-other-challenge",
+		Approved:    true,
+		ApprovedBy:  "learner@example.com",
+	})
+	if err == nil {
+		t.Fatal("a patch was applied through another challenge's route")
+	}
+	var aiErr *Error
+	if !errors.As(err, &aiErr) || aiErr.Code != CodeNotFound {
+		t.Fatalf("error = %v, want %s", err, CodeNotFound)
+	}
+	if res.Applied {
+		t.Fatal("PatchResult.Applied must be false on a mismatch")
+	}
+	rec, _, _ := depot.Challenge(ctx, art.ID)
+	if rec.Artifact.Version != art.Version || rec.Artifact.Prompt != art.Prompt {
+		t.Fatalf("the challenge changed after a mismatched apply: %+v", rec.Artifact)
+	}
+	if _, approved := depot.approved[v.Patch.ID]; approved {
+		t.Fatal("the patch was recorded as approved despite the mismatch")
+	}
+
+	// The same patch, under its own challenge's route, still applies.
+	res, err = svc.ApplyPatch(ctx, PatchDecision{
+		PatchID:     v.Patch.ID,
+		ChallengeID: art.ID,
+		Approved:    true,
+		ApprovedBy:  "learner@example.com",
+	})
+	if err != nil || !res.Applied {
+		t.Fatalf("the correctly-routed apply failed: res=%+v err=%v", res, err)
+	}
+}
+
 func TestAvailableExplainsWhatIsMissing(t *testing.T) {
 	runner := failingRunner{} // non-nil and never called by Available
 	tests := []struct {

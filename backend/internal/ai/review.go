@@ -277,6 +277,14 @@ func (s *Service) applyPatch(ctx context.Context, dec PatchDecision) (PatchResul
 	if !found {
 		return PatchResult{}, newError(CodeNotFound, "", "No such patch.", dec.PatchID)
 	}
+	// The route named a challenge; the patch names one too. They must agree, or
+	// a request to approve a patch under challenge A could modify challenge B.
+	// An empty dec.ChallengeID is the internal caller that has no route (tests,
+	// the CLI path), and is not a mismatch.
+	if dec.ChallengeID != "" && patch.ChallengeID != "" && patch.ChallengeID != dec.ChallengeID {
+		return PatchResult{}, newError(CodeNotFound, "",
+			"No such patch on this challenge.", dec.PatchID)
+	}
 	if !dec.Approved || strings.TrimSpace(dec.ApprovedBy) == "" {
 		e := newError(CodePatchUnapproved, "",
 			"A patch is never applied without an explicit approval.", "approved/approved_by")
@@ -304,9 +312,6 @@ func (s *Service) applyPatch(ctx context.Context, dec PatchDecision) (PatchResul
 		return PatchResult{Applied: false, Patch: &patch, Error: e}, e
 	}
 
-	if err := s.cfg.Depot.ApprovePatch(ctx, patch.ID, dec.ApprovedBy); err != nil {
-		return PatchResult{}, newError(CodeUnavailable, "", "The approval could not be recorded.", engine.RedactSecrets(err.Error()))
-	}
 	patched.Version = rec.Artifact.Version + 1
 	patched.Provenance = s.stampProvenance(0)
 	out := Outcome{Status: StatusActive, Kind: "challenge", Artifact: &patched, Stages: []Stage{}, Attempts: []Attempt{}}
@@ -318,6 +323,14 @@ func (s *Service) applyPatch(ctx context.Context, dec PatchDecision) (PatchResul
 		CreatedAt: patched.Provenance.CreatedAt,
 	}); err != nil {
 		return PatchResult{}, newError(CodeUnavailable, "", "The patched challenge could not be stored.", engine.RedactSecrets(err.Error()))
+	}
+	// The approval is recorded AFTER the artifact is stored. The order is
+	// load-bearing: recording it first meant a failed store left the patch
+	// marked approved for an apply that never happened, and a retry would then
+	// look like a re-approval of something already admitted. Approval is the
+	// record that the change landed, so it must land first.
+	if err := s.cfg.Depot.ApprovePatch(ctx, patch.ID, dec.ApprovedBy); err != nil {
+		return PatchResult{}, newError(CodeUnavailable, "", "The approval could not be recorded.", engine.RedactSecrets(err.Error()))
 	}
 	return PatchResult{Applied: true, Patch: &patch}, nil
 }

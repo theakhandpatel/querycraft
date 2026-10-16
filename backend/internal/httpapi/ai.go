@@ -637,6 +637,10 @@ func (s *Server) handlePatch(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	dec.PatchID = r.PathValue("patchID")
+	// The route names the challenge the approval is for. The service refuses a
+	// patch that belongs to a different one, so an approval cannot be redirected
+	// by pairing a valid patch id with another challenge's route.
+	dec.ChallengeID = r.PathValue("id")
 	// The approver is the authenticated account, never a name the body chose.
 	dec.ApprovedBy = u.Email
 	svc := s.aiServiceFor(u.ID)

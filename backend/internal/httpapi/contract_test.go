@@ -707,13 +707,10 @@ func TestEndpointsConformToSchemas(t *testing.T) {
 // TestAnswerEvaluateAgainstEvaluationContract validates /answers/evaluate
 // against the contract that contracts/README.md ties to it.
 //
-// The endpoint returns the EvaluateResponse envelope declared in openapi.go
-// ({qr, checks, passed, duration_ms}); evaluation.schema.json instead describes
-// the persisted Evaluation record (required: attempt_id, status, feedback_codes,
-// evaluator_version). The gateway does not emit that record, so this test
-// reports the divergence rather than failing the default `go test` run — the
-// missing fields cannot be derived without inventing semantics for attempt_id
-// and evaluator_version. Set QC_CONTRACT_STRICT=1 to enforce the contract.
+// evaluation.schema.json describes the /answers/evaluate response envelope
+// ({qr, checks, passed, duration_ms}); an earlier version described a persisted
+// Evaluation record that no endpoint ever emitted (see contracts/README.md).
+// In strict mode (QC_CONTRACT_STRICT=1) any violation fails the run.
 func TestAnswerEvaluateAgainstEvaluationContract(t *testing.T) {
 	evaluation := loadContract(t, "evaluation.schema.json")
 
@@ -754,6 +751,72 @@ func TestAnswerEvaluateAgainstEvaluationContract(t *testing.T) {
 		if !expected[name] {
 			t.Errorf("unexpected missing required property: %s", name)
 		}
+	}
+}
+
+// TestEvaluationNestedErrorEnumMatchesQueryResult pins the nested qr.error.code
+// enum in evaluation.schema.json to the one in query-result.schema.json.
+//
+// They describe the same Go type (engine.QueryResult) reached by two routes, so
+// they must agree. A reviewer found them already drifted once: evaluation was
+// missing DIALECT_MISMATCH, which /answers/evaluate can genuinely return, and
+// the conformance test above could not catch it because its fixture never
+// produces a dialect refusal. Comparing the two enums directly catches it
+// whether or not a fixture happens to exercise the branch.
+func TestEvaluationNestedErrorEnumMatchesQueryResult(t *testing.T) {
+	// Both error schemas are `oneOf: [null, {object with properties.code.enum}]`.
+	// The enum is inside the object branch, so find the branch that carries it.
+	codeEnum := func(schema map[string]any, path ...string) []string {
+		t.Helper()
+		cur := schema
+		for _, key := range path {
+			next, ok := cur[key].(map[string]any)
+			if !ok {
+				t.Fatalf("schema path %v not found at %q", path, key)
+			}
+			cur = next
+		}
+		branches, ok := cur["oneOf"].([]any)
+		if !ok {
+			t.Fatalf("no oneOf at schema path %v", path)
+		}
+		for _, branch := range branches {
+			obj, ok := branch.(map[string]any)
+			if !ok {
+				continue
+			}
+			props, ok := obj["properties"].(map[string]any)
+			if !ok {
+				continue
+			}
+			code, ok := props["code"].(map[string]any)
+			if !ok {
+				continue
+			}
+			raw, ok := code["enum"].([]any)
+			if !ok {
+				continue
+			}
+			out := make([]string, 0, len(raw))
+			for _, v := range raw {
+				s, _ := v.(string)
+				out = append(out, s)
+			}
+			sort.Strings(out)
+			return out
+		}
+		t.Fatalf("no error code enum found under schema path %v", path)
+		return nil
+	}
+
+	evaluation := loadContract(t, "evaluation.schema.json")
+	queryResult := loadContract(t, "query-result.schema.json")
+
+	evalEnum := codeEnum(evaluation, "properties", "qr", "properties", "error")
+	qrEnum := codeEnum(queryResult, "properties", "error")
+
+	if strings.Join(evalEnum, ",") != strings.Join(qrEnum, ",") {
+		t.Errorf("evaluation qr.error.code enum drifted from query-result:\n evaluation: %v\n query-result: %v", evalEnum, qrEnum)
 	}
 }
 

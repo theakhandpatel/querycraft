@@ -304,7 +304,7 @@ audit-import: ## Check import validation, the merge policy and the export/import
 		--outfile=/tmp/progress.cjs src/lib/progress.ts >/dev/null
 	node scripts/import-audit.mjs
 
-audit-fixtures: ## Check the language-neutral result-contract fixtures against the JS evaluator (Go half: go test ./internal/eval/...).
+audit-fixtures: ## Check the language-neutral result-contract fixtures against the JS evaluator (the Go half is `go test ./internal/eval/`, run by `make test`).
 	cd $(WEB_DIR) && ./node_modules/.bin/esbuild --bundle --format=cjs --platform=node \
 		--outfile=/tmp/fixtures.cjs src/api/compare.ts >/dev/null
 	node scripts/fixtures-audit.mjs

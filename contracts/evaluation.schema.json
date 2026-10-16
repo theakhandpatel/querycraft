@@ -26,7 +26,7 @@
               "type": "object",
               "required": ["code", "message"],
               "properties": {
-                "code": { "enum": ["EMPTY_QUERY", "QUERY_SYNTAX_ERROR", "QUERY_RUNTIME_ERROR", "QUERY_TIMEOUT", "RESULT_LIMIT_EXCEEDED", "ENVIRONMENT_UNAVAILABLE", "PERSISTENCE_FAILED", "EVALUATION_ERROR"] },
+                "code": { "enum": ["EMPTY_QUERY", "QUERY_SYNTAX_ERROR", "QUERY_RUNTIME_ERROR", "QUERY_TIMEOUT", "RESULT_LIMIT_EXCEEDED", "ENVIRONMENT_UNAVAILABLE", "DIALECT_MISMATCH", "PERSISTENCE_FAILED", "EVALUATION_ERROR"] },
                 "message": { "type": "string" },
                 "detail": { "type": ["string", "null"] }
               }
@@ -34,7 +34,8 @@
           ]
         },
         "request_id": { "type": ["string", "null"] },
-        "engine": { "type": "string" }
+        "engine": { "type": "string" },
+        "dialect": { "type": "string", "description": "The dialect the engine that produced this result belongs to. It is the same field the nested query-result schema defines; /answers/evaluate can grade a SQLite or a PostgreSQL exercise, so the result says which." }
       }
     },
     "checks": {

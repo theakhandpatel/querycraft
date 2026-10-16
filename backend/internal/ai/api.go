@@ -360,9 +360,15 @@ type DefectVerdict struct {
 
 // PatchDecision is the learner's approval. A patch is never applied without it.
 type PatchDecision struct {
-	PatchID    string `json:"patch_id"`
-	Approved   bool   `json:"approved"`
-	ApprovedBy string `json:"approved_by"`
+	PatchID string `json:"patch_id"`
+	// ChallengeID is the challenge the route named. It is a safety binding, not
+	// decoration: the patch is loaded by PatchID and applied to the challenge
+	// *inside the patch*, so without this a request to approve a patch under one
+	// challenge could modify a different one. It is set from the route path,
+	// never from the body, and a patch whose ChallengeID disagrees is refused.
+	ChallengeID string `json:"challenge_id"`
+	Approved    bool   `json:"approved"`
+	ApprovedBy  string `json:"approved_by"`
 }
 
 // PatchResult reports what happened to the approval.

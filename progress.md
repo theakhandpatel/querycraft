@@ -140,6 +140,43 @@ source here before recording.** Real faults:
   writable-workspace model (ADR 0003/0006), Postgres `app` schema, the
   provider-neutral AI interface.
 
+**Reviewer 2 (tests, scripts, build, docs) — completed. One claim is FALSE; the
+rest verified.** The false one first, because it shows why every finding is
+checked against the code rather than relayed:
+
+- **❌ FALSE: "`make test` does not run the Go test suite."** The reviewer read
+  only the prerequisite *list* on `Makefile:75` and missed the recipe *body* on
+  the very next line — `Makefile:76` is `cd $(BACKEND_DIR) && $(GO) test ./...`.
+  Disproved empirically: `make -n test` prints that line, and a real `make test`
+  run reports 13 `ok …backend` lines. Not a gap; no change.
+
+Verified findings:
+
+- **R2#2 (real doc drift):** `docs/technical-design.md:37` says "SQLite metadata
+  dropped" and `:88` says `No SQLite` — but SQLite metadata shipped (item 5,
+  `QC_METADATA=sqlite`). A reader building from the design doc is misled.
+- **R2#3 (real flake):** `cmd/api/main_test.go:100-117` uses
+  `runtime.NumGoroutine()` as a success signal and polls it — non-deterministic.
+- **R2#4 (real):** `Makefile:27` pins `SMOKE_ADDR ?= 127.0.0.1:18080`, so
+  `verify`/`verify-mock` fail if that port is taken; `scripts/lib/gateway.mjs`
+  already has a `freePort()` helper the Makefile does not use.
+- **R2#7 (real, latent):** audit scripts share fixed `/tmp/curriculum.cjs`,
+  `/tmp/progress.cjs` etc. `make test` runs them sequentially so it is safe
+  today, but `make -j` or a parallel run can clobber (PID-scoping fixes it).
+- **R2#8 (real doc drift):** `web/AGENTS.md:29` says "Three courses are
+  complete"; the tree ships 8+.
+- **R2#10 (real):** the `audit-fixtures` Makefile comment claims a "Go half"
+  that the recipe does not run.
+- R2#5/R2#6 (the SQLite reset flake and the retry-on-closed-pool helper) are the
+  same two hazards already recorded here; the reviewer agrees the retry is a
+  legitimate *temporary* guard, not a fix.
+
+**Reviewers 3–5 (Go internals, frontend, cross-cutting seam) — DID NOT RUN.**
+All three terminated on an external billing failure, not on the task:
+`402 Payment Required — insufficient_balance` ("Coding Plan quota is exhausted…
+resets 2026-10-16T07:19:45Z"). No findings, no work lost; those three areas are
+simply unreviewed. Re-dispatch after the quota resets, or on another provider.
+
 ### Parallel worktrees (owner-set, 2026-10-16)
 
 The owner asked for parallel work in separate worktrees, merged when done.

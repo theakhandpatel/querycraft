@@ -34,7 +34,7 @@ Changes from v0.2:
 | Nine stages replaced by five milestones | Fewer infrastructure-only phases. Every milestone ends in something usable. |
 | Contracts defined as JSON Schema, not Go or JS interfaces | Two execution adapters and two evaluator implementations must agree on one source of truth. |
 | Seven-state challenge lifecycle deferred | Fixed exercises do not need it. It arrives with AI-generated challenges. |
-| SQLite metadata dropped | IndexedDB in browser mode, a separate Postgres database in server mode. |
+| SQLite metadata added as an opt-in backend | IndexedDB in browser mode; a separate Postgres database in server mode (the default). `QC_METADATA=sqlite` stores app metadata in one local file instead, with PostgreSQL still the learner's execution engine. |
 | Premise and versioning policy added (Premise, 7.3) | v0.2 assumed the reader knew why, and applied versioning everywhere before it was needed. |
 | Prototype findings added (Appendix A) | Measured behavior of PGlite replaces assumptions. |
 | Inline editors inside lessons, interleaved with explanation | Settled after prototype review. Replaces the separate workspace panel. |
@@ -85,7 +85,7 @@ A learner works through SQL topics in order. Each lesson alternates short explan
 | D3 | Browser metadata lives in IndexedDB | Decided | Plus a versioned JSON export (section 8.3). |
 | D4 | Contracts are JSON Schema in `contracts/` | Decided | Source of truth for both adapters, both evaluators and the API. |
 | D5 | Go service with native PostgreSQL arrives in M3 | Decided | Second `ExecutionService` adapter, not a rewrite. |
-| D6 | Server-mode metadata uses a separate Postgres database and role | Decided | No SQLite. |
+| D6 | Server-mode metadata uses a separate Postgres database and role | Decided | PostgreSQL by default; an opt-in SQLite file backend (`QC_METADATA=sqlite`) stores app metadata locally. Learner SQL still runs on PostgreSQL. |
 | D7 | AI work starts only after M3 | Decided | Keys are held server-side. |
 | D8 | Lesson authoring format is Markdown with front matter, compiled to JSON | Decided | Section 9. |
 | D9 | Inline editors per example and exercise, plus a schema drawer | Decided | Section 10. |

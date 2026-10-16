@@ -26,8 +26,10 @@ React 18 + TypeScript + Vite. Strict `tsconfig.json`.
 - `src/data/curriculum.ts` — courses, chapters and the prose blocks used when a
   module has no authored markdown.
 - `src/data/content/*.md` — authored chapter markdown, one file per module id.
-  Three courses are complete: `sql-analytics` (`m1`–`m8`), `joins` (`j1`–`j3`),
-  `subqueries` (`q1`–`q4`). See `docs/content-authoring.md`.
+  Eight courses ship complete, including `sql-analytics` (`m1`–`m8`), `joins`
+  (`j1`–`j3`), `subqueries` (`q1`–`q4`), `plans` (`p1`–`p8`), `sqlite-essentials`,
+  `sqlite-in-production`, and `postgres-to-sqlite`. The list of record is
+  `web/src/data/curriculum.ts` (`COURSES`). See `docs/content-authoring.md`.
 - `src/state/store.tsx` — the single provider; `useStore()` returns the
   exported `StoreValue`.
 - `src/lib/markdown.ts` — markdown to sanitised HTML (DOMPurify); fenced
