@@ -171,11 +171,42 @@ Verified findings:
   same two hazards already recorded here; the reviewer agrees the retry is a
   legitimate *temporary* guard, not a fix.
 
-**Reviewers 3–5 (Go internals, frontend, cross-cutting seam) — DID NOT RUN.**
-All three terminated on an external billing failure, not on the task:
-`402 Payment Required — insufficient_balance` ("Coding Plan quota is exhausted…
-resets 2026-10-16T07:19:45Z"). No findings, no work lost; those three areas are
-simply unreviewed. Re-dispatch after the quota resets, or on another provider.
+**Reviewers 3–5 (Go internals, frontend, cross-cutting seam) — first dispatch
+DID NOT RUN on an external billing failure (`402 insufficient_balance`), then
+re-dispatched on the working WSL provider and running. Areas still under review.**
+
+**Fixes applied from the completed reviews** (each verified in source first, then
+re-verified with the full gates; two commits `542c4808c`, `18c13a94e`):
+
+- **F1 (security) — fixed + regression test.** `PatchDecision` gains
+  `ChallengeID`, set from the route path; `applyPatch` refuses a patch whose
+  challenge disagrees (404, nothing touched). Proved: the new test shows a
+  correctly-routed apply still succeeds after a mismatched one is refused.
+- **F2 (correctness) — fixed.** Artifact storage now precedes the approval
+  record, so a failed store cannot leave a false "approved".
+- **F6 (contract) — fixed + non-vacuous guard.** `evaluation.schema.json`'s
+  nested `qr.error.code` enum gained `DIALECT_MISMATCH` (+ `qr.dialect`); a new
+  test pins the two nested enums equal, and was proved to FAIL when
+  `DIALECT_MISMATCH` is removed.
+- **R1-F4 (honesty) — fixed.** `/capabilities` reported `isolation:
+  "read_only_tx"` flatly; now `{anonymous, signed_in, writable}`, matching
+  ADRs 0003/0006. OpenAPI + tests updated.
+- **R2#2/#8/#10 (doc drift) — fixed.** `docs/technical-design.md` no longer says
+  "SQLite metadata dropped / No SQLite"; `web/AGENTS.md` no longer says three
+  courses (eight ship); the `audit-fixtures` Makefile comment no longer claims a
+  Go half it lacks; the stale `contract_test` header comment corrected.
+- **R2#3 (flake) — fixed.** The goroutine-count test now asserts "no per-call
+  leak" instead of an exact baseline, which is inherently non-deterministic.
+
+**Deliberately deferred (recorded, not silently dropped):** R1-F3 (malformed
+JSON returns query error codes on every route), R1-F5 (OpenAPI per-route
+security/401 + status-schema drift), R1-F7 (route-shape asymmetry), R1-F8
+(`Store` width; owner-filtered list reads), R2#4 (`SMOKE_ADDR` fixed port — it
+touches 24 occurrences across the `verify` recipes and only bites when 18080 is
+taken, so it is not worth risking the primary gate for; a re-dispatch on a
+different provider can carry it).
+
+
 
 ### Parallel worktrees (owner-set, 2026-10-16)
 
