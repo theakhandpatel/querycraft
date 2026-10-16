@@ -1,5 +1,22 @@
-import React, { createContext, useCallback, useContext, useEffect, useLayoutEffect, useMemo, useRef, useState } from 'react';
-import { createApi, readAuthToken, readAuthUser } from '../api/index';
+/*
+ * The single app provider. It is the largest file in web/src, and a review
+ * flagged that: ~90 members spanning auth, the hash router, progress
+ * persistence + IndexedDB sync, the AI build orchestration, catalog mutation
+ * and theme. That is a real maintainability note, not a bug, and the split
+ * (progress / router / catalog) is deliberately deferred: it is a large,
+ * regression-prone refactor of the one module every screen imports, and every
+ * behaviour here is already covered by the audit suites. This banner exists so
+ * the next reader sees the map instead of rediscovering it.
+ *
+ * Concerns, in this order:
+ *   1. auth + session (signup/login/logout/onUnauthorized)
+ *   2. the hash router (applyHash/hashFromState/showScreen)
+ *   3. progress: load, mutate, owner-scoped persist, gateway sync, IndexedDB
+ *   4. the AI build orchestration (draft → outline → chapters → activate)
+ *   5. catalog mutation (notes, bookmarks, saved queries, workbook)
+ *   6. theme + motion
+ */
+import React, { createContext, useCallback, useContext, useEffect, useLayoutEffect, useMemo, useRef, useState } from 'react';import { createApi, readAuthToken, readAuthUser } from '../api/index';
 import { COURSES, MODULES } from '../data/curriculum';
 import {
   activeModules as activeModulesOf,

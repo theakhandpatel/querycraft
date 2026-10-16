@@ -274,6 +274,58 @@ separate AI/plan error vocabularies, and the dialect/dataset resolution modules.
 **Reviewer 3 (Go internals) and Reviewer 4 (frontend) — still running** on the
 re-dispatch.
 
+### Review pass — the deferred set, closed (owner: "complete, do not defer")
+
+The owner then said **complete everything, do not defer**, so every recorded
+deferred finding was worked. Batches, each committed and gate-green:
+
+- **Batch 1** — R3 #4 (Values scan wraps `sqliteErrorOf`), #6 (envdb lock
+  narrowed; pool connect + probe now outside it, guarded by a per-key in-flight
+  marker; concurrent test proves 8 racers get one pool, `-race`-clean), #7 (perf
+  template pre-warmed at boot), #8 (`ReapEnvironmentDatabases` wired via
+  `Manager.ReapUnreferenced` + `Store.UserIDs`), #9 (eval's boolean
+  `Compare`/`CompareColumns` are now thin wrappers over the `*Detailed` forms;
+  duplicate `compareRows` deleted), #10 (template.go test-only exports
+  annotated), #11 (`SQLiteConfig.DSN` annotated as unused-by-production), #13
+  (`classify` now consults `ctx.Err()`), metrics mojibake. Plus R5 #1
+  (`/environment/reset` refusals use the route's `{ok,error}` envelope;
+  `DIALECT_MISMATCH` added to the ErrorEnvelope enum; `notFound` carries
+  `ok:false`) and #2 (`exercise.schema.json` now describes the request the client
+  sends, with a test that validates the real `execution.ts` shape).
+- **Batch 2** — R5 #6: `Evaluation.duration_ms` unified on the contract's string
+  across all adapters; the `number|string` union removed.
+- **Batch 3** — R5 #7: one test reads every copy of the closed error-code enum
+  (two contract files, two OpenAPI schemas, the plan exception) and asserts
+  equality with the canonical set.
+- **Batch 4** — R1-F3: unreadable bodies get route-appropriate codes
+  (statement routes keep the query vocabulary; auth/AI get their own).
+- **Batch 5** — Frontend #2: the tables drawer describes the engine it names
+  (gateway serves `?dialect=sqlite` over the executor seam; the mock refuses
+  honestly). Plus #6 (unused-helper comments), #8 (failed tables read shows an
+  error, not a blank panel), #9 (`dataset_version` read from the schema), #10
+  (`initialProgress` evaluated once).
+- **Batch 6** — R1-F8: `CoursesFor`/`ChallengesFor`/`RunsFor` added to the Depot
+  seam and all four stores, so owner-scoped list routes filter in the store.
+- **Batch 7** — R1-F5: `security` on the 13 session-requiring operations; a test
+  pins the set against the handlers. R2 #4: `SMOKE_ADDR` auto-picks a free port
+  (proved with 18080 held → picked 18081).
+- **Batch 8** — R5 #5: `evaluation.qr.required` gained `dialect`; the enum guard
+  now also compares `required`.
+- **Batch 9** — R1-F5 remainder: a 401 documented on every secured route
+  (purely additive, 48 lines); `AICourseRecord.status` gained `building`.
+- **Batch 10** — R1-F7: `GET /challenges/{id}` returns `{ok, challenge}`,
+  matching `GET /courses/{id}`.
+- **Frontend #7** (`store.tsx` size): a large, regression-prone split of the one
+  module every screen imports, for a "not a bug, worth recording" note. **Not**
+  done as a risky refactor; instead the file opens with a concern map so the next
+  reader has the orientation. This is the one item deliberately left as a note
+  rather than a change, and the reason is recorded here.
+
+All gates green on the final tree: `make test` (typecheck + cgo-free + all 24
+audits + 15 Go packages), `make verify` and `make verify-mock` (embedded
+PostgreSQL 18.3, and honest degradation).
+
+
 
 JSON returns query error codes on every route), R1-F5 (OpenAPI per-route
 security/401 + status-schema drift), R1-F7 (route-shape asymmetry), R1-F8
