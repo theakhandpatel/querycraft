@@ -125,10 +125,8 @@ button.small .ico{width:14px;height:14px}
    shell — sidebar and header included — scroll out from under the learner
    whenever the browser revealed a focused control. Containing them here keeps
    the document exactly one viewport tall. */
-.app{display:grid;grid-template-columns:244px minmax(0,1fr);height:100vh;overflow:hidden;position:relative}
-aside{background:var(--surface);border-right:1px solid var(--line);display:flex;flex-direction:column;gap:16px;padding:16px 12px;overflow:hidden}
-.navscroll{flex:1;min-height:0;overflow-y:auto;display:flex;flex-direction:column;gap:16px}
-.brand{display:flex;align-items:center;gap:9px;padding:4px 8px;font-size:15px;font-weight:600;letter-spacing:-.02em}
+.app{display:flex;flex-direction:column;height:100vh;overflow:hidden;position:relative}
+.brand{display:flex;align-items:center;gap:9px;padding:4px 8px;font-size:15px;font-weight:600;letter-spacing:-.02em;border:0;background:transparent;cursor:pointer;color:var(--text);flex:none}
 .brandmark{width:28px;height:28px;flex:none;display:grid;place-items:center;border-radius:var(--r-sm);background:var(--accent-soft);border:0;color:var(--accent-ink)}
 .brandmark .ico{width:16px;height:16px;stroke-width:1.8}
 .brandname{font-family:var(--display)}
@@ -149,9 +147,24 @@ aside{background:var(--surface);border-right:1px solid var(--line);display:flex;
 .profile{display:flex;align-items:center;gap:10px;padding:12px 8px 2px;margin-top:2px;border-top:1px solid var(--line);color:var(--text-3);font-size:12px;line-height:1.35}
 .avatar{width:28px;height:28px;flex:none;border-radius:var(--r-sm);display:grid;place-items:center;background:var(--surface-3);border:0;color:var(--text);font-weight:600;font-size:12px}
 
-.shell{display:flex;flex-direction:column;min-width:0;height:100vh}
-.shell>header{display:flex;align-items:center;justify-content:space-between;gap:12px;height:52px;flex:none;padding:0 20px;border-bottom:1px solid var(--line);background:var(--surface);z-index:20}
-#crumb{font-size:13px;font-weight:500;color:var(--text-2);font-family:var(--display);letter-spacing:-.01em;min-width:0;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+.app>header{display:flex;align-items:center;justify-content:space-between;gap:12px;height:52px;flex:none;padding:0 20px;border-bottom:1px solid var(--line);background:var(--surface);z-index:20}
+.hamburger{display:none;border:0;background:transparent;color:var(--text-2);cursor:pointer;padding:6px;border-radius:var(--r-sm)}
+.hamburger:hover{background:var(--surface-2);color:var(--text)}
+.hamburger .ico{width:20px;height:20px}
+.topnav{display:flex;align-items:center;gap:2px;min-width:0}
+.toplink{display:inline-flex;align-items:center;gap:7px;height:52px;padding:0 8px;border:0;border-bottom:2px solid transparent;border-top:2px solid transparent;background:transparent;color:var(--text-2);font-size:13px;font-weight:500;cursor:pointer;white-space:nowrap}
+.toplink .ico{width:15px;height:15px;color:var(--text-3)}
+.toplink:hover{color:var(--text);background:var(--surface-2)}
+.toplink.active{color:var(--text);border-bottom-color:var(--accent)}
+.toplink.active .ico{color:var(--accent-ink)}
+.topcontext{display:flex;align-items:center;gap:8px;min-width:0;overflow:hidden;border-left:1px solid var(--line);padding-left:12px;flex-shrink:1}
+.topcontext-course{font-family:var(--display);font-size:13px;font-weight:600;letter-spacing:-.01em;max-width:16ch;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+.topcontext-pos{font-family:var(--mono);font-size:11px;color:var(--text-3);white-space:nowrap}
+.iconbtn{padding:6px 7px}
+.iconbtn .ico{width:15px;height:15px}
+.topsearch{flex:1 1 160px;min-width:140px;display:flex;justify-content:flex-start}
+.avatarbtn{cursor:pointer}
+.avatarbtn:hover{background:var(--accent-soft);color:var(--accent-ink)}
 .headright{display:flex;align-items:center;gap:8px}
 .enginestate{display:inline-flex;align-items:center;gap:7px;font-family:var(--mono);font-size:11px;color:var(--text-3)}
 .enginestate .dot{width:6px;height:6px;border-radius:50%;background:var(--green);box-shadow:0 0 0 3px var(--green-soft)}
@@ -409,11 +422,10 @@ tbody tr:hover td{background:var(--surface-2);color:var(--text)}
 .hint p{padding-bottom:13px;color:var(--text-2);font-size:13px;line-height:1.65}
 
 /* ============ Lesson reader ============ */
-.lessonlayout{display:grid;grid-template-columns:272px minmax(0,1fr);min-height:100%}
-.lessonside{border-right:1px solid var(--line);background:var(--surface);padding:22px 16px;overflow:auto}
+.lessonmain{max-width:920px;margin:0 auto;width:100%}
 .sidehead{font-family:var(--mono);font-size:10px;letter-spacing:.1em;color:var(--text-3)}
-.sidecourse-title{display:block;margin-top:8px;font-size:13px;font-weight:600;font-family:var(--display)}
 .sideprogress-label{color:var(--text-3);font-size:11px;margin-top:14px}
+.chapterlist{margin-top:10px}
 .progressline{height:6px;background:var(--surface-3);border-radius:var(--pill);overflow:hidden}
 .progressline>span{display:block;height:100%;background:var(--accent);border-radius:var(--pill);width:0;transition:width .3s var(--ease)}
 .lessonnav{display:flex;align-items:center;gap:10px;width:100%;text-align:left;background:transparent;border:0;padding:8px;border-radius:var(--r-sm);color:var(--text-2);font-size:12.5px;font-weight:500;margin-top:2px}
@@ -425,11 +437,12 @@ tbody tr:hover td{background:var(--surface-2);color:var(--text)}
 .lessonnavtext{overflow:hidden;text-overflow:ellipsis;white-space:nowrap;min-width:0}
 
 .lessonmain{padding:26px 30px 72px;min-width:0}
-.lessonheading{display:flex;align-items:flex-start;justify-content:space-between;gap:16px;margin-bottom:6px}
+.lessonheading{display:flex;align-items:flex-start;justify-content:space-between;gap:16px;margin-bottom:6px;max-width:720px}
 .lessonheading h1{font-size:26px;margin-top:10px;max-width:20ch}
 .lessonheading>div>p{color:var(--text-2);font-size:13.5px;margin-top:10px;max-width:62ch}
 .reader{max-width:720px;margin-top:22px}
-.reader p{color:var(--text);font-size:14.5px;line-height:1.75;margin:14px 0;max-width:66ch}
+.reader p,.reader ul,.reader ol{max-width:66ch}
+.reader p{color:var(--text);font-size:14.5px;line-height:1.75;margin:14px 0}
 .reader p.lede2{color:var(--text-2)}
 .reader h3{margin:26px 0 6px;font-size:15px}
 .reader ul,.reader ol{padding-left:22px;color:var(--text);font-size:14.5px;line-height:1.8;margin:12px 0}
@@ -507,6 +520,10 @@ button.small.ghost.on:hover{background:var(--accent-soft);color:var(--accent-ink
 .drawer-back.open{opacity:1;pointer-events:auto}
 .drawer{position:fixed;top:0;right:0;bottom:0;z-index:46;width:min(440px,92vw);background:var(--bg);border-left:1px solid var(--line);box-shadow:var(--shadow-lg);transform:translateX(100%);transition:transform 220ms var(--ease);display:flex;flex-direction:column}
 .drawer.open{transform:none}
+.drawer.left{right:auto;left:0;border-left:0;border-right:1px solid var(--line);transform:translateX(-100%)}
+.drawer.left.open{transform:none}
+.navdrawerbody{display:flex;flex-direction:column;gap:16px}
+.drawer .profile{margin-top:0;border-top:0;padding:12px 0 0}
 .drawerhead{display:flex;align-items:flex-start;justify-content:space-between;gap:12px;padding:16px 18px;border-bottom:1px solid var(--line);background:var(--surface)}
 .drawerhead h2{font-size:16px;margin-top:4px}
 .drawerbody{padding:16px 18px 40px;overflow:auto}
@@ -596,18 +613,31 @@ select{-webkit-appearance:none;appearance:none;padding-right:32px;background-ima
 
 /* ============ Responsive ============ */
 @media(max-width:1080px){
-  .grid2,.lessonlayout{grid-template-columns:minmax(0,1fr)}
-  .lessonside{display:none}
+  .grid2{grid-template-columns:minmax(0,1fr)}
   .grid3{grid-template-columns:repeat(2,minmax(0,1fr))}
   .stats{grid-template-columns:repeat(2,minmax(0,1fr))}
 }
+/* The bar drops its descriptive parts one at a time as width falls: the
+   engine label and the keyboard chips first, then the course name, then the
+   link labels and the chapter position. The chapter buttons survive every
+   step, because on a lesson they are the only orientation cue left. */
+@media(max-width:1500px){
+  .enginestate{display:none}
+  .searchbox .kbd{display:none}
+}
+@media(max-width:1280px){
+  .topcontext-course{display:none}
+}
+@media(max-width:1120px){
+  .toplink-label{display:none}
+  .toplink{gap:0;padding:0 12px}
+  .topcontext-pos{display:none}
+}
 @media(max-width:760px){
-  .app{grid-template-columns:64px minmax(0,1fr)}
-  aside{padding:14px 8px}
-  .brand{justify-content:center;padding:0}
-  .brandname,.brandtag,.navtext,.label,.navbadge,.profile .name{display:none}
-  .nav{justify-content:center;padding:9px 0}
-  .profile{justify-content:center}
+  .hamburger{display:inline-flex}
+  .brandname{display:none}
+  .topnav{display:none}
+  .app>header{padding:0 12px}
   .content{padding:20px 16px 56px}
   .home{padding:32px 16px 64px}
   .home h1{font-size:30px}
@@ -639,6 +669,7 @@ select{-webkit-appearance:none;appearance:none;padding-right:32px;background-ima
 
 /* ---------- markdown + mermaid ---------- */
 .mdbody{color:var(--text);font-size:14.5px;line-height:1.75}
+.mdbody ul,.mdbody ol{max-width:66ch}
 .mdbody>:first-child{margin-top:0}
 .mdbody>:last-child{margin-bottom:0}
 .mdbody p{margin:14px 0;max-width:66ch}
@@ -794,10 +825,9 @@ select{-webkit-appearance:none;appearance:none;padding-right:32px;background-ima
    the layout breakpoints fire. The keyboard hints are meaningless without a
    physical keyboard, and a report row may stack instead of clipping. */
 @media(max-width:600px){
+  .topsearch{display:none}
   .searchbox{margin:0 8px}
-  .searchbox .kbd{display:none}
-  .shell>header{padding:0 12px;gap:8px}
-  #crumb{flex:0 1 auto;max-width:45%}
+  .app>header{padding:0 10px;gap:8px}
   .reportrow{flex-wrap:wrap;gap:2px 12px}
   .toggle{gap:8px}
 }

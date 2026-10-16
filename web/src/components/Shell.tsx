@@ -1,16 +1,120 @@
-import React from 'react';
+import React, { useRef } from 'react';
 import Icon from './ui/Icon';
 import SearchBox from './SearchBox';
-import { useStore, SCREEN_CRUMBS, SCREEN_NAV } from '../state/store';
-import { courseShort, findExercise } from '../lib/model';
+import { useStore, SCREEN_NAV } from '../state/store';
+import { courseShort, findExercise, activeModules, lessonPercent } from '../lib/model';
 import type { FoundExercise } from '../lib/model';
+import { useDrawerFocus } from './ui/useDrawerFocus';
 
-function NavButton({ icon, label, active, badge, onClick }: { icon: string; label: string; active: boolean; badge?: React.ReactNode; onClick: () => void }) {
+/*
+ * The shell is one fixed top bar and two drawers.
+ *
+ * The old layout spent two left columns on navigation before reading could
+ * start; at 1920px the chapter text began almost 500px in. Now the destinations
+ * live in the bar, the chapter list lives in a drawer opened from the lesson's
+ * own segment of that bar, and below 760px the destinations join the chapter
+ * list in a drawer of their own.
+ *
+ * Deliberate: no primary link carries the active underline on the lesson or
+ * course screens. The bar's contextual segment (course, chapter, prev/next) is
+ * the location cue there; underlining nothing avoids pretending the learner is
+ * in the Workbook or the Library.
+ */
+
+function TopNavLink({ icon, label, active, badge, onClick }: { icon: string; label: string; active: boolean; badge?: string; onClick: () => void }) {
   return (
-    /* The label is hidden below 760px, where the rail collapses to 64px of
-       icons. `title` keeps the name reachable with a pointer and `aria-label`
-       keeps it reachable with a screen reader; without both, the narrow layout
-       is nine anonymous glyphs. */
+    <button className={`toplink${active ? ' active' : ''}`} onClick={onClick} aria-current={active ? 'page' : undefined} aria-label={label} title={label}>
+      <Icon name={icon} />
+      {/* The label is hidden below 1120px, where the links collapse to icons
+          with the bar's context segment squeezed out. aria-label and title keep
+          the name reachable with a screen reader and a pointer. */}
+      <span className="toplink-label">{label}</span>
+      {badge != null && <span className="navbadge">{badge}</span>}
+    </button>
+  );
+}
+
+export function TopBar() {
+  const s = useStore();
+  const { screen, progress, course, session, role, activeLesson } = s;
+  const isAdmin = role === 'admin';
+  const nav = SCREEN_NAV[screen];
+  const mods = activeModules(course);
+  const onCourseTrack = screen === 'lesson' || screen === 'course';
+
+  /* The lesson's own segment of the bar: where you are in the course, and the
+     two moves a learner makes most. stepLesson owns the end-of-course behavior
+     (it toasts), so the bar never duplicates that decision. */
+  const canPrev = screen === 'lesson' && activeLesson > 0;
+  const canNext = screen === 'lesson' && activeLesson < mods.length - 1;
+  const pct = lessonPercent(course, progress);
+
+  return (
+    <header>
+      <button className="hamburger" onClick={() => s.setNavOpen(true)} aria-label="Open navigation" title="Navigation">
+        <Icon name="menu" />
+      </button>
+
+      <button className="brand" onClick={() => s.showScreen('home')} aria-label="Querycraft home">
+        <span className="brandmark"><Icon name="terminal" /></span>
+        <span className="brandname">querycraft</span>
+      </button>
+
+      <nav className="topnav" aria-label="Primary">
+        <TopNavLink icon="graduation" label="Home" active={nav === 'home'} onClick={() => s.showScreen('home')} />
+        <TopNavLink icon="search" label="Library" active={nav === 'library'} onClick={() => s.showScreen('library')} />
+        <TopNavLink icon="book" label="Workbook" active={nav === 'workbook'} badge={`${s.pct}%`} onClick={() => s.showScreen('workbook')} />
+        <TopNavLink icon="clock" label="Progress" active={nav === 'progress'} onClick={() => s.showScreen('workbook-progress')} />
+        <TopNavLink icon="flask" label="Challenge lab" active={nav === 'lab'} onClick={() => s.showScreen('challenge-lab')} />
+        {isAdmin && <TopNavLink icon="sparkles" label="Create" active={nav === 'create'} onClick={() => s.showScreen('create')} />}
+      </nav>
+
+      {onCourseTrack && course.id && (
+        <div className="topcontext">
+          <span className="topcontext-course" title={course.title}>{courseShort(course)}</span>
+          {screen === 'lesson' && mods.length > 0 && (
+            <>
+              <span className="topcontext-pos">Ch.{(mods[activeLesson] || mods[0]).n} of {mods.length} · {pct}%</span>
+              <button className="small ghost iconbtn" onClick={() => s.setChaptersOpen(true)} aria-label="All chapters" title="All chapters">
+                <Icon name="list" />
+              </button>
+              <button className="small ghost iconbtn" disabled={!canPrev} onClick={() => s.stepLesson(-1)} aria-label="Previous chapter" title="Previous chapter">
+                <Icon name="arrow-left" />
+              </button>
+              <button className="small ghost iconbtn" disabled={!canNext} onClick={() => s.stepLesson(1)} aria-label="Next chapter" title="Next chapter">
+                <Icon name="arrow-right" />
+              </button>
+            </>
+          )}
+        </div>
+      )}
+
+      {/* Design §10: one search field for the whole shell, Cmd/Ctrl+K. */}
+      <div className="topsearch"><SearchBox /></div>
+
+      <div className="headright">
+        <span className="enginestate">
+          <span className="dot"></span>{' '}
+          {s.api.mode === 'http' ? 'gateway · live' : 'postgres 18 · in-browser'}
+        </span>
+        <button className="small ghost" onClick={s.cycleTheme} aria-label="Toggle theme" title="Toggle theme">
+          <Icon name={s.effectiveTheme === 'dark' ? 'sun' : 'moon'} />
+        </button>
+        <button
+          className="avatar avatarbtn"
+          onClick={() => s.showScreen('appearance-settings')}
+          aria-label="Appearance and account"
+          title="Appearance and account"
+        >
+          {(session?.user.name || 'Q').slice(0, 1).toUpperCase()}
+        </button>
+      </div>
+    </header>
+  );
+}
+
+function NavButton({ icon, label, active, badge, onClick }: { icon: string; label: string; active?: boolean; badge?: React.ReactNode; onClick: () => void }) {
+  return (
     <button className={`nav${active ? ' active' : ''}`} onClick={onClick} aria-label={label} title={label}>
       <Icon name={icon} />
       <span className="navtext">{label}</span>
@@ -19,12 +123,19 @@ function NavButton({ icon, label, active, badge, onClick }: { icon: string; labe
   );
 }
 
-export function Sidebar() {
+/*
+ * Below 760px the primary links leave the bar for this drawer. On desktop the
+ * hamburger is hidden and the drawer never opens, but the component stays
+ * mounted and inert, exactly like the tables drawer.
+ */
+export function NavDrawer() {
   const s = useStore();
   const { screen, progress, course, openLessonIn, session, role } = s;
-  /* Course authoring is the app's admin surface; learners get the learning and
-     practice tracks only. */
   const isAdmin = role === 'admin';
+  const nav = SCREEN_NAV[screen];
+  const asideRef = useRef<HTMLElement>(null);
+  useDrawerFocus(s.navOpen, asideRef);
+  const mods = activeModules(course);
 
   const recent: FoundExercise[] = [];
   const seen: Record<string, boolean> = {};
@@ -40,92 +151,88 @@ export function Sidebar() {
       recent.push(f);
     });
 
+  const go = (fn: () => void) => () => {
+    s.setNavOpen(false);
+    fn();
+  };
+
   return (
-    <aside>
-      <div className="brand">
-        <div className="brandmark"><Icon name="terminal" /></div>
-        <span className="brandname">querycraft</span>
-      </div>
-
-      {/* Only the nav scrolls. The account row below is pinned, so sign-out
-          stays reachable on a short viewport instead of sliding under the fold. */}
-      <div className="navscroll">
-      <div className="navgroup">
-        <div className="label">Learn</div>
-        <NavButton icon="graduation" label="Home" active={SCREEN_NAV[screen] === 'home'} onClick={() => s.showScreen('home')} />
-        <NavButton icon="layers" label={courseShort(course)} active={SCREEN_NAV[screen] === 'course'} onClick={() => s.showScreen('course')} />
-        <NavButton icon="search" label="Library" active={SCREEN_NAV[screen] === 'library'} onClick={() => s.showScreen('library')} />
-      </div>
-
-      <div className="navgroup">
-        <div className="label">Practice</div>
-        <NavButton icon="book" label="Workbook" active={SCREEN_NAV[screen] === 'workbook'} badge={`${s.pct}%`} onClick={() => s.showScreen('workbook')} />
-        <NavButton icon="clock" label="Progress" active={SCREEN_NAV[screen] === 'progress'} onClick={() => s.showScreen('workbook-progress')} />
-        <NavButton icon="flask" label="Challenge lab" active={SCREEN_NAV[screen] === 'lab'} onClick={() => s.showScreen('challenge-lab')} />
-      </div>
-
-      {isAdmin && (
-        <div className="navgroup">
-          <div className="label">Create</div>
-          <NavButton icon="sparkles" label="Create a course" active={SCREEN_NAV[screen] === 'create'} onClick={() => s.showScreen('create')} />
+    <>
+      <div className={`drawer-back${s.navOpen ? ' open' : ''}`} onClick={() => s.setNavOpen(false)} aria-hidden="true" />
+      <aside
+        ref={asideRef}
+        tabIndex={-1}
+        className={`drawer left${s.navOpen ? ' open' : ''}`}
+        role="dialog"
+        aria-modal="true"
+        aria-label="Navigation"
+        aria-hidden={!s.navOpen}
+      >
+        <div className="drawerhead">
+          <h2>Navigation</h2>
+          <button className="small ghost" onClick={() => s.setNavOpen(false)} aria-label="Close navigation"><Icon name="x" /></button>
         </div>
-      )}
-
-      {recent.length > 0 && (
-        <div className="navgroup">
-          <div className="label">Recent</div>
-          {recent.slice(0, 3).map((f) => (
-            <button
-              key={f.course.id + f.index}
-              className="nav"
-              onClick={() => openLessonIn(f.course.id, f.index)}
-              aria-label={`Chapter ${f.module.n}: ${f.module.title}`}
-              title={`Chapter ${f.module.n}: ${f.module.title}`}
-            >
-              <Icon name="clock" />
-              <span className="navtext">{f.module.title}</span>
-            </button>
-          ))}
+        <div className="drawerbody navdrawerbody">
+          {/* Mid-chapter on a phone, the chapter moves are the actions that
+              matter; the bar keeps the buttons, and the drawer keeps the list. */}
+          {screen === 'lesson' && mods.length > 0 && (
+            <div className="navgroup">
+              <NavButton icon="list" label="All chapters" onClick={go(() => s.setChaptersOpen(true))} />
+              <NavButton icon="arrow-left" label="Previous chapter" onClick={go(() => s.stepLesson(-1))} />
+              <NavButton icon="arrow-right" label="Next chapter" onClick={go(() => s.stepLesson(1))} />
+            </div>
+          )}
+          <div className="navgroup">
+            <NavButton icon="graduation" label="Home" active={nav === 'home'} onClick={go(() => s.showScreen('home'))} />
+            <NavButton icon="layers" label={courseShort(course)} active={nav === 'course'} onClick={go(() => s.showScreen('course'))} />
+            <NavButton icon="search" label="Library" active={nav === 'library'} onClick={go(() => s.showScreen('library'))} />
+          </div>
+          <div className="navgroup">
+            <NavButton icon="book" label="Workbook" active={nav === 'workbook'} badge={`${s.pct}%`} onClick={go(() => s.showScreen('workbook'))} />
+            <NavButton icon="clock" label="Progress" active={nav === 'progress'} onClick={go(() => s.showScreen('workbook-progress'))} />
+            <NavButton icon="flask" label="Challenge lab" active={nav === 'lab'} onClick={go(() => s.showScreen('challenge-lab'))} />
+          </div>
+          {isAdmin && (
+            <div className="navgroup">
+              <NavButton icon="sparkles" label="Create a course" active={nav === 'create'} onClick={go(() => s.showScreen('create'))} />
+            </div>
+          )}
+          {recent.length > 0 && (
+            <div className="navgroup">
+              <div className="label">Recent</div>
+              {recent.slice(0, 3).map((f) => (
+                <button
+                  key={f.course.id + f.index}
+                  className="nav"
+                  onClick={go(() => openLessonIn(f.course.id, f.index))}
+                  aria-label={`Chapter ${f.module.n}: ${f.module.title}`}
+                  title={`Chapter ${f.module.n}: ${f.module.title}`}
+                >
+                  <Icon name="clock" />
+                  <span className="navtext">{f.module.title}</span>
+                </button>
+              ))}
+            </div>
+          )}
+          <div className="navgroup">
+            <NavButton icon="settings" label="Appearance" active={nav === 'appearance'} onClick={go(() => s.showScreen('appearance-settings'))} />
+          </div>
         </div>
-      )}
-
-      <div className="spacer" />
-      <div className="navgroup">
-        <NavButton icon="settings" label="Appearance" active={SCREEN_NAV[screen] === 'appearance'} onClick={() => s.showScreen('appearance-settings')} />
-      </div>
-      </div>
-      <div className="profile">
-        <div className="avatar">{(session?.user.name || 'Q').slice(0, 1).toUpperCase()}</div>
-        <div className="name">
-          {session?.user.name || 'Workspace'}<br />
-          <span className="muted">{session?.user.email || 'Not signed in'}</span>
+        <div className="drawerfoot">
+          <div className="profile">
+            <div className="avatar">{(session?.user.name || 'Q').slice(0, 1).toUpperCase()}</div>
+            <div className="name">
+              {session?.user.name || 'Workspace'}<br />
+              <span className="muted">{session?.user.email || 'Not signed in'}</span>
+            </div>
+            {session?.token && (
+              <button className="small ghost" onClick={() => void s.logout()} aria-label="Sign out" title="Sign out">
+                <Icon name="logout" />
+              </button>
+            )}
+          </div>
         </div>
-        {session?.token && (
-          <button className="small ghost" onClick={() => void s.logout()} aria-label="Sign out" title="Sign out">
-            <Icon name="arrow-left" />
-          </button>
-        )}
-      </div>
-    </aside>
-  );
-}
-
-export function Header() {
-  const { screen, effectiveTheme, cycleTheme, api } = useStore();
-  return (
-    <header>
-      <div id="crumb">{SCREEN_CRUMBS[screen] || screen}</div>
-      {/* Design §10: one search field for the whole shell, Cmd/Ctrl+K. */}
-      <SearchBox />
-      <div className="headright">
-        <span className="enginestate hide-small">
-          <span className="dot"></span>{' '}
-          {api.mode === 'http' ? 'gateway · live' : 'postgres 18 · in-browser'}
-        </span>
-        <button className="small ghost" onClick={cycleTheme} aria-label="Toggle theme" title="Toggle theme">
-          <Icon name={effectiveTheme === 'dark' ? 'sun' : 'moon'} />
-        </button>
-      </div>
-    </header>
+      </aside>
+    </>
   );
 }

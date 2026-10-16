@@ -2136,3 +2136,45 @@ Verified on this tree: `npx tsc --noEmit` clean, `npm run lint` at 28 warnings
 and 0 errors, `npm run build` clean, and `node scripts/shell-audit.mjs` reports
 OK. The Go suites were not run: a second agent owned `backend/` in the same
 checkout.
+
+## UI pass: top-bar shell redesign, 2026-10-17
+
+The learner-facing complaint that drove it: on a 1920px screen, the 244px global
+sidebar plus the lesson's 272px chapter column consumed about 40% of the width
+before reading began. The redesign replaces both with one fixed top bar.
+
+- `Sidebar` and `Header` are one `TopBar` (`Shell.tsx`): brand, primary links
+  with an active underline, a contextual segment on course/lesson screens
+  (course, "Ch.1 of 9 · %", chapters drawer button, prev/next through
+  `stepLesson` so end-of-course behavior has one owner), the global search, and
+  engine/theme/account state. The 244px grid column is gone.
+- The chapter list is `ChaptersDrawer.tsx`, a left slide-in drawer; the lesson
+  reading column is a single centred 920px column (`.lessonmain`), and
+  `.lessonlayout`/`.lessonside` are deleted.
+- Below 760px the primary links move into `NavDrawer` behind a hamburger; the
+  chapter buttons stay in the bar. Below 600px the search field leaves the bar.
+- The collapse ladder (1500/1280/1120px) sheds the engine label, course name,
+  and link labels one at a time; `shell-audit.mjs` now holds those rules and the
+  icon-only links' accessible names instead of the retired 64px rail.
+- Drawer focus mechanics moved to a shared `ui/useDrawerFocus.ts`
+  (TablesDrawer's proven pattern: inert, capture-phase Tab trap with an
+  `!inside` recapture branch, opener restore with a `document.contains` guard
+  and a `#main` fallback). Escape closes one layer per press, topmost first
+  (`App.tsx`); the search panel closes itself and stops the event
+  (`SearchBox.tsx`, capture-phase `document` listener).
+- `DESIGN.md` "Layout" and "Breakpoints" describe the new shell; `shell-audit`
+  checks were rewritten for the drawer rules the old rail checks held.
+
+Verified on this tree: `npm run typecheck` clean, `npm run lint` 0 errors,
+`npm run build` clean, `make test` exit 0 (1187 checks, including the rewritten
+shell audit), `make verify` exit 0. React Doctor still reports
+`prefer-html-dialog` on the two new drawers; the verdict stands from the
+PromptDialog pass: the capture-phase focus trap is the accepted answer, the
+finding is deliberate.
+
+Open items:
+- The README gallery and walkthrough still show the old shell; re-recording
+  needs a connected browser (the session's browser tools report no desktop
+  browser attached). Captured none of the new shell yet.
+- Focus is not moved to the chapter heading after a drawer-initiated chapter
+  change; the drawer's close path restores focus to the opener instead.

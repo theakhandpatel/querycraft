@@ -2,8 +2,9 @@ import { useEffect } from 'react';
 import { IconSprite } from './components/ui/Icon';
 import Toast from './components/ui/Toast';
 import PromptDialog from './components/ui/PromptDialog';
-import { Sidebar, Header } from './components/Shell';
+import { TopBar, NavDrawer } from './components/Shell';
 import TablesDrawer from './components/TablesDrawer';
+import ChaptersDrawer from './components/ChaptersDrawer';
 import Modals from './components/Modals';
 import HomeScreen from './components/screens/HomeScreen';
 import CourseScreen from './components/screens/CourseScreen';
@@ -44,8 +45,14 @@ export default function App() {
   useEffect(() => {
     function onKey(e: KeyboardEvent) {
       if (e.key === 'Escape') {
+        /* One layer per press, topmost first: the modal outranks the tables
+           drawer, which outranks the chapter list, which outranks the mobile
+           navigation. The search field closes its own panel and stops the
+           event before it reaches here. */
         if (s.modal) s.closeModal();
-        if (s.tablesOpen) s.setTablesOpen(false);
+        else if (s.tablesOpen) s.setTablesOpen(false);
+        else if (s.chaptersOpen) s.setChaptersOpen(false);
+        else if (s.navOpen) s.setNavOpen(false);
       }
     }
     document.addEventListener('keydown', onKey);
@@ -84,21 +91,20 @@ export default function App() {
     <>
       <IconSprite />
       <div className="app">
-        {/* First stop on the page: thirteen sidebar controls separate the top of
+        {/* First stop on the page: the top bar's controls separate the top of
             the document from the chapter, and a keyboard should not have to walk
             past all of them every time. */}
-        <a className="skiplink" href="#main">Skip to the lesson content</a>
-        <Sidebar />
-        <div className="shell">
-          <Header />
-          <main className="workspace" id="main" tabIndex={-1}>
-            <section className="screen active" key={s.screen}>
-              <Active />
-            </section>
-          </main>
-        </div>
+        <a className="skiplink" href="#main">Skip to content</a>
+        <TopBar />
+        <main className="workspace" id="main" tabIndex={-1}>
+          <section className="screen active" key={s.screen}>
+            <Active />
+          </section>
+        </main>
       </div>
       <TablesDrawer />
+      <ChaptersDrawer />
+      <NavDrawer />
       <Modals />
       <PromptDialog />
       <Toast />

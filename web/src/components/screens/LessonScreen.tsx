@@ -4,7 +4,7 @@ import SqlCell from '../SqlCell';
 import Markdown from '../ui/Markdown';
 import { useStore } from '../../state/store';
 import DialectBadge, { useChapterDialect } from '../ui/DialectBadge';
-import { chapterOutline, lessonPercent, activeModules } from '../../lib/model';
+import { chapterOutline, activeModules } from '../../lib/model';
 import { accrueStudyTime } from '../../lib/progress';
 import { scrollToNode } from '../../lib/scroll';
 import type { Block } from '../../types';
@@ -17,7 +17,6 @@ export default function LessonScreen() {
   const mods = activeModules(course);
   const m = mods[activeLesson] || mods[0];
   const mainRef = useRef(null);
-  const pct = lessonPercent(course, progress);
   /* M6 step 7: the dialect this chapter runs on, as the header badge. The
      choice store is subscribed inside the hook, so a switch in any cell is
      reflected here without a remount. */
@@ -112,28 +111,7 @@ export default function LessonScreen() {
   }
 
   return (
-    <div className="lessonlayout">
-      <div className="lessonside">
-        <div className="sidehead">COURSE · {(course.modules || []).length} CHAPTERS</div>
-        <strong className="sidecourse-title">{course.title}</strong>
-        <div className="sideprogress-label">Chapter {m.n} of {mods.length} · {pct}%</div>
-        <div className="progressline"><span style={{ width: `${pct}%` }}></span></div>
-        <div>
-          {mods.map((mm, i) => (
-            <button
-              key={mm.id}
-              className={`lessonnav${i === activeLesson ? ' active' : ''}${progress.done[mm.id] ? ' done' : ''}`}
-              onClick={() => s.openLessonIn(course.id, i)}
-            >
-              <span className="bullet">{progress.done[mm.id] ? '✓' : i + 1}</span>
-              <span className="lessonnavtext">{mm.title}</span>
-            </button>
-          ))}
-        </div>
-        <button className="small ghost mt-18" onClick={() => s.showScreen('course')}><Icon name="arrow-left" />Course home</button>
-      </div>
-
-      <div className="lessonmain" ref={mainRef}>
+    <div className="lessonmain" ref={mainRef}>
         <div className="lessonheading">
           <div>
             <div className="eyebrow">Chapter {m.n} · {m.kind}</div>
@@ -251,6 +229,5 @@ export default function LessonScreen() {
           )}
         </div>
       </div>
-    </div>
   );
 }

@@ -31,13 +31,26 @@ export default function SearchBox() {
   const hits = useMemo(() => search(index, query), [index, query]);
   const groups = useMemo(() => groupHits(hits), [hits]);
 
+  const { chaptersOpen, navOpen, tablesOpen } = s;
   useEffect(() => {
     const onKey = (e: KeyboardEvent) => {
       if ((e.metaKey || e.ctrlKey) && e.key.toLowerCase() === 'k') {
         e.preventDefault();
+        /* A drawer holds focus in a trap; opening search from inside one would
+           yank the learner behind the overlay. The drawers yield first. */
+        if (s.chaptersOpen || s.navOpen || s.tablesOpen) {
+          s.setChaptersOpen(false);
+          s.setNavOpen(false);
+          s.setTablesOpen(false);
+        }
         inputRef.current?.focus();
         setOpen(true);
-      } else if (e.key === 'Escape') {
+      } else if (e.key === 'Escape' && open) {
+        /* The search panel is a layer of its own: close it and stop the event
+           so the shell's Escape handler does not also close a drawer in the
+           same keypress. Capture phase on `document` puts this ahead of the
+           shell's own listener. */
+        e.stopImmediatePropagation();
         setOpen(false);
         inputRef.current?.blur();
       }
@@ -45,13 +58,13 @@ export default function SearchBox() {
     const onDown = (e: MouseEvent) => {
       if (boxRef.current && !boxRef.current.contains(e.target as Node)) setOpen(false);
     };
-    window.addEventListener('keydown', onKey);
-    window.addEventListener('mousedown', onDown);
+    document.addEventListener('keydown', onKey, true);
+    document.addEventListener('mousedown', onDown);
     return () => {
-      window.removeEventListener('keydown', onKey);
-      window.removeEventListener('mousedown', onDown);
+      document.removeEventListener('keydown', onKey, true);
+      document.removeEventListener('mousedown', onDown);
     };
-  }, []);
+  }, [chaptersOpen, navOpen, tablesOpen, open]);
 
   function choose(doc: SearchDoc) {
     s.openSearchHit(doc);

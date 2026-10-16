@@ -194,6 +194,12 @@ export interface StoreValue {
   setReviewTab: React.Dispatch<React.SetStateAction<string>>;
   tablesOpen: boolean;
   setTablesOpen: React.Dispatch<React.SetStateAction<boolean>>;
+  /** The chapter-list drawer on the lesson screen (the old left column). */
+  chaptersOpen: boolean;
+  setChaptersOpen: React.Dispatch<React.SetStateAction<boolean>>;
+  /** The navigation drawer below 760px, where the top-bar links do not fit. */
+  navOpen: boolean;
+  setNavOpen: React.Dispatch<React.SetStateAction<boolean>>;
   modal: ModalName;
   openModal: (m: ModalName) => void;
   closeModal: () => void;
@@ -395,6 +401,8 @@ export function StoreProvider({ children }: { children: React.ReactNode }) {
   const [motion, setMotionState] = useState<boolean>(() => loadJSON<boolean>(MOTION_KEY, false));
   const [reviewTab, setReviewTab] = useState('overview');
   const [tablesOpen, setTablesOpen] = useState(false);
+  const [chaptersOpen, setChaptersOpen] = useState(false);
+  const [navOpen, setNavOpen] = useState(false);
   const [modal, setModal] = useState<ModalName>(null);
   const [toastMsg, setToastMsg] = useState<string | null>(null);
   const [promptRequest, setPromptRequest] = useState<PromptRequest | null>(null);
@@ -1835,6 +1843,10 @@ export function StoreProvider({ children }: { children: React.ReactNode }) {
     setReviewTab,
     tablesOpen,
     setTablesOpen,
+    chaptersOpen,
+    setChaptersOpen,
+    navOpen,
+    setNavOpen,
     modal,
     openModal: setModal,
     closeModal: () => setModal(null),

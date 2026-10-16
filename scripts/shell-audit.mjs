@@ -14,9 +14,10 @@
  *      (sidebar, header) then scrolled out from under the learner whenever the
  *      browser revealed a focused control.
  *
- *   2. Below 760 px the rail is 64 px and `.navtext` is `display:none`, and the
- *      only glyph is `aria-hidden`. Nothing carried the label, so the nav was
- *      nine anonymous icons — on touch there is no hover to recover the name.
+ *   2. Narrow layouts hide visible labels: below 760 px the primary links left
+ *      the bar for a drawer, and below 1120 px the bar's own links collapse to
+ *      bare icons. An icon-only control carries no name, so on touch there is
+ *      no hover to recover one — the name has to be in the element.
  *
  * There is **no layout engine in this repo** (no Chrome, no Puppeteer, no
  * Playwright, no axe — see docs/accessibility.md), so these cannot be asserted
@@ -144,16 +145,31 @@ const vh = ruleFor(css, '.visually-hidden');
 const vhPos = vh ? decls(vh.body).position : undefined;
 check('.visually-hidden is still position:absolute, so rule 1 stays load-bearing', vhPos === 'absolute', vh ? `position is ${vhPos}` : 'rule not found');
 
-/* 3. The narrow layout hides the rail's visible text. If that stops being true
-   the label check below is vacuous, and this says so out loud. The rule may live
-   in any `@media (max-width:760px)` block, so every one is searched. */
+/* 3. The narrow layout hides the bar's visible link labels. If that stops being
+   true the label checks below are vacuous, and this says so out loud. Below 760
+   the primary links leave the bar for the navigation drawer; below 1120 the bar
+   links that remain collapse to icons. The rules may live in any matching
+   `@media` block, so every one is searched. */
 const narrowBlocks = atMediaBlocks(css, /@media\s*\(max-width:\s*760px\)/);
-const navtextRule = narrowBlocks.map((b) => ruleFor(b, '.navtext')).find(Boolean);
-const navtextHidden = !!navtextRule && decls(navtextRule.body).display === 'none';
-check('the narrow layout hides .navtext (the 64px icon rail)', navtextHidden, narrowBlocks.length ? 'no @media(max-width:760px) block hides .navtext' : 'no @media(max-width:760px) block found');
+const midBlocks = atMediaBlocks(css, /@media\s*\(max-width:\s*1120px\)/);
+const topnavRule = narrowBlocks.map((b) => ruleFor(b, '.topnav')).find(Boolean);
+const topnavHidden = !!topnavRule && decls(topnavRule.body).display === 'none';
+check('the narrow bar hides the primary links (the drawer replaces them)', topnavHidden, narrowBlocks.length ? 'no @media(max-width:760px) block hides .topnav' : 'no @media(max-width:760px) block found');
+const hamburgerRule = narrowBlocks.map((b) => ruleFor(b, '.hamburger')).find(Boolean);
+const hamburgerShown = !!hamburgerRule && /inline-flex|block|flex/.test(decls(hamburgerRule.body).display || '');
+check('the narrow bar shows the hamburger that opens the drawer', hamburgerShown, narrowBlocks.length ? 'no @media(max-width:760px) block shows .hamburger' : 'no @media(max-width:760px) block found');
+const labelRule = midBlocks.map((b) => ruleFor(b, '.toplink-label')).find(Boolean);
+const labelsHidden = !!labelRule && decls(labelRule.body).display === 'none';
+check('the icon collapse below 1120px hides .toplink-label', labelsHidden, midBlocks.length ? 'no @media(max-width:1120px) block hides .toplink-label' : 'no @media(max-width:1120px) block found');
 
-/* 4. With the text hidden, the name has to come from somewhere. */
-if (navtextHidden) {
+/* 4. With text hidden, the name has to come from somewhere: the bar links and
+   the drawer buttons all carry it in the element. */
+if (topnavHidden || labelsHidden) {
+  check(
+    'TopNavLink carries the name it hides (aria-label + title)',
+    /aria-label=\{label\}/.test(shell) && /title=\{label\}/.test(shell),
+    'Shell.tsx TopNavLink no longer passes aria-label={label} / title={label}'
+  );
   check(
     'NavButton carries the name it hides (aria-label + title)',
     /aria-label=\{label\}/.test(shell) && /title=\{label\}/.test(shell),

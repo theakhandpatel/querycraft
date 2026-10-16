@@ -3,6 +3,9 @@ import React from 'react';
 const SYMBOLS = {
   'i-terminal': '<path d="M4 17l5-5-5-5"/><path d="M12 19h8"/>',
   'i-plus': '<path d="M12 5v14M5 12h14"/>',
+  'i-menu': '<path d="M4 7h16M4 12h16M4 17h16"/>',
+  'i-logout': '<path d="M9 21H5a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h4"/><path d="M16 17l5-5-5-5M21 12H9"/>',
+  'i-list': '<circle cx="4.5" cy="6" r="1"/><circle cx="4.5" cy="12" r="1"/><circle cx="4.5" cy="18" r="1"/><path d="M9 6h11M9 12h11M9 18h11"/>',
   'i-search': '<circle cx="11" cy="11" r="7"/><path d="M20 20l-3.4-3.4"/>',
   'i-layers': '<path d="M12 3l9 5-9 5-9-5 9-5z"/><path d="M3 13l9 5 9-5"/>',
   'i-clock': '<circle cx="12" cy="12" r="9"/><path d="M12 7v5l3 2"/>',

@@ -77,7 +77,7 @@ by default); the product makes no claim about certification, grades, or employme
 ## Brand Commitments
 
 - The name is **Querycraft**. The shell's own copy is lowercase `querycraft` in the
-  sidebar wordmark.
+  top bar wordmark.
 - Voice: plain, precise, and non-infantilising. Errors name the problem and the
   recovery, and an execution failure is explicitly distinguished from a wrong answer.
 - The visual identity is fixed and established: an "Ink & Pine" light palette and a

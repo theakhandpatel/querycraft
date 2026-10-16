@@ -150,8 +150,8 @@ Querycraft is a workspace that happens to teach. The learner is not watching a
 lesson; they are at a bench with a real database on it, and the interface is built
 so that the thing they are making, the query and what it returned, is always the
 loudest object on screen. Everything else is furniture: paper-white surfaces, a
-single hairline where a border would do, and a rail of navigation that stays quiet
-until it is the current place.
+single hairline where a border would do, and navigation that stays quiet until it
+is the current place.
 
 The palette is directional rather than decorative. Ink neutrals carry every surface
 and every line; exactly one saturated hue, a deep pine green, is spent on state and
@@ -170,7 +170,7 @@ uppercase labels that annotate a section. The result of that split is that a lea
 can tell what is *material* (data, from the engine) and what is *furniture* (the app
 talking about itself) before reading a word.
 
-Density is app-density, not marketing-density. The shell is a fixed 244px rail plus a
+Density is app-density, not marketing-density. The shell is a fixed 52px top bar plus a
 scrolling workspace, the content column caps at 1180px, and reading prose caps at
 66ch on purpose. Chapters are long, so the reading column is a genuinely comfortable
 measure and everything around a SQL cell is deliberately tight, with the cell itself
@@ -210,7 +210,7 @@ colours that are wash-only.
 
 - **Page Canvas** (`#f4f5f7`): the app background behind every surface. Slightly cool
   so that paper-white cards read as raised without needing a shadow.
-- **Raised Surface** (`#ffffff`): cards, the sidebar, the header, inputs' surrounding
+- **Raised Surface** (`#ffffff`): cards, the top bar, the drawers, inputs' surrounding
   chrome. This is the "paper".
 - **Sunken Surface** (`#f7f8fa`): a quieter fill for hints, table headers, staged
   panels: a surface that is present but should not compete.
@@ -280,19 +280,23 @@ and it is a label. Body faces are never letter-spaced into caps.
 
 ## Layout
 
-A fixed shell around a single scrolling workspace. The sidebar is 244px wide and holds
-the brand, three to four labelled nav groups, and a pinned account row; the shell's
-`header` is a fixed 52px containing the breadcrumb, the one global search field, and
-engine/theme state. Only `.workspace` scrolls, `.app` is exactly one viewport tall
-with `overflow: hidden`, which is load-bearing: it contains the screens' absolutely
-positioned visually-hidden nodes so the document cannot be scrolled past one viewport.
+A fixed shell around a single scrolling workspace. One 52px top bar holds the brand,
+the primary links with an active underline, a contextual segment on course and lesson
+screens (course, chapter position, prev/next, the chapters drawer button), the one
+global search field, and engine/theme/account state. There is no left sidebar: on the
+lesson screen the reading column is the page, centred at 920px with a 720px article
+inside it, and the chapter list lives in a left slide-in drawer opened from the bar.
+Below 760px the primary links move into a navigation drawer behind a hamburger. Only
+`.workspace` scrolls, `.app` is exactly one viewport tall with `overflow: hidden`,
+which is load-bearing: it contains the screens' absolutely positioned visually-hidden
+nodes so the document cannot be scrolled past one viewport.
 
 Content sits in a `.content` column capped at 1180px and centred, with `28px 32px 72px`
-of padding so the last row of a long screen clears the fold. A chapter is a two-column
-grid of a 272px in-page chapter rail and the reading column, where the reading column
-holds a 720px article and prose blocks cap at 66ch independently of that. There is no
-global max-width on the reading text; the cap is per-paragraph so lists, code and
-tables can still use the full column.
+of padding so the last row of a long screen clears the fold. Prose blocks cap at 66ch
+independently of the column, so lists, code and tables can still use the full width.
+The chapter list is one glance away rather than always on screen: the trade is reading
+width, and the bar's chapter position and prev/next keep the orientation cue
+permanently visible.
 
 Rhythm is a 2px-step scale dominated by 4/6/8/10/12/14/16/18/20/22/24, with 28/32 for
 major block separation and 40/56/72 reserved for page-level space. Related content
@@ -301,11 +305,14 @@ groups tightly (2–6px between a row's own lines), distinct groups separate gen
 
 **Breakpoints.** Three, and they are about what breaks, not device classes:
 
-- **≤1080px**, `.grid2` and the lesson grid collapse to one column, the chapter rail
-  is hidden, `.grid3` goes to two, `.stats` to two.
-- **≤760px**, the shell rail collapses to 64px of icons (labels hidden but kept for
-  screen readers and pointers), all multi-column grids go single, page padding drops to
-  16px, and `.hide-small` content is dropped.
+- **≤1500/1280/1120px**, the top bar sheds its descriptive parts one at a time: the
+  engine label and keyboard chips, then the course name, then the link labels (the
+  links become icons that keep their names) and the chapter position. The chapter
+  buttons survive every step.
+- **≤1080px**, `.grid2` collapses to one column, `.grid3` and `.stats` go to two.
+- **≤760px**, the primary links move into the navigation drawer behind a hamburger;
+  the chapter buttons stay in the bar. All multi-column grids go single, page padding
+  drops to 16px. Below 600px the search field leaves the bar with the keyboard chips.
 
 Every grid column uses `minmax(0, 1fr)` (`1fr` on its own will lock a grid to the widest
 column's min-content and overflow the page) and every nowrap text node in a grid or flex
