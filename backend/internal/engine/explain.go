@@ -131,7 +131,11 @@ func Explain(ctx context.Context, ex Executor, statement string, opts ExplainOpt
 
 	raw, err := explainRow(qctx, ex, explainSQL)
 	if err != nil {
-		qerr := classify(qctx, err)
+		/* classifyFor, not classify: a dialect with its own error vocabulary
+		   (the ErrorClassifier seam) must be asked first, exactly as Execute
+		   does. classify reads only the shared table and would misname a
+		   SQLite error the day the plan lab serves a second dialect. */
+		qerr := classifyFor(qctx, ex, err)
 		return failed(qerr.Code, qerr.Message, planDetail(qerr))
 	}
 	// The plan is one row of untrusted engine text. A plan larger than the

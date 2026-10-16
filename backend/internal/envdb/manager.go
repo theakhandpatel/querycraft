@@ -128,7 +128,6 @@ type environment struct {
 	database  string
 	exec      *engine.PgxExecutor
 	createdAt time.Time
-	resetAt   time.Time
 	lastUsed  time.Time
 }
 
@@ -142,9 +141,15 @@ type Manager struct {
 	adminCfg *pgx.ConnConfig
 	admin    *pgx.Conn
 
-	mu     sync.Mutex
-	envs   map[string]*environment
-	closed bool
+	mu   sync.Mutex
+	envs map[string]*environment
+	// resetAt records the last reset per account. It cannot live on the
+	// `environment` struct: reset drops that record and the next Ensure creates a
+	// fresh one, so a reset time stored there would be lost before Facts could
+	// read it. That is why `Facts.ResetAt` was structurally always zero — the
+	// field existed and was read but never written.
+	resetAt map[string]time.Time
+	closed  bool
 
 	stop chan struct{}
 	wg   sync.WaitGroup
@@ -170,6 +175,7 @@ func New(ctx context.Context, opts Options) (*Manager, error) {
 		adminCfg: adminCfg,
 		admin:    admin,
 		envs:     map[string]*environment{},
+		resetAt:  map[string]time.Time{},
 		stop:     make(chan struct{}),
 	}
 	m.wg.Add(1)
@@ -415,6 +421,7 @@ func (m *Manager) reset(ctx context.Context, accountID string, kind envKind) (ti
 		return 0, envErr(err)
 	}
 	took := time.Since(start)
+	m.resetAt[digest(accountID)] = start
 	m.observeReset(took)
 	m.publishActiveLocked()
 	m.opts.Log.Info(kind.label+" environment reset",
@@ -455,9 +462,9 @@ func (m *Manager) Facts(ctx context.Context, accountID string) (Facts, error) {
 	}
 	if e, ok := m.envs[digest(accountID)]; ok {
 		facts.CreatedAt = e.createdAt
-		facts.ResetAt = e.resetAt
 		facts.IdleUntil = e.lastUsed.Add(m.opts.IdleTTL)
 	}
+	facts.ResetAt = m.resetAt[digest(accountID)]
 	err := m.admin.QueryRow(ctx,
 		"SELECT EXISTS (SELECT 1 FROM pg_database WHERE datname = $1)", database,
 	).Scan(&facts.Exists)

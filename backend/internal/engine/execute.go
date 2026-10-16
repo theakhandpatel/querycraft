@@ -20,14 +20,21 @@ import (
 // the whole result cannot be represented within the budget; partial rows are
 // still returned alongside the error.
 func Execute(ctx context.Context, ex Executor, sql string, limits Limits) QueryResult {
-	limits = limits.Merge(DefaultLimits())
+	/* Fill, not Merge: the caller has already resolved request-vs-server with
+	   Merge (where the server's configured caps are the ceiling). Re-merging the
+	   compiled DefaultLimits() here clamped DOWN, so a gateway configured above
+	   the default (QC_MAX_ROWS=2000) silently ran at the default 500. */
+	limits = limits.Fill(DefaultLimits())
 	requestID := RequestIDFromContext(ctx)
 	if isBlankSQL(sql) {
 		res := Failing(CodeEmptyQuery, "Blank SQL. Write a statement, then Run.", "", requestID)
-		/* The dialect is a property of the engine that would have run the
-		   statement, so even a refusal names it: the UI must never show a
-		   PostgreSQL result on a SQLite chapter. */
+		/* Both the dialect AND the engine are properties of the engine that
+		   would have run the statement, so even a refusal names them: the UI and
+		   the contract must never show a PostgreSQL result on a SQLite chapter.
+		   Dialect alone was fixed before; the engine field was left hardcoded to
+		   "postgresql" by Failing, so the pair disagreed in the JSON. */
 		res.Dialect = DialectOf(ex)
+		res.Engine = EngineLabelOf(ex)
 		return res
 	}
 
@@ -117,15 +124,23 @@ func Execute(ctx context.Context, ex Executor, sql string, limits Limits) QueryR
 	return res
 }
 
-// isBlankSQL reports whether the statement is empty once whitespace and SQL line
+// isBlankSQL reports whether the statement is empty once whitespace and SQL
 // comments are removed. Comment-only submissions are EMPTY_QUERY, matching the
-// client's mock engine.
+// browsers' stripComments (web/src/api/pglite.ts), which strips BOTH line and
+// block comments. This used to strip only `--`, so `/* nothing */` was
+// EMPTY_QUERY in the browser and a syntax error over HTTP — an adapter-parity
+// break in the one place the repo relies on the two agreeing.
 func isBlankSQL(sql string) bool {
 	var b strings.Builder
-	inSingle, inDouble := false, false
+	inSingle, inDouble, inBlock := false, false, false
 	for i := 0; i < len(sql); i++ {
 		c := sql[i]
 		switch {
+		case inBlock:
+			if c == '*' && i+1 < len(sql) && sql[i+1] == '/' {
+				inBlock = false
+				i++
+			}
 		case inSingle:
 			b.WriteByte(c)
 			if c == '\'' {
@@ -149,6 +164,9 @@ func isBlankSQL(sql string) bool {
 			if i < len(sql) {
 				b.WriteByte('\n')
 			}
+		case c == '/' && i+1 < len(sql) && sql[i+1] == '*':
+			inBlock = true
+			i++
 		default:
 			b.WriteByte(c)
 		}

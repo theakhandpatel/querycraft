@@ -174,6 +174,25 @@ func (l Limits) Merge(fallback Limits) Limits {
 	return l
 }
 
+// Fill sets any UNSET field from fallback and never lowers a set one. It is the
+// right merge when the caller's value is itself a ceiling — the operator's
+// configured caps, say — as opposed to a request body that must not exceed the
+// server's ceiling (that is Merge). Execute uses this: its caller has already
+// resolved request-vs-server through Merge, so re-clamping to the compiled
+// default here silently ignored a higher QC_MAX_ROWS.
+func (l Limits) Fill(fallback Limits) Limits {
+	if l.MaxRows <= 0 {
+		l.MaxRows = fallback.MaxRows
+	}
+	if l.MaxBytes <= 0 {
+		l.MaxBytes = fallback.MaxBytes
+	}
+	if l.TimeoutMS <= 0 {
+		l.TimeoutMS = fallback.TimeoutMS
+	}
+	return l
+}
+
 // Timeout is the execution deadline derived from TimeoutMS.
 func (l Limits) Timeout() time.Duration {
 	return time.Duration(l.TimeoutMS) * time.Millisecond

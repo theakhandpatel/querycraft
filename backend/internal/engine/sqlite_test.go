@@ -1279,3 +1279,85 @@ func mustScalar(t *testing.T, db *sql.DB, statement string) any {
 	}
 	return v
 }
+
+/* ---------- engine-label and parity regressions (review pass) ---------- */
+
+// TestBlankSQLRefusalNamesTheEngineNotJustTheDialect pins a contract honesty
+// bug: Failing() hardcoded Engine:"postgresql", so the blank-SQL refusal on a
+// SQLite executor reported engine=postgresql alongside dialect=sqlite — a
+// self-contradicting result. Both fields must come from the executor.
+func TestBlankSQLRefusalNamesTheEngineNotJustTheDialect(t *testing.T) {
+	ex := sqliteExecutor(t, sqliteDatasetFile(t))
+	for _, blank := range []string{"", "   \n\t ", "-- nothing\n", "/* nothing */", "  /* a */ -- b\n"} {
+		res := Execute(t.Context(), ex, blank, Limits{})
+		if res.Error == nil || res.Error.Code != CodeEmptyQuery {
+			t.Errorf("Execute(%q) error = %+v, want %s", blank, res.Error, CodeEmptyQuery)
+			continue
+		}
+		if res.Dialect != DialectSQLite {
+			t.Errorf("Execute(%q) dialect = %q, want %q", blank, res.Dialect, DialectSQLite)
+		}
+		if !strings.HasPrefix(res.Engine, "SQLite 3.") {
+			t.Errorf("Execute(%q) engine = %q, want the SQLite label, not a PostgreSQL one", blank, res.Engine)
+		}
+	}
+}
+
+// TestIsBlankSQLStripsBlockComments pins adapter parity. The browser adapters
+// strip both line and block comments (web/src/api/pglite.ts stripComments), so
+// Go must agree: `/* nothing */` was EMPTY_QUERY in the browser and a syntax
+// error over HTTP before this.
+func TestIsBlankSQLStripsBlockComments(t *testing.T) {
+	blank := []string{"", "  \t\n", "-- x", "/* x */", " /* a */ -- b\n", "/**/"}
+	for _, s := range blank {
+		if !isBlankSQL(s) {
+			t.Errorf("isBlankSQL(%q) = false, want true", s)
+		}
+	}
+	notBlank := []string{"SELECT 1", "/* c */ SELECT 1", "SELECT '/* not a comment */'", "-- x\nSELECT 1"}
+	for _, s := range notBlank {
+		if isBlankSQL(s) {
+			t.Errorf("isBlankSQL(%q) = true, want false", s)
+		}
+	}
+}
+
+// TestOperatorLimitsAboveDefaultAreHonoured pins the double-merge bug: Execute
+// re-merged DefaultLimits(), which clamps DOWN, so a gateway configured with
+// QC_MAX_ROWS=2000 silently ran at the compiled default of 500. This drives
+// Execute itself (not Fill alone) with a raised ceiling and asserts a result
+// that only a >Default cap can produce.
+func TestOperatorLimitsAboveDefaultAreHonoured(t *testing.T) {
+	ex := sqliteWritableExecutor(t)
+	// 600 rows: more than DefaultMaxRows (500), fewer than the raised cap.
+	const n = 600
+	seed := "CREATE TABLE big (n INTEGER); " +
+		"WITH RECURSIVE c(i) AS (SELECT 1 UNION ALL SELECT i+1 FROM c WHERE i < " + strconv.Itoa(n) + ") " +
+		"INSERT INTO big SELECT i FROM c"
+	rows, err := ex.Query(t.Context(), seed)
+	if err != nil {
+		t.Fatalf("seed big: %v", err)
+	}
+	rows.Close()
+
+	// The operator raised the cap; Execute must not clamp it back to 500.
+	res := Execute(t.Context(), ex, "SELECT n FROM big ORDER BY n", Limits{MaxRows: 2000, MaxBytes: 8 << 20, TimeoutMS: 20_000})
+	if res.Error != nil {
+		t.Fatalf("Execute raised-limit error = %+v", res.Error)
+	}
+	if res.RowCount != n {
+		t.Errorf("RowCount = %d, want %d; the operator's cap was clamped to the compiled default", res.RowCount, n)
+	}
+	if res.Truncated {
+		t.Errorf("Truncated = true at %d rows under a 2000-row cap", res.RowCount)
+	}
+
+	// The default cap still applies when no operator limit is set.
+	def := Execute(t.Context(), ex, "SELECT n FROM big ORDER BY n", Limits{})
+	if def.Error != nil {
+		t.Fatalf("Execute default-limit error = %+v", def.Error)
+	}
+	if def.RowCount > DefaultMaxRows {
+		t.Errorf("RowCount = %d with no limits, want <= the default %d", def.RowCount, DefaultMaxRows)
+	}
+}
