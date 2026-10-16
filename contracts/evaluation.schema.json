@@ -8,7 +8,7 @@
   "properties": {
     "qr": {
       "type": "object",
-      "required": ["status", "columns", "rows", "row_count", "truncated", "duration_ms", "error", "engine"],
+      "required": ["status", "columns", "rows", "row_count", "truncated", "duration_ms", "error", "engine", "dialect"],
       "properties": {
         "status": { "enum": ["succeeded", "failed"] },
         "columns": {

@@ -1008,6 +1008,18 @@ func TestTheQueryErrorEnumIsOneSetEverywhere(t *testing.T) {
 		t.Errorf("plan.schema.json error enum is neither the canonical set nor that set minus DIALECT_MISMATCH:\n got %v\n want %v", planCodes, want)
 	}
 
+	// The nested qr object's required list must match the canonical one too: the
+	// enum guard alone left this unguarded, and evaluation.schema.json had already
+	// drifted (it omitted `dialect` while the property existed and query-result
+	// required it).
+	evalQR := loadContract(t, "evaluation.schema.json")["properties"].(map[string]any)["qr"].(map[string]any)
+	qrSchema := loadContract(t, "query-result.schema.json")
+	gotReq := requiredOf(t, evalQR)
+	wantReq := requiredOf(t, qrSchema)
+	if strings.Join(sortedCopy(gotReq), ",") != strings.Join(sortedCopy(wantReq), ",") {
+		t.Errorf("evaluation.schema.json qr.required drifted from query-result.required:\n got %v\n want %v", sortedCopy(gotReq), sortedCopy(wantReq))
+	}
+
 	// The OpenAPI document embeds two copies: QueryError (the QueryResult shape)
 	// and ErrorEnvelope (adds NON-query codes). QueryError must equal canonical;
 	// ErrorEnvelope must be a superset of it.
@@ -1084,6 +1096,28 @@ func containsString(list []string, want string) bool {
 		}
 	}
 	return false
+}
+
+// requiredOf reads a schema's `required` array as a string slice.
+func requiredOf(t *testing.T, schema map[string]any) []string {
+	t.Helper()
+	raw, ok := schema["required"].([]any)
+	if !ok {
+		return nil
+	}
+	out := make([]string, 0, len(raw))
+	for _, v := range raw {
+		s, _ := v.(string)
+		out = append(out, s)
+	}
+	return out
+}
+
+// sortedCopy returns a sorted copy so two required lists compare by set.
+func sortedCopy(in []string) []string {
+	out := append([]string(nil), in...)
+	sort.Strings(out)
+	return out
 }
 
 // enumFromOneOf reads the code enum from an error schema shaped

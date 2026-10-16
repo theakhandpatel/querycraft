@@ -3,6 +3,7 @@ package envdb_test
 import (
 	"context"
 	"errors"
+	"sync"
 	"testing"
 	"time"
 
@@ -270,4 +271,50 @@ func scalarString(t *testing.T, ctx context.Context, ex *engine.PgxExecutor, sql
 		t.Fatalf("query %q returned %T, want string", sql, res.Rows[0][0])
 	}
 	return s
+}
+
+// TestConcurrentEnsureForOneAccountOpensOnePool pins the in-flight guard added
+// when the pool connect + probe moved outside the manager lock: many callers
+// racing for the SAME account's first environment must all receive the same
+// executor, and only one pool must be built. Without the guard the losers would
+// each open a pool and race the envs map write. Run with -race.
+func TestConcurrentEnsureForOneAccountOpensOnePool(t *testing.T) {
+	srv := pgtest.Start(t)
+	ctx, cancel := context.WithTimeout(context.Background(), 4*time.Minute)
+	defer cancel()
+	m := newManager(t, ctx, srv, envdb.Options{MaxEnvironments: 4, IdleTTL: time.Hour})
+	if err := m.EnsureTemplate(ctx); err != nil {
+		t.Fatalf("ensure template: %v", err)
+	}
+
+	const racers = 8
+	execs := make([]*engine.PgxExecutor, racers)
+	errs := make([]error, racers)
+	var wg sync.WaitGroup
+	for i := 0; i < racers; i++ {
+		wg.Add(1)
+		go func(i int) {
+			defer wg.Done()
+			execs[i], errs[i] = m.Ensure(ctx, accountA)
+		}(i)
+	}
+	wg.Wait()
+
+	first := execs[0]
+	if errs[0] != nil || first == nil {
+		t.Fatalf("first ensure failed: %v", errs[0])
+	}
+	for i := 1; i < racers; i++ {
+		if errs[i] != nil {
+			t.Fatalf("racer %d failed: %v", i, errs[i])
+		}
+		if execs[i] != first {
+			t.Errorf("racer %d got a different *PgxExecutor; concurrent ensure opened more than one pool", i)
+		}
+	}
+	// A second ensure after the race returns the same cached pool.
+	again, err := m.Ensure(ctx, accountA)
+	if err != nil || again != first {
+		t.Errorf("second ensure = (%v, %v), want the cached pool", again, err)
+	}
 }

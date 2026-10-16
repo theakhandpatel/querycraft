@@ -149,7 +149,13 @@ type Manager struct {
 	// read it. That is why `Facts.ResetAt` was structurally always zero — the
 	// field existed and was read but never written.
 	resetAt map[string]time.Time
-	closed  bool
+	// building marks an account whose environment is being created by one
+	// goroutine, so a concurrent Ensure for the same account waits for that
+	// result instead of opening a second pool and racing the envs write. The
+	// per-account build (pool connect + probe) runs outside the lock, so this
+	// map is what keeps that safe.
+	building map[string]chan struct{}
+	closed   bool
 
 	stop chan struct{}
 	wg   sync.WaitGroup
@@ -176,6 +182,7 @@ func New(ctx context.Context, opts Options) (*Manager, error) {
 		admin:    admin,
 		envs:     map[string]*environment{},
 		resetAt:  map[string]time.Time{},
+		building: map[string]chan struct{}{},
 		stop:     make(chan struct{}),
 	}
 	m.wg.Add(1)
@@ -331,65 +338,102 @@ func (m *Manager) ensure(ctx context.Context, accountID string, kind envKind) (*
 	if strings.TrimSpace(accountID) == "" {
 		return nil, errors.New("envdb: empty account id")
 	}
-	m.mu.Lock()
-	defer m.mu.Unlock()
-	if m.closed {
-		return nil, errClosed()
-	}
-
 	key := kind.keyPrefix + digest(accountID)
-	if e, ok := m.envs[key]; ok {
-		e.lastUsed = time.Now()
-		return e.exec, nil
-	}
-	if len(m.envs) >= m.opts.MaxEnvironments {
-		return nil, fmt.Errorf("%w: %w (limit %d active)", engine.ErrEnvironmentUnavailable, ErrTooManyEnvironments, m.opts.MaxEnvironments)
-	}
-	template := kind.template(m)
-	if err := m.ensureTemplateFromLocked(ctx, template, kind.label, m.loaderFor(template)); err != nil {
-		return nil, err
-	}
 
-	database := kind.database(m, accountID)
-	dsn, err := m.learnerDSN(database)
-	if err != nil {
-		return nil, err
-	}
+	for {
+		m.mu.Lock()
+		if m.closed {
+			m.mu.Unlock()
+			return nil, errClosed()
+		}
+		if e, ok := m.envs[key]; ok {
+			e.lastUsed = time.Now()
+			m.mu.Unlock()
+			return e.exec, nil
+		}
+		// Another goroutine is already building THIS account's environment.
+		// Wait for it rather than building a second one, which would leak a
+		// pool and race the map write. The lock is released while waiting.
+		if wait, inflight := m.building[key]; inflight {
+			m.mu.Unlock()
+			select {
+			case <-wait:
+			case <-ctx.Done():
+				return nil, envErr(ctx.Err())
+			}
+			continue
+		}
+		if len(m.envs) >= m.opts.MaxEnvironments {
+			m.mu.Unlock()
+			return nil, fmt.Errorf("%w: %w (limit %d active)", engine.ErrEnvironmentUnavailable, ErrTooManyEnvironments, m.opts.MaxEnvironments)
+		}
+		// The admin-connection statements (template lookup/build, create-if-absent)
+		// need the lock; the pool connect and the writability probe below do NOT
+		// — they are per-account and touch no shared state. Holding the single
+		// mutex across them blocked every other account for the whole first
+		// create (ADR 0002 measured a first drop at ~2.9 s), so they run outside
+		// it, guarded only by this in-flight marker.
+		template := kind.template(m)
+		if err := m.ensureTemplateFromLocked(ctx, template, kind.label, m.loaderFor(template)); err != nil {
+			m.mu.Unlock()
+			return nil, err
+		}
+		database := kind.database(m, accountID)
+		dsn, err := m.learnerDSN(database)
+		if err != nil {
+			m.mu.Unlock()
+			return nil, err
+		}
+		if err := m.createIfAbsentFromLocked(ctx, database, template); err != nil {
+			m.mu.Unlock()
+			return nil, err
+		}
+		done := make(chan struct{})
+		m.building[key] = done
+		m.mu.Unlock()
 
+		exec, created, buildErr := m.buildEnvironment(ctx, kind, accountID, key, database, dsn)
+
+		m.mu.Lock()
+		delete(m.building, key)
+		if buildErr == nil {
+			now := time.Now()
+			m.envs[key] = &environment{
+				account: accountID, database: database, exec: exec,
+				createdAt: now, lastUsed: now,
+			}
+			m.observeCreate(created)
+			m.publishActiveLocked()
+			m.opts.Log.Info(kind.label+" environment ready",
+				"account", accountID, "database", database, "created_in", created.String())
+		}
+		close(done)
+		m.mu.Unlock()
+		return exec, buildErr
+	}
+}
+
+// buildEnvironment connects the per-account pool and probes it writable, outside
+// the manager lock (see ensure). A failure closes the pool it opened so no
+// connection leaks.
+func (m *Manager) buildEnvironment(ctx context.Context, kind envKind, accountID, key, database, dsn string) (*engine.PgxExecutor, time.Duration, error) {
 	start := time.Now()
-	if err := m.createIfAbsentFromLocked(ctx, database, template); err != nil {
-		return nil, err
-	}
 	exec, err := engine.NewPgxExecutorWithConfig(ctx, dsn, engine.PgxConfig{
 		MaxConns: m.opts.MaxConnsPerEnv,
 		MinConns: 1,
 		Writable: true,
 	})
 	if err != nil {
-		return nil, envErr(err)
+		return nil, 0, envErr(err)
 	}
 	// A template built without the writable grants copies into environments
 	// where every learner write fails. Verify once here, where the cause is a
 	// mis-built template, rather than at the learner's first INSERT.
 	if err := probeWritable(ctx, exec); err != nil {
 		exec.Close()
-		return nil, envErr(fmt.Errorf("%s environment %q is not writable: %w", kind.label, database, err))
+		return nil, 0, envErr(fmt.Errorf("%s environment %q is not writable: %w", kind.label, database, err))
 	}
-
-	created := time.Since(start)
-	now := time.Now()
-	m.envs[key] = &environment{
-		account:   accountID,
-		database:  database,
-		exec:      exec,
-		createdAt: now,
-		lastUsed:  now,
-	}
-	m.observeCreate(created)
-	m.publishActiveLocked()
-	m.opts.Log.Info(kind.label+" environment ready",
-		"account", accountID, "database", database, "created_in", created.String())
-	return exec, nil
+	return exec, time.Since(start), nil
 }
 
 func (m *Manager) reset(ctx context.Context, accountID string, kind envKind) (time.Duration, error) {
