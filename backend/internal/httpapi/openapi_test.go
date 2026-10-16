@@ -78,6 +78,74 @@ func TestOpenAPIDocument(t *testing.T) {
 	}
 }
 
+// TestDocumentedSecurityMatchesTheHandlers pins R1-F5: a route that requires a
+// session must say so in the OpenAPI document, and a route that does not must
+// not. Before this, only the progress/runs/auth-me routes declared security, so
+// a client reading the spec could not tell that /courses, /challenges or /tutor
+// need a bearer token. The expected set is asserted against the live document.
+func TestDocumentedSecurityMatchesTheHandlers(t *testing.T) {
+	w := do(t, newTestServer(&fakeExecutor{}), http.MethodGet, "/openapi.json", "")
+	var doc struct {
+		Paths map[string]map[string]json.RawMessage `json:"paths"`
+	}
+	mustDecode(t, w, &doc)
+
+	// The routes whose handlers call requireUser (verified by reading them).
+	mustBeSecured := []struct{ method, path string }{
+		{"post", "/environment/reset"},
+		{"get", "/courses"}, {"get", "/courses/{id}"}, {"delete", "/courses/{id}"},
+		{"post", "/courses/{id}/build"},
+		{"get", "/generation/{id}"},
+		{"get", "/challenges"}, {"get", "/challenges/{id}"},
+		{"post", "/challenges/{id}/reset"}, {"post", "/challenges/{id}/critique"},
+		{"post", "/challenges/{id}/report"}, {"post", "/challenges/{id}/patches/{patchID}"},
+		{"post", "/tutor"},
+		{"get", "/progress/{course}"}, {"put", "/progress/{course}"}, {"post", "/events"},
+		{"get", "/runs"}, {"get", "/runs/{id}"},
+		{"post", "/auth/logout"}, {"get", "/auth/me"},
+	}
+	for _, op := range mustBeSecured {
+		raw, ok := doc.Paths[op.path][op.method]
+		if !ok {
+			t.Errorf("%s %s: not in the document", op.method, op.path)
+			continue
+		}
+		var body struct {
+			Security []map[string][]string `json:"security"`
+		}
+		if err := json.Unmarshal(raw, &body); err != nil {
+			t.Errorf("%s %s: %v", op.method, op.path, err)
+			continue
+		}
+		if len(body.Security) == 0 {
+			t.Errorf("%s %s requires a session but declares no security", op.method, op.path)
+		}
+	}
+
+	// The public routes must NOT claim a bearer requirement.
+	publicRoutes := []struct{ method, path string }{
+		{"get", "/health"}, {"get", "/capabilities"}, {"get", "/metrics"},
+		{"post", "/query"}, {"post", "/answers/evaluate"}, {"post", "/explain"},
+		{"get", "/environment"}, {"get", "/datasets/{id}/tables"},
+		{"post", "/auth/signup"}, {"post", "/auth/login"},
+	}
+	for _, op := range publicRoutes {
+		raw, ok := doc.Paths[op.path][op.method]
+		if !ok {
+			continue
+		}
+		var body struct {
+			Security []map[string][]string `json:"security"`
+		}
+		if err := json.Unmarshal(raw, &body); err != nil {
+			continue
+		}
+		if len(body.Security) > 0 {
+			t.Errorf("%s %s is a public route but declares security", op.method, op.path)
+		}
+	}
+}
+
 func TestSwaggerDocs(t *testing.T) {
 	s := newTestServer(&fakeExecutor{})
 	for _, path := range []string{"/docs", "/docs/"} {

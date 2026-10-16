@@ -168,6 +168,7 @@ const openAPISpec = `{
     "/environment/reset": {
       "post": {
         "operationId": "postEnvironmentReset",
+        "security": [{"bearerAuth": []}],
         "tags": ["environment"],
         "summary": "Restore the sealed dataset, discarding the learner's own changes.",
         "description": "Drops the caller's environment database and copies the sealed template again. Destructive to the caller's own workspace only. Requires a signed-in account; an anonymous caller is refused with AUTH_REQUIRED. When the course parameter names a stored course, that course's own setup statements are applied to the restored workspace in order, so the learner's database is the one the course's exercises were verified against; setup_statements reports how many were applied. A course is resolved owner-scoped, and a course id that is not the caller's is refused with 404 NOT_FOUND so it cannot be probed for existence.",
@@ -380,6 +381,7 @@ const openAPISpec = `{
     "/courses": {
       "get": {
         "operationId": "listCourses",
+        "security": [{"bearerAuth": []}],
         "tags": ["generation"],
         "summary": "List the caller's stored generated courses, newest first.",
         "description": "Only the session's own courses are returned; the depot is scoped on write, so the filter lives in the handler. With AI off the answer is 503 and 'courses' is an empty array, never an invented row.",
@@ -402,6 +404,7 @@ const openAPISpec = `{
     "/courses/{id}": {
       "get": {
         "operationId": "getCourse",
+        "security": [{"bearerAuth": []}],
         "tags": ["generation"],
         "summary": "Read one stored course with the evidence that admitted it.",
         "description": "A course that belongs to another learner is reported as 404, never 403, so its existence cannot be confirmed.",
@@ -423,6 +426,7 @@ const openAPISpec = `{
       },
       "delete": {
         "operationId": "deleteCourse",
+        "security": [{"bearerAuth": []}],
         "tags": ["generation"],
         "summary": "Forget a generated course.",
         "description": "Removes the generated plan only. Learner attempts and progress are the learner's data and are not touched. A course that belongs to another learner is reported as 404, never 403.",
@@ -446,6 +450,7 @@ const openAPISpec = `{
     "/courses/{id}/build": {
       "post": {
         "operationId": "postCourseBuild",
+        "security": [{"bearerAuth": []}],
         "tags": ["generation"],
         "summary": "Approve a paused course and build its chapters.",
         "description": "Continues a course that stopped at 'awaiting_approval': the stored outline is reloaded, the chapter conversation is rebuilt from the request stored beside it, and the chapter phase runs to completion, activating the course exactly as a default run would. A chapter that already verified is not re-written. The route is owner-scoped: a course that belongs to another learner is reported as 404, never 403. A course that is not still being built is refused with 409, because re-running a finished course is not what this route is for. A continuation takes minutes, so it accepts the same Prefer: respond-async (or async=1) ask as /courses/generate and answers 202 with the job id; the blocking envelope is the default.",
@@ -484,6 +489,7 @@ const openAPISpec = `{
     "/generation/{id}": {
       "get": {
         "operationId": "getGenerationJob",
+        "security": [{"bearerAuth": []}],
         "tags": ["generation"],
         "summary": "Poll a generation that was submitted with Prefer: respond-async.",
         "description": "The body is the job's own view: a live copy of the pipeline's stages while the run is going, and the pipeline's final report once it is over. A course job also carries its chapter progress ('chapters_planned', 'chapters_verified', 'current_chapter') and 'chapters', the per-chapter report in course order. A job that belongs to another learner is reported as 404, never 403, so an id cannot be probed for existence. The stored record, not the job, is the durable thing: a course job names its course_id as soon as the outline is stored — that course reads as 'building' from GET /courses/{id} and carries the chapters that already verified — and a challenge job names its challenge_id once the challenge was stored. A refused run names neither, because it stored nothing.",
@@ -546,6 +552,7 @@ const openAPISpec = `{
     "/challenges": {
       "get": {
         "operationId": "listChallenges",
+        "security": [{"bearerAuth": []}],
         "tags": ["generation"],
         "summary": "List stored generated challenges, newest first.",
         "responses": {
@@ -563,6 +570,7 @@ const openAPISpec = `{
     "/challenges/{id}": {
       "get": {
         "operationId": "getChallenge",
+        "security": [{"bearerAuth": []}],
         "tags": ["generation"],
         "summary": "Read one stored challenge with the evidence that admitted it.",
         "parameters": [{"name": "id", "in": "path", "required": true, "schema": {"type": "string"}}],
@@ -581,6 +589,7 @@ const openAPISpec = `{
     "/challenges/{id}/reset": {
       "post": {
         "operationId": "resetChallenge",
+        "security": [{"bearerAuth": []}],
         "tags": ["generation"],
         "summary": "Forget a generated challenge.",
         "description": "Removes the generated definition only. Learner attempts are the learner's data and are not touched.",
@@ -600,6 +609,7 @@ const openAPISpec = `{
     "/challenges/{id}/critique": {
       "post": {
         "operationId": "postCritique",
+        "security": [{"bearerAuth": []}],
         "tags": ["generation"],
         "summary": "Review the learner's own query on demand.",
         "description": "The critique never contains the reference solution.",
@@ -623,6 +633,7 @@ const openAPISpec = `{
     "/challenges/{id}/report": {
       "post": {
         "operationId": "reportDefect",
+        "security": [{"bearerAuth": []}],
         "tags": ["generation"],
         "summary": "Report a defect in a challenge.",
         "description": "The claimed defect is reproduced by execution before any patch is proposed, and 'applied' stays false until the learner approves the patch.",
@@ -642,6 +653,7 @@ const openAPISpec = `{
     "/challenges/{id}/patches/{patchID}": {
       "post": {
         "operationId": "decidePatch",
+        "security": [{"bearerAuth": []}],
         "tags": ["generation"],
         "summary": "Approve or reject a proposed patch.",
         "description": "The approver is taken from the session, never from the body. An unapproved patch is refused with 409.",
@@ -668,6 +680,7 @@ const openAPISpec = `{
     "/tutor": {
       "post": {
         "operationId": "postTutor",
+        "security": [{"bearerAuth": []}],
         "tags": ["generation"],
         "summary": "Ask for a hint about the learner's own query.",
         "description": "Tutoring sees the learner's SQL, its real error or result summary, the objective and the hint level. It never sees the reference solution.",

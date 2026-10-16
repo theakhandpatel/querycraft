@@ -24,7 +24,8 @@ BIN         := $(BACKEND_DIR)/bin/querycraft
 # The `verify` smoke test boots the real binary against its own embedded
 # PostgreSQL, in a throwaway cluster on its own port, so it never collides with
 # a dev gateway that happens to be running.
-SMOKE_ADDR    ?= 127.0.0.1:18080
+# Leave empty to auto-pick a free HTTP port; set it (host:port) to pin one.
+SMOKE_ADDR    ?=
 # Leave empty to auto-pick a free port; set it to pin one.
 SMOKE_PG_PORT ?=
 SMOKE_PG_DIR  ?= $(BACKEND_DIR)/.data/smoke
@@ -101,7 +102,14 @@ verify: build test ## build + test + smoke-test the binary on an isolated embedd
 		done; \
 	fi; \
 	if [ -z "$$port" ]; then echo "verify: no free port for the smoke database" >&2; exit 1; fi; \
-	QC_ADDR=$(SMOKE_ADDR) \
+	addr="$(SMOKE_ADDR)"; \
+	if [ -z "$$addr" ]; then \
+		for candidate in $$(seq 18080 18180); do \
+			if ! ss -ltnH "sport = :$$candidate" 2>/dev/null | grep -q .; then addr=127.0.0.1:$$candidate; break; fi; \
+		done; \
+	fi; \
+	if [ -z "$$addr" ]; then echo "verify: no free HTTP port for the smoke server" >&2; exit 1; fi; \
+	QC_ADDR=$$addr \
 	QC_PG_PORT="$$port" \
 	QC_PG_DATA="$(SMOKE_PG_DIR)/pg/data" \
 	QC_PG_RUNTIME="$(SMOKE_PG_DIR)/pg/runtime" \
@@ -110,34 +118,34 @@ verify: build test ## build + test + smoke-test the binary on an isolated embedd
 	pid=$$!; \
 	cleanup() { kill "$$pid" 2>/dev/null || true; wait "$$pid" 2>/dev/null || true; rm -f "$$root" "$$log"; rm -rf "$(SMOKE_PG_DIR)"; }; \
 	trap cleanup EXIT INT TERM; \
-	echo "verify: starting $(BIN) on $(SMOKE_ADDR) with embedded PostgreSQL on :$$port (pid $$pid)"; \
+	echo "verify: starting $(BIN) on $$addr with embedded PostgreSQL on :$$port (pid $$pid)"; \
 	up=0; \
 	for _ in $$(seq 1 100); do \
-		if curl -fsS "http://$(SMOKE_ADDR)/health" >/dev/null 2>&1; then up=1; break; fi; \
+		if curl -fsS "http://$$addr/health" >/dev/null 2>&1; then up=1; break; fi; \
 		if ! kill -0 "$$pid" 2>/dev/null; then echo "verify: server exited before becoming ready" >&2; cat "$$log" >&2; exit 1; fi; \
 		sleep 0.25; \
 	done; \
 	if [ "$$up" != 1 ]; then echo "verify: /health did not become ready" >&2; cat "$$log" >&2; exit 1; fi; \
-	health=$$(curl -fsS "http://$(SMOKE_ADDR)/health"); \
+	health=$$(curl -fsS "http://$$addr/health"); \
 	echo "verify: /health -> $$health"; \
 	case "$$health" in *'"version":"PostgreSQL'*) ;; \
 		*) echo "verify: embedded PostgreSQL did not attach (health shows the build version, not the server version)" >&2; cat "$$log" >&2; exit 1;; esac; \
 	qcode=$$(curl -sS -o "$$root" -w '%{http_code}' -X POST -H 'content-type: application/json' \
 		-d '{"sql":"select count(*) as n from orders"}' \
-		"http://$(SMOKE_ADDR)/query"); \
+		"http://$$addr/query"); \
 	qr=$$(cat "$$root"); \
 	echo "verify: /query -> HTTP $$qcode $$qr"; \
 	if [ "$$qcode" != "200" ] || ! grep -q '"status":"succeeded"' "$$root"; then \
 		echo "verify: /query did not run against PostgreSQL" >&2; cat "$$log" >&2; exit 1; \
 	fi; \
-	anon=$$(curl -sS -o /dev/null -w '%{http_code}' "http://$(SMOKE_ADDR)/progress/smoke"); \
+	anon=$$(curl -sS -o /dev/null -w '%{http_code}' "http://$$addr/progress/smoke"); \
 	echo "verify: anonymous GET /progress -> HTTP $$anon"; \
 	if [ "$$anon" != "401" ]; then \
 		echo "verify: /progress must require a session, got $$anon" >&2; cat "$$log" >&2; exit 1; \
 	fi; \
 	admin=$$(curl -sS -o "$$root" -w '%{http_code}' -X POST -H 'content-type: application/json' \
 		-d '{"email":"admin@querycraft.local","password":""}' \
-		"http://$(SMOKE_ADDR)/auth/login"); \
+		"http://$$addr/auth/login"); \
 	echo "verify: default admin login -> HTTP $$admin"; \
 	if [ "$$admin" != "200" ] || ! grep -q '"role":"admin"' "$$root"; then \
 		echo "verify: the seeded default administrator could not sign in" >&2; cat "$$root" >&2; cat "$$log" >&2; exit 1; \
@@ -146,7 +154,7 @@ verify: build test ## build + test + smoke-test the binary on an isolated embedd
 	if [ -z "$$tok" ]; then echo "verify: /auth/login returned no token" >&2; cat "$$root" >&2; exit 1; fi; \
 	signup=$$(curl -sS -o "$$root" -w '%{http_code}' -X POST -H 'content-type: application/json' \
 		-d '{"email":"smoke@querycraft.local","name":"Smoke","password":"smoke-passphrase"}' \
-		"http://$(SMOKE_ADDR)/auth/signup"); \
+		"http://$$addr/auth/signup"); \
 	echo "verify: learner signup -> HTTP $$signup"; \
 	if [ "$$signup" != "201" ]; then \
 		echo "verify: /auth/signup expected 201, got $$signup" >&2; cat "$$root" >&2; cat "$$log" >&2; exit 1; \
@@ -156,69 +164,76 @@ verify: build test ## build + test + smoke-test the binary on an isolated embedd
 	put=$$(curl -sS -o /dev/null -w '%{http_code}' -X PUT -H 'content-type: application/json' \
 		-H "Authorization: Bearer $$learner" \
 		-d '{"version":5,"passed":{"smoke.1":true}}' \
-		"http://$(SMOKE_ADDR)/progress/smoke"); \
+		"http://$$addr/progress/smoke"); \
 	get=$$(curl -sS -o "$$root" -w '%{http_code}' -H "Authorization: Bearer $$learner" \
-		"http://$(SMOKE_ADDR)/progress/smoke"); \
+		"http://$$addr/progress/smoke"); \
 	echo "verify: scoped progress PUT/GET -> $$put/$$get"; \
 	if [ "$$put" != "200" ] || [ "$$get" != "200" ] || ! grep -q '"smoke.1":true' "$$root"; then \
 		echo "verify: progress did not round-trip for the signed-in learner" >&2; cat "$$root" >&2; cat "$$log" >&2; exit 1; \
 	fi; \
-	leak=$$(curl -sS -H "Authorization: Bearer $$tok" "http://$(SMOKE_ADDR)/progress/smoke"); \
+	leak=$$(curl -sS -H "Authorization: Bearer $$tok" "http://$$addr/progress/smoke"); \
 	if printf '%s' "$$leak" | grep -q '"smoke.1":true'; then \
 		echo "verify: progress leaked across owners (admin saw the learner's snapshot)" >&2; cat "$$log" >&2; exit 1; \
 	fi; \
 	out=$$(curl -sS -o /dev/null -w '%{http_code}' -X POST -H "Authorization: Bearer $$learner" \
-		"http://$(SMOKE_ADDR)/auth/logout"); \
+		"http://$$addr/auth/logout"); \
 	echo "verify: logout -> HTTP $$out"; \
 	if [ "$$out" != "200" ]; then echo "verify: logout failed" >&2; exit 1; fi; \
 	after=$$(curl -sS -o /dev/null -w '%{http_code}' -H "Authorization: Bearer $$learner" \
-		"http://$(SMOKE_ADDR)/progress/smoke"); \
+		"http://$$addr/progress/smoke"); \
 	echo "verify: revoked token -> HTTP $$after"; \
 	if [ "$$after" != "401" ]; then \
 		echo "verify: a logged-out token still worked" >&2; cat "$$log" >&2; exit 1; \
 	fi; \
-	code=$$(curl -sS -o "$$root" -w '%{http_code}' "http://$(SMOKE_ADDR)/"); \
+	code=$$(curl -sS -o "$$root" -w '%{http_code}' "http://$$addr/"); \
 	echo "verify: GET / -> HTTP $$code"; \
 	if [ "$$code" != "200" ]; then echo "verify: GET / expected 200, got $$code" >&2; exit 1; fi; \
 	if ! grep -qE 'Querycraft|make build' "$$root"; then \
 		echo "verify: GET / did not contain the app title or the placeholder" >&2; head -20 "$$root" >&2; exit 1; \
 	fi; \
 	echo "verify: SPA response OK"; \
-	echo "verify: OK (embedded PostgreSQL :$$port, SPA + API + auth on $(SMOKE_ADDR))"
+	echo "verify: OK (embedded PostgreSQL :$$port, SPA + API + auth on $$addr)"
 
 verify-mock: build test ## Smoke-test the binary with no embedded database (degraded mode).
 	@set -eu; \
 	log=$$(mktemp); scratch=$$(mktemp -d); \
-	QC_ADDR=$(SMOKE_ADDR) QC_NO_LOCAL_DB=1 $(BIN) >"$$log" 2>&1 & \
+	addr="$(SMOKE_ADDR)"; \
+	if [ -z "$$addr" ]; then \
+		for candidate in $$(seq 18080 18180); do \
+			if ! ss -ltnH "sport = :$$candidate" 2>/dev/null | grep -q .; then addr=127.0.0.1:$$candidate; break; fi; \
+		done; \
+	fi; \
+	if [ -z "$$addr" ]; then echo "verify-mock: no free HTTP port for the smoke server" >&2; exit 1; fi; \
+	QC_ADDR=$$addr QC_NO_LOCAL_DB=1 $(BIN) >"$$log" 2>&1 & \
 	pid=$$!; \
 	cleanup() { kill "$$pid" 2>/dev/null || true; wait "$$pid" 2>/dev/null || true; rm -f "$$log"; rm -rf "$$scratch"; }; \
 	trap cleanup EXIT INT TERM; \
 	up=0; \
 	for _ in $$(seq 1 60); do \
-		if curl -fsS "http://$(SMOKE_ADDR)/health" >/dev/null 2>&1; then up=1; break; fi; \
+		if curl -fsS "http://$$addr/health" >/dev/null 2>&1; then up=1; break; fi; \
 		if ! kill -0 "$$pid" 2>/dev/null; then echo "verify-mock: server exited early" >&2; cat "$$log" >&2; exit 1; fi; \
 		sleep 0.1; \
 	done; \
 	if [ "$$up" != 1 ]; then echo "verify-mock: /health did not become ready" >&2; cat "$$log" >&2; exit 1; fi; \
-	echo "verify-mock: /health -> $$(curl -fsS "http://$(SMOKE_ADDR)/health")"; \
+	echo "verify-mock: /health -> $$(curl -fsS "http://$$addr/health")"; \
 	q=$$(curl -sS -o "$$scratch/q.json" -w '%{http_code}' -X POST -H 'content-type: application/json' \
-		-d '{"sql":"select 1"}' "http://$(SMOKE_ADDR)/query"); \
+		-d '{"sql":"select 1"}' "http://$$addr/query"); \
 	echo "verify-mock: /query -> HTTP $$q"; \
 	if [ "$$q" != "400" ] || ! grep -q 'ENVIRONMENT_UNAVAILABLE' "$$scratch/q.json"; then \
 		echo "verify-mock: degraded mode must report ENVIRONMENT_UNAVAILABLE, not invent rows" >&2; cat "$$scratch/q.json" >&2; exit 1; \
 	fi; \
-	anon=$$(curl -sS -o /dev/null -w '%{http_code}' "http://$(SMOKE_ADDR)/progress/smoke"); \
+	anon=$$(curl -sS -o /dev/null -w '%{http_code}' "http://$$addr/progress/smoke"); \
 	if [ "$$anon" != "401" ]; then echo "verify-mock: /progress must still require a session in degraded mode, got $$anon" >&2; exit 1; fi; \
 	adm=$$(curl -sS -o "$$scratch/a.json" -w '%{http_code}' -X POST -H 'content-type: application/json' \
-		-d '{"email":"admin@querycraft.local","password":""}' "http://$(SMOKE_ADDR)/auth/login"); \
+		-d '{"email":"admin@querycraft.local","password":""}' "http://$$addr/auth/login"); \
 	echo "verify-mock: in-memory admin login -> HTTP $$adm"; \
 	if [ "$$adm" != "200" ] || ! grep -q '"role":"admin"' "$$scratch/a.json"; then \
 		echo "verify-mock: the in-memory store must still seed the default admin" >&2; cat "$$scratch/a.json" >&2; cat "$$log" >&2; exit 1; \
 	fi; \
 	mtok=$$(sed -n 's/.*"token":"\([^"]*\)".*/\1/p' "$$scratch/a.json"); \
 	mput=$$(curl -sS -o /dev/null -w '%{http_code}' -X PUT -H 'content-type: application/json' -H "Authorization: Bearer $$mtok" \
-		-d '{"version":5,"passed":{"m":true}}' "http://$(SMOKE_ADDR)/progress/smoke"); \
-	mget=$$(curl -sS -H "Authorization: Bearer $$mtok" "http://$(SMOKE_ADDR)/progress/smoke"); \
+		-d '{"version":5,"passed":{"m":true}}' "http://$$addr/progress/smoke"); \
+	mget=$$(curl -sS -H "Authorization: Bearer $$mtok" "http://$$addr/progress/smoke"); \
 	echo "verify-mock: in-memory progress PUT -> $$mput"; \
 	if [ "$$mput" != "200" ] || ! printf '%s' "$$mget" | grep -q '"m":true'; then \
 		echo "verify-mock: in-memory progress did not round-trip" >&2; printf '%s\n' "$$mget" >&2; exit 1; \
