@@ -182,12 +182,13 @@ if (topnavHidden || labelsHidden) {
   );
 }
 
-/* 5. The theme toggle is the other control the narrow layout keeps; a cleanup
-   should not take its name along with its label. */
+/* 5. The theme entry is the other control the narrow layout keeps (a palette
+   button opening Appearance); a cleanup should not take its name along with
+   its non-existent label. */
 check(
-  'the theme toggle keeps its accessible name',
-  /aria-label="Toggle theme"/.test(shell) && /title="Toggle theme"/.test(shell),
-  'Shell.tsx theme toggle lost aria-label/title'
+  'the themes button keeps its accessible name',
+  /aria-label="Themes"/.test(shell) && /title="Themes"/.test(shell),
+  'Shell.tsx themes button lost aria-label/title'
 );
 
 console.log(failed === 0 ? '\nshell-audit: OK' : `\nshell-audit: ${failed} failed`);

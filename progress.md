@@ -2396,3 +2396,8 @@ dropped by the browser (imports precede every rule), and the theme blocks
 tied :root's specificity and lost to the light default (theme blocks are now
 :root[data-theme=…], 0,2,0). Verified live: Dracula applied, persisted across
 reload, and rendering the whole lesson surface correctly.
+
+Post-commit gate note: the first make test run failed at lint (a PATH ordering
+issue on this machine, not the tree) and audit-shell held the old toggle's
+name strings; the check now holds the themes button's ("aria-label=Themes"),
+verified with the same intent — an icon-only control must keep its name.
