@@ -14,8 +14,8 @@ PostgreSQL. No Docker and no configuration.
 
 | Recording | |
 | --- | --- |
-| [Walkthrough, MP4, 1:38, 1080p](docs/assets/walkthrough.mp4) | The full flow, recorded on the built binary at 1920×1080: sign-in, home, a course, a lesson, a graded exercise, the tables drawer, the library, the workbook, progress, the challenge lab, authoring, and the dark theme. |
-| [Highlight GIF](docs/assets/walkthrough-grade.gif) | 15 seconds. Running an exercise and grading it. |
+| [Walkthrough, MP4, 0:53, 1080p](docs/assets/walkthrough.mp4) | The full flow, recorded on the built binary at 1920×1080: sign-in, the theme picker, a lesson in Dracula, a graded exercise, the tables drawer, the workbook, progress, the challenge lab, the manage surface (gateway health, AI provider, course inventory), and a switch to the Terminal theme. |
+| [Highlight GIF](docs/assets/walkthrough-grade.gif) | The graded exercise, first 15 seconds. |
 
 | | |
 | --- | --- |
@@ -24,13 +24,17 @@ PostgreSQL. No Docker and no configuration.
 | <img src="docs/assets/screens/06-passed.png" width="380" alt="Graded"> | <img src="docs/assets/screens/09-tables-drawer.png" width="380" alt="Tables drawer"> |
 | Graded. All four contract clauses pass. | The tables drawer. The live schema, with a workspace reset. |
 
-The other eleven screens are in `docs/assets/screens/`.
+The other fourteen screens are in `docs/assets/screens/` — including the
+manage surface (gateway health, the AI provider, the course inventory) and the
+theme picker with every preset.
 
 ## What you get
 
 **Eight complete courses.** 52 chapters across PostgreSQL and SQLite, with 53
 worked examples and 53 exercises: analytics, joins, subqueries, query plans,
-foundations, and three SQLite courses.
+foundations, and three SQLite courses. Authoring is built in: describe what
+you want to get good at, and the gateway generates a course whose every
+exercise is verified against the real engine before you see it.
 
 **A real engine, not a simulation.** The app runs full PostgreSQL in your
 browser, in a Web Worker. It needs no server, works offline, and can stop a
@@ -51,9 +55,16 @@ notes, bookmarks, and saved queries with `Cmd`+`K` or `Ctrl`+`K`. Export
 writes a versioned JSON file with no credentials; import merges without
 overwriting.
 
-**A challenge lab.** Signed-in learners can generate practice challenges from
-the dataset, with the built-in deterministic provider or any
-OpenAI-compatible model.
+**A challenge lab.** Signed-in learners can generate practice challenges and
+whole courses from the dataset. Bring any provider: the built-in deterministic
+provider needs no key, any OpenAI-compatible server is one setting away, and
+Anthropic, OpenAI, Gemini and 35 more providers resolve from the embedded
+model catalog.
+
+**Eighteen themes, or yours.** Light, dark, warm, cool, high-contrast and
+terminal presets — plus famous palettes like One Dark, Dracula, Nord and
+Tokyo Night — all gated at 4.5:1 contrast. Make your own from an accent
+color; the inks tune themselves, and the theme follows your account.
 
 **Keyboard accessible.** The app works end to end with the keyboard only, with
 a skip link, visible focus, and dialogs that trap and return focus.

@@ -66,6 +66,13 @@ graph TB
 `backend/bin/querycraft`. That binary starts its own PostgreSQL and serves the
 app, the API, and the documentation on one port. No flow needs Docker.
 
+Client preferences are per account: the theme — one of 18 shipped presets or a
+theme the learner derived from an accent — persists through `GET/PUT
+/preferences` and follows the account across devices. The derivation tunes the
+ink tokens to the 4.5:1 gate the shipped presets clear
+(`web/src/lib/userThemes.ts`; `scripts/theme-contrast.mjs` audits all of
+them).
+
 ## 2. The execution seam
 
 Every statement the learner runs goes through one function, `engine.Execute` in
@@ -157,6 +164,19 @@ Grading compares results against an explicit contract. It never compares SQL
 text (design sections 1.1 and 3.1).
 
 ## 5. Course generation
+
+The model is reached through one two-method seam
+(`internal/ai/provider`): `Descriptor()` and `Complete(ctx, req)`. Three
+implementations ship: the deterministic **fake** provider (CI proves the whole
+pipeline offline), an **OpenAI-compatible** HTTP client, and a **pi-ai**
+adapter over `github.com/sky-valley/pi/ai` — pi's unified multi-provider LLM
+API — which adds Anthropic, OpenAI responses and Gemini wire formats, SSE
+parsing, Retry-After-aware retries, an embedded model catalog (1,529 chat
+models across 41 providers, sourced from models.dev) and token accounting.
+The pipeline stays the policy: the model is an untrusted generator, every
+artifact is schema-checked, executed in a scratch environment, cross-checked
+and adversarially probed before it is stored. Administrators swap the live
+provider from the manage surface (`GET/PUT /admin/ai`) without a restart.
 
 The model is an untrusted generator. The gateway is the policy. A run holds one
 conversation, and the model hands in one chapter for each call. The gateway

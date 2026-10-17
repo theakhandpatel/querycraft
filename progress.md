@@ -2173,9 +2173,9 @@ PromptDialog pass: the capture-phase focus trap is the accepted answer, the
 finding is deliberate.
 
 Open items:
-- The walkthrough video, its poster, and the highlight GIF still show the old
-  shell; the gallery does not. Re-recording needs the scripted browser flow the
-  first recording used.
+- (closed 2026-10-17) The walkthrough video, poster and highlight GIF were
+  re-recorded on the current build — Dracula lesson, the manage surface and
+  the theme switch are in the flow now. The recording is 0:53.
 - Focus is not moved to the chapter heading after a drawer-initiated chapter
   change; the drawer's close path restores focus to the opener instead.
 

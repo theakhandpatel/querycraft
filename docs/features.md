@@ -108,6 +108,9 @@ Code: `backend/internal/ai/`, `web/src/components/screens/CreateScreen.tsx`,
 | Auto-detect | A production build with no mode set asks `/health` on its own origin. If the gateway answers, the app uses the `http` adapter. |
 | Operator surface | `/health`, `/capabilities`, `/metrics`, `/diagnostics`, and OpenAPI 3.1 with Swagger UI at `/docs`. |
 | Any PostgreSQL | Set `database_url` in `querycraft.json` to use a container or a managed server. |
+| Theming engine | 18 presets (light, dark, warm, cool, high-contrast, terminal, plus One Dark, Dracula, Tokyo Night, Nord, Monokai, Rosé Pine, Solarized Light and GitHub Dimmed) over one token set. Every preset clears 4.5:1 on its key text pairs — `make audit-themes` gates them. |
+| User-defined themes | Name, accent, base family: the full token set derives with the same contrast math. Themes sync to the account (`GET/PUT /preferences`) and follow the learner across devices. |
+| Runtime AI configuration | The manage surface saves the provider while the gateway runs: fake, any OpenAI-compatible server, or pi's unified multi-provider API (Anthropic, OpenAI, Gemini and 35 more via the embedded catalog). Hot-swapped, persisted across restarts. |
 
 Code: `Makefile`, `backend/internal/localdb/`, `web/src/api/index.ts`.
 
