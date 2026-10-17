@@ -247,7 +247,8 @@ verify-mock: build test ## Smoke-test the binary with no embedded database (degr
 	echo "verify-mock: OK (no database, honest degradation, auth still enforced)"
 
 db-reset: ## Delete the dev and smoke PostgreSQL clusters (fresh dataset next boot).
-	@if [ -x $(BIN) ]; then $(BIN) db reset; else rm -rf $(BACKEND_DIR)/.data/pg/data; fi
+	@if [ -x $(BIN) ]; then $(BIN) db reset; fi
+	rm -rf $(BACKEND_DIR)/.data/pg/data
 	rm -rf $(SMOKE_PG_DIR)
 	@echo "db-reset: clusters removed; the next boot re-applies the commerce dataset"
 

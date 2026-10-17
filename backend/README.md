@@ -239,6 +239,10 @@ unset and `no_local_db` is false, it
 
 1. downloads the prebuilt PostgreSQL binaries once into `.data/pg/binaries`;
 2. `initdb`s a cluster at `.data/pg/data` and starts it on `pg_port`;
+
+   Both paths are relative to the working directory the gateway starts from:
+   `make serve` runs from the repository root, `go run ./cmd/api` from
+   `backend/`. `querycraft db status` prints the resolved paths;
 3. applies `internal/dataset/schema.sql` + `seed.sql` if the dataset is absent.
 
 Everything above that package speaks the ordinary PostgreSQL wire protocol, so

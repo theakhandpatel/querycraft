@@ -2173,8 +2173,26 @@ PromptDialog pass: the capture-phase focus trap is the accepted answer, the
 finding is deliberate.
 
 Open items:
-- The README gallery and walkthrough still show the old shell; re-recording
-  needs a connected browser (the session's browser tools report no desktop
-  browser attached). Captured none of the new shell yet.
+- The walkthrough video, its poster, and the highlight GIF still show the old
+  shell; the gallery does not. Re-recording needs the scripted browser flow the
+  first recording used.
 - Focus is not moved to the chapter heading after a drawer-initiated chapter
   change; the drawer's close path restores focus to the opener instead.
+
+## UI pass: README gallery re-shot on the new shell, 2026-10-17
+
+All fifteen gallery screens in `docs/assets/screens/` were captured against the
+built binary in gateway mode (`gateway · live` in the bar, the same provenance
+the first gallery had), signed in as the seeded administrator, at the preview
+capture's 1280×720. The graded-exercise shot (06) was produced by running the
+chapter's authored solution through the real Run and Check answer controls; the
+tables drawer (09) and the SQLite chapter (07) are the real screens, not
+mockups.
+
+Shooting them surfaced a real footgun, now documented: the local cluster's
+default paths (`.data/pg/...`) resolve against the working directory the
+gateway starts from, so `make serve` (repository root) and `go run ./cmd/api`
+(`backend/`) use different clusters, and progress made under one is invisible
+to the other. `backend/README.md` and the README's "Try it" now say this, and
+`querycraft db status` prints the resolved paths. `make db-reset` now removes
+both locations instead of one.

@@ -69,8 +69,11 @@ make serve        # app and API on http://localhost:8080
 ```
 
 The first start downloads PostgreSQL once, creates its cluster, and loads the
-commerce dataset. This takes about 10 seconds. Later starts are immediate.
-`make verify` runs this cold start on every run and checks the responses.
+commerce dataset. This takes about 10 seconds. Later starts are immediate. The
+cluster lives under `.data/pg/` relative to where you started the gateway
+(the repository root for `make serve`); `querycraft db status` prints the
+resolved paths. `make verify` runs this cold start on every run and checks the
+responses.
 
 A new install seeds an administrator at `admin@querycraft.local` with an empty
 password, so the first sign-in needs no setup. That empty password works only
