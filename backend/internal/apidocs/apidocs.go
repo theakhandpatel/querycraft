@@ -498,6 +498,29 @@ const Spec = `{
         }
       }
     },
+    "/admin/ai/models": {
+      "get": {
+        "operationId": "adminAIModels",
+        "security": [{"bearerAuth": []}],
+        "tags": ["generation"],
+        "summary": "The embedded model catalog (administrators).",
+        "description": "Every chat model the pi catalog knows, as provider + model id + display name — the list the manage surface's provider picker offers. From the same generated catalog the pi-ai provider resolves model refs against, sourced from models.dev. A signed-in learner is refused with 403 ADMIN_REQUIRED.",
+        "responses": {
+          "200": {
+            "description": "The catalog, chat models only.",
+            "content": {"application/json": {"schema": {"$ref": "#/components/schemas/AdminAIModelList"}}}
+          },
+          "401": {
+            "description": "No session.",
+            "content": {"application/json": {"schema": {"$ref": "#/components/schemas/ErrorEnvelope"}}}
+          },
+          "403": {
+            "description": "Signed in without the administrator role (ADMIN_REQUIRED).",
+            "content": {"application/json": {"schema": {"$ref": "#/components/schemas/ErrorEnvelope"}}}
+          }
+        }
+      }
+    },
     "/courses/{id}": {
       "get": {
         "operationId": "getCourse",
@@ -1634,6 +1657,25 @@ const Spec = `{
           "key_set": {"type": "boolean", "description": "Whether an API key is stored. The key itself never travels back in a body."},
           "timeout_ms": {"type": "integer"},
           "source": {"type": "string", "enum": ["database", "boot"]}
+        }
+      },
+      "AdminAIModelList": {
+        "type": "object",
+        "required": ["ok", "models"],
+        "properties": {
+          "ok": {"type": "boolean"},
+          "models": {
+            "type": "array",
+            "items": {
+              "type": "object",
+              "required": ["provider", "model", "name"],
+              "properties": {
+                "provider": {"type": "string"},
+                "model": {"type": "string"},
+                "name": {"type": "string"}
+              }
+            }
+          }
         }
       },
       "AdminAIUpdate": {

@@ -94,6 +94,29 @@ func New(cfg Config) (*PIAI, error) {
 	return p, nil
 }
 
+// CatalogEntry is one chat model in the embedded catalog.
+type CatalogEntry struct {
+	Provider string
+	Model    string
+	Name     string
+}
+
+// Catalog lists every chat model pi's embedded catalog knows — the same list
+// the provider resolver matches Model refs against, sourced from models.dev.
+// The manage surface offers it as the provider picker.
+func Catalog() []CatalogEntry {
+	out := make([]CatalogEntry, 0, 1024)
+	for _, prov := range ai.GetProviders() {
+		for _, m := range ai.GetModels(prov) {
+			if mt := string(m.Type); mt != "" && mt != "chat" {
+				continue
+			}
+			out = append(out, CatalogEntry{Provider: prov, Model: m.ID, Name: m.Name})
+		}
+	}
+	return out
+}
+
 // Descriptor implements provider.Provider.
 func (p *PIAI) Descriptor() provider.ProviderDescriptor {
 	name := "pi-ai"

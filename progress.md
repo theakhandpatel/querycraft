@@ -2350,3 +2350,19 @@ redaction, the key handling, and the deterministic fake provider for CI.
 Verified: go build/vet/test green under Go 1.26.9 (adapter tests + the full
 suite), `make test` exit 0 (1187 checks), `make verify` exit 0, and a live
 tutor completion through deepseek-v4.1-flash via the pi-ai provider.
+
+## Provider selection made easy, 2026-10-17
+
+The manage surface's AI panel carried the pi-ai kind, but its model field was
+free text — and driving it as the admin caught a real bug before it bit: the
+response parser coerced any provider it did not recognize to 'off', so a
+stored pi-ai configuration rendered as off, and one Save away from writing
+off. The parser now knows pi-ai, and the round-trip is verified: a stored
+pi-ai configuration renders as pi-ai with the model and base URL prefilled and
+the key write-only.
+
+Selection itself is now catalog-backed: GET /admin/ai/models serves the
+embedded pi catalog — 1,529 chat models across 41 providers, the same list the
+provider resolver matches model refs against, sourced from models.dev — and
+the model field offers it as a datalist picker when pi-ai is selected. A
+customer who wants any provider, any model types two characters and picks.

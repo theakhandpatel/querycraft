@@ -3,7 +3,7 @@ import Icon from '../ui/Icon';
 import { useStore } from '../../state/store';
 import { COURSES } from '../../data/curriculum';
 import type { DiagnosticsReport } from '../../types';
-import type { AdminAIConfig, AiCourseRecord } from '../../api/aiContract';
+import type { AdminAIConfig, AdminAIModelEntry, AiCourseRecord } from '../../api/aiContract';
 
 /*
  * The manage surface: the administrator's inventory and the gateway's own
@@ -52,6 +52,7 @@ export default function ManageScreen() {
   });
   const [aiError, setAiError] = useState<string | null>(null);
   const [aiBusy, setAiBusy] = useState(false);
+  const [catalog, setCatalog] = useState<AdminAIModelEntry[] | null>(null);
 
   const applyAi = useCallback((cfg: AdminAIConfig) => {
     setAi(cfg);
@@ -75,6 +76,9 @@ export default function ManageScreen() {
     void s.api.adminAI()
       .then((cfg) => { if (alive) { setAiError(null); applyAi(cfg); } })
       .catch((e) => { if (alive) setAiError(e instanceof Error ? e.message : 'The AI configuration could not be read.'); });
+    void s.api.adminAIModels()
+      .then((list) => { if (alive) setCatalog(list.length > 0 ? list : null); })
+      .catch(() => { if (alive) setCatalog(null); });
     return () => { alive = false; };
   }, [onGateway, isAdmin, s.api, applyAi]);
 
@@ -239,7 +243,16 @@ export default function ManageScreen() {
                     </div>
                     <div className="airow">
                       <label htmlFor="ai-model">Model</label>
-                      <input id="ai-model" value={aiForm.model} onChange={(e) => setAiForm({ ...aiForm, model: e.target.value })} placeholder={mode === 'pi-ai' ? 'provider/model, e.g. anthropic/claude-sonnet-4-5' : 'inhouse-4'} />
+                      <input id="ai-model" value={aiForm.model} onChange={(e) => setAiForm({ ...aiForm, model: e.target.value })} list={mode === 'pi-ai' && catalog ? 'ai-model-catalog' : undefined} placeholder={mode === 'pi-ai' ? 'provider/model, e.g. anthropic/claude-sonnet-4-5' : 'inhouse-4'} />
+                      {mode === 'pi-ai' && catalog && (
+                        <datalist id="ai-model-catalog">
+                          {catalog.map((c) => (
+                            <option key={`${c.provider}/${c.model}`} value={`${c.provider}/${c.model}`}>
+                              {c.name}
+                            </option>
+                          ))}
+                        </datalist>
+                      )}
                     </div>
                     <div className="airow">
                       <label htmlFor="ai-key">API key</label>

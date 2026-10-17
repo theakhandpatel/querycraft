@@ -98,6 +98,25 @@ func (s *Server) aiConfigView(ctx context.Context) aiConfigView {
 	return view
 }
 
+// handleAdminAIModels implements GET /admin/ai/models: the embedded model
+// catalog as a flat list, so the manage surface can offer every provider and
+// model the customer could name. Chat models only.
+func (s *Server) handleAdminAIModels(w http.ResponseWriter, r *http.Request) {
+	if _, ok := s.requireAdmin(w, r); !ok {
+		return
+	}
+	type entry struct {
+		Provider string `json:"provider"`
+		Model    string `json:"model"`
+		Name     string `json:"name"`
+	}
+	out := make([]entry, 0, 1024)
+	for _, c := range piai.Catalog() {
+		out = append(out, entry{Provider: c.Provider, Model: c.Model, Name: c.Name})
+	}
+	writeJSON(w, http.StatusOK, map[string]any{"ok": true, "models": out})
+}
+
 // handleAdminAISave implements PUT /admin/ai: validate, persist, and swap the
 // running configuration. An invalid request changes nothing.
 func (s *Server) handleAdminAISave(w http.ResponseWriter, r *http.Request) {

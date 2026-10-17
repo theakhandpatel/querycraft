@@ -403,6 +403,13 @@ export interface AdminAIUpdate {
   timeout_ms?: number;
 }
 
+/** One chat model in the gateway's embedded catalog (sourced from models.dev). */
+export interface AdminAIModelEntry {
+  provider: string;
+  model: string;
+  name: string;
+}
+
 export interface AiCourseRecord {
   plan: AiCoursePlan;
   outcome: AiOutcome;

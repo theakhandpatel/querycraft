@@ -84,6 +84,7 @@ func (s *Server) routes() []route {
 		{http.MethodGet, "/courses", s.handleListCourses, authRequired},
 		{http.MethodGet, "/admin/courses", s.handleAdminCourses, authRequired},
 		{http.MethodGet, "/admin/ai", s.handleAdminAI, authRequired},
+		{http.MethodGet, "/admin/ai/models", s.handleAdminAIModels, authRequired},
 		{http.MethodPut, "/admin/ai", s.handleAdminAISave, authRequired},
 		{http.MethodGet, "/courses/{id}", s.handleGetCourse, authRequired},
 		{http.MethodPost, "/courses/{id}/build", s.handleBuildCourse, authRequired},

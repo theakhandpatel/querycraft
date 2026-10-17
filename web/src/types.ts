@@ -7,6 +7,7 @@ import type {
   AiAvailability,
   AiCourseBuildAnswer,
   AdminAIConfig,
+  AdminAIModelEntry,
   AdminAIUpdate,
   AiCourseRecord,
   AiCritiqueResponse,
@@ -594,6 +595,9 @@ export interface ExecutionApi {
   /** Admin. The live AI configuration; the key is a boolean, never a value.
       The offline adapters refuse, so call it only in gateway mode. */
   adminAI(): Promise<AdminAIConfig>;
+  /** Admin. Every chat model in the gateway's embedded catalog — the picker
+      behind the pi-ai provider's model field. Offline adapters answer empty. */
+  adminAIModels(): Promise<AdminAIModelEntry[]>;
   /** Admin. Save and apply an AI configuration while the gateway runs; it
       survives a restart because the boot path applies the stored setting. */
   saveAdminAI(update: AdminAIUpdate): Promise<AdminAIConfig>;

@@ -2,6 +2,7 @@ import { Effect } from 'effect';
 import { GatewayError, asGatewayError } from './errors';
 import type {
   AdminAIConfig,
+  AdminAIModelEntry,
   AdminAIUpdate,
   AiArtifact,
   AiAttempt,
@@ -81,6 +82,8 @@ export interface AiServiceShape {
   /* Save and apply one: persists under the store's 'ai' key and swaps the
      running configuration. */
   saveAdminAI(update: AdminAIUpdate): Effect.Effect<AdminAIConfig, GatewayError>;
+  /* The embedded catalog, for the manage surface's model picker. */
+  adminAIModels(): Effect.Effect<AdminAIModelEntry[], GatewayError>;
   getCourse(id: string): Effect.Effect<AiCourseRecord | null, GatewayError>;
   deleteCourse(id: string): Effect.Effect<{ ok: boolean }, GatewayError>;
   /* Approve a course that stopped awaiting the outline's approval: continue the
@@ -133,6 +136,7 @@ export function browserAiMethods(reason: string = AI_UNAVAILABLE_REASON): AiServ
     adminCourses: () => Effect.fail(unavailable),
     adminAI: () => Effect.fail(unavailable),
     saveAdminAI: () => Effect.fail(unavailable),
+    adminAIModels: () => Effect.fail(unavailable),
     resetChallenge: () => Effect.fail(unavailable),
     /* There is no background run to submit to without a gateway, and no job
        store to poll: a fabricated handle would send the screen chasing a run
@@ -212,7 +216,7 @@ function asAdminAIConfig(body: unknown): AdminAIConfig {
   const provider = raw.provider;
   return {
     ok: raw.ok === true,
-    provider: provider === 'fake' || provider === 'openai-compatible' ? provider : 'off',
+    provider: provider === 'fake' || provider === 'openai-compatible' || provider === 'pi-ai' ? provider : 'off',
     base_url: typeof raw.base_url === 'string' ? raw.base_url : undefined,
     model: typeof raw.model === 'string' ? raw.model : undefined,
     key_set: raw.key_set === true,
@@ -885,6 +889,17 @@ export function gatewayAiMethods(opts: AiGatewayOptions): AiServiceShape {
     saveAdminAI: (update) =>
       requireOk('PUT', '/admin/ai', update, 'admin AI save').pipe(
         Effect.map((body) => asAdminAIConfig(body)),
+      ),
+    adminAIModels: () =>
+      requireOk('GET', '/admin/ai/models', undefined, 'admin model catalog').pipe(
+        Effect.map((body) => {
+          const raw = isRecord(body) ? body.models : null;
+          if (!Array.isArray(raw)) return [];
+          return raw.flatMap((e) => {
+            if (!isRecord(e) || typeof e.provider !== 'string' || typeof e.model !== 'string') return [];
+            return [{ provider: e.provider, model: e.model, name: typeof e.name === 'string' ? e.name : '' }];
+          });
+        }),
       ),
     getCourse: (id) =>
       requireOk('GET', `/courses/${encodeURIComponent(id)}`, undefined, 'course').pipe(
