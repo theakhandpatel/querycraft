@@ -269,6 +269,12 @@ const (
 
 	setPasswordHashSQL = `UPDATE %s SET password_hash = ? WHERE id = ?`
 
+	saveSettingSQL = `INSERT INTO %s (key, value, updated_at)
+		 VALUES (?, ?, ?)
+		 ON CONFLICT (key) DO UPDATE SET value = excluded.value, updated_at = excluded.updated_at`
+
+	settingSQL = `SELECT value FROM %s WHERE key = ?`
+
 	createSessionSQL = `INSERT INTO %s (token, user_id, created_at, expires_at)
 		 VALUES (?, ?, ?, ?)`
 
@@ -309,6 +315,38 @@ func (s *sqlStore) LoadProgress(ctx context.Context, userID, course string) (jso
 		return nil, false, err
 	}
 	return json.RawMessage(raw), true, nil
+}
+
+// SaveEvent implements Store.
+
+/* ---------- settings ---------- */
+
+// SaveSetting implements Store. The value is the feature's own JSON text,
+// stored as jsonb on PostgreSQL and text on SQLite; updated_at moves on every
+// write, so an operator can see when a setting last changed.
+func (s *sqlStore) SaveSetting(ctx context.Context, key, value string) error {
+	if key == "" {
+		return errors.New("setting key is required")
+	}
+	raw, err := s.dialect.encodeJSON(json.RawMessage(value))
+	if err != nil {
+		return err
+	}
+	return s.exec(ctx, s.stmt(saveSettingSQL, "settings"), key, raw, s.dialect.stamp(time.Now()))
+}
+
+// Setting implements Store. found is false when the key has never been saved;
+// an empty value is data, not absence.
+func (s *sqlStore) Setting(ctx context.Context, key string) (string, bool, error) {
+	var raw []byte
+	err := s.queryRow(ctx, s.stmt(settingSQL, "settings"), key).Scan(&raw)
+	if s.dialect.noRows(err) {
+		return "", false, nil
+	}
+	if err != nil {
+		return "", false, err
+	}
+	return string(raw), true, nil
 }
 
 // SaveEvent implements Store.

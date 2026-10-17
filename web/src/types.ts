@@ -6,6 +6,8 @@ import type { ExplainRequest, PerfContract, PlanBundle } from './api/planContrac
 import type {
   AiAvailability,
   AiCourseBuildAnswer,
+  AdminAIConfig,
+  AdminAIUpdate,
   AiCourseRecord,
   AiCritiqueResponse,
   AiDefectReport,
@@ -589,6 +591,12 @@ export interface ExecutionApi {
       The gateway refuses a learner with 403 ADMIN_REQUIRED; the offline
       adapters refuse with AI_UNAVAILABLE, so call it only in gateway mode. */
   adminCourses(): Promise<AiCourseRecord[]>;
+  /** Admin. The live AI configuration; the key is a boolean, never a value.
+      The offline adapters refuse, so call it only in gateway mode. */
+  adminAI(): Promise<AdminAIConfig>;
+  /** Admin. Save and apply an AI configuration while the gateway runs; it
+      survives a restart because the boot path applies the stored setting. */
+  saveAdminAI(update: AdminAIUpdate): Promise<AdminAIConfig>;
   /** Admin health: the gateway's measured readiness report, or null when
       there is no gateway to ask (the offline adapters answer null, never a
       fabricated report). */

@@ -29,13 +29,45 @@ import (
 // UseAI attaches the generation configuration. It must be called before
 // Handler() serves requests.
 func (s *Server) UseAI(cfg ai.Config) {
-	s.aiCfg = &cfg
+	s.setAIConfig(cfg)
 	// The registry is built from the same configuration, so the number of
 	// generations a gateway will run at once is the capacity it advertises
 	// rather than a second, private guess. Its services are built per owner on
 	// demand, for the same reason a request builds one: the owner of a job
 	// comes from the session and never from the body.
 	s.jobs = jobs.NewJobs(s.aiServiceFor, cfg.Limits)
+}
+
+// setAIConfig installs one AI configuration. It is the writer behind
+// SetAIConfig and UseAI.
+func (s *Server) setAIConfig(cfg ai.Config) {
+	s.aiMu.Lock()
+	defer s.aiMu.Unlock()
+	s.aiCfg = &cfg
+}
+
+// SetAIConfig swaps the generation configuration while the gateway runs: the
+// boot path applies the administrator's persisted AI setting over the config
+// file's provider, and PUT /admin/ai applies what the manage surface sends.
+// Requests and jobs submitted after the swap build their services from the new
+// configuration; a job already running keeps the provider it started with,
+// which is the honest semantics — a run half-completed by one provider is not
+// handed to another.
+func (s *Server) SetAIConfig(cfg ai.Config) {
+	s.setAIConfig(cfg)
+}
+
+// currentAI returns the live configuration and whether one was attached.
+func (s *Server) currentAI() (ai.Config, bool) {
+	if s == nil {
+		return ai.Config{}, false
+	}
+	s.aiMu.RLock()
+	defer s.aiMu.RUnlock()
+	if s.aiCfg == nil {
+		return ai.Config{}, false
+	}
+	return *s.aiCfg, true
 }
 
 // DrainJobs waits for running generation jobs to finish, or for the context to
@@ -50,7 +82,10 @@ func (s *Server) DrainJobs(ctx context.Context) error {
 }
 
 // aiConfigured reports whether a generation service was attached at all.
-func (s *Server) aiConfigured() bool { return s != nil && s.aiCfg != nil }
+func (s *Server) aiConfigured() bool {
+	_, ok := s.currentAI()
+	return ok
+}
 
 // aiAvailability is what /capabilities advertises. It never fails: a missing
 // service is a capability answer, not an error.
@@ -65,7 +100,13 @@ func (s *Server) aiAvailability() ai.Availability {
 		av.Reason = "AI is off: no generation service is configured."
 		return av
 	}
-	return ai.NewService(*s.aiCfg).Available()
+	cfg, ok := s.currentAI()
+	if !ok {
+		av := ai.NewService(ai.Config{}).Available()
+		av.Reason = "AI is off: no generation service is configured."
+		return av
+	}
+	return ai.NewService(cfg).Available()
 }
 
 // aiServiceFor returns a service whose Depot is scoped to the caller. It
@@ -74,7 +115,7 @@ func (s *Server) aiServiceFor(ownerID string) *ai.Service {
 	if !s.aiConfigured() {
 		return nil
 	}
-	cfg := *s.aiCfg
+	cfg, _ := s.currentAI()
 	if cfg.Depot != nil {
 		cfg.Depot = ownerScopedDepot{Depot: cfg.Depot, owner: ownerID}
 	}
@@ -169,7 +210,8 @@ func (s *Server) runGeneration(w http.ResponseWriter, r *http.Request, kind stri
 	// The pipeline owns its own deadline; the transport gives it headroom so a
 	// pipeline that stops on time reports its own timeout rather than being
 	// cut off by the request context.
-	timeout := s.aiCfg.Limits.Merge(ai.DefaultLimits()).Timeout + 5*time.Second
+	cfg, _ := s.currentAI()
+	timeout := cfg.Limits.Merge(ai.DefaultLimits()).Timeout + 5*time.Second
 	ctx, cancel := context.WithTimeout(r.Context(), timeout)
 	defer cancel()
 	release, admitted := s.enter(ctx)
@@ -375,10 +417,11 @@ func (s *Server) handleResetChallenge(w http.ResponseWriter, r *http.Request) {
 // wrapper, because the wrapper scopes writes only: ownership is enforced here,
 // in the handlers that a request reaches with an id of its own choosing.
 func (s *Server) aiCourseDepot() schema.Depot {
-	if !s.aiConfigured() || s.aiCfg.Depot == nil {
+	cfg, ok := s.currentAI()
+	if !ok || cfg.Depot == nil {
 		return nil
 	}
-	return s.aiCfg.Depot
+	return cfg.Depot
 }
 
 // courseView is a stored course as a client sees it. The owner is the session's
@@ -560,7 +603,8 @@ func (s *Server) handleBuildCourse(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	timeout := s.aiCfg.Limits.Merge(ai.DefaultLimits()).Timeout + 5*time.Second
+	cfg, _ := s.currentAI()
+	timeout := cfg.Limits.Merge(ai.DefaultLimits()).Timeout + 5*time.Second
 	ctx, cancel := context.WithTimeout(r.Context(), timeout)
 	defer cancel()
 	release, admitted := s.enter(ctx)

@@ -3,7 +3,7 @@ import Icon from '../ui/Icon';
 import { useStore } from '../../state/store';
 import { COURSES } from '../../data/curriculum';
 import type { DiagnosticsReport } from '../../types';
-import type { AiCourseRecord } from '../../api/aiContract';
+import type { AdminAIConfig, AiCourseRecord } from '../../api/aiContract';
 
 /*
  * The manage surface: the administrator's inventory and the gateway's own
@@ -42,6 +42,28 @@ export default function ManageScreen() {
   const [loadError, setLoadError] = useState<string | null>(null);
   const [busyId, setBusyId] = useState<string | null>(null);
 
+  const [ai, setAi] = useState<AdminAIConfig | null>(null);
+  const [aiForm, setAiForm] = useState<{ provider: 'off' | 'fake' | 'openai-compatible'; base_url: string; model: string; key: string; timeout_ms: string }>({
+    provider: 'fake',
+    base_url: '',
+    model: '',
+    key: '',
+    timeout_ms: '',
+  });
+  const [aiError, setAiError] = useState<string | null>(null);
+  const [aiBusy, setAiBusy] = useState(false);
+
+  const applyAi = useCallback((cfg: AdminAIConfig) => {
+    setAi(cfg);
+    setAiForm({
+      provider: cfg.provider,
+      base_url: cfg.base_url ?? '',
+      model: cfg.model ?? '',
+      key: '',
+      timeout_ms: cfg.timeout_ms ? String(cfg.timeout_ms) : '',
+    });
+  }, []);
+
   const load = useCallback(() => {
     if (!onGateway || !isAdmin) return;
     let alive = true;
@@ -50,8 +72,11 @@ export default function ManageScreen() {
     void s.api.adminCourses()
       .then((list) => { if (alive) { setRecords(list); setLoadError(null); } })
       .catch((e) => { if (alive) setLoadError(e instanceof Error ? e.message : 'The inventory could not be read.'); });
+    void s.api.adminAI()
+      .then((cfg) => { if (alive) { setAiError(null); applyAi(cfg); } })
+      .catch((e) => { if (alive) setAiError(e instanceof Error ? e.message : 'The AI configuration could not be read.'); });
     return () => { alive = false; };
-  }, [onGateway, isAdmin, s.api]);
+  }, [onGateway, isAdmin, s.api, applyAi]);
 
   useEffect(() => load(), [load]);
 
@@ -98,6 +123,33 @@ export default function ManageScreen() {
       s.toast(e instanceof Error && e.message ? e.message : 'The course could not be removed.');
     } finally {
       setBusyId(null);
+    }
+  }
+
+  async function saveAI() {
+    setAiBusy(true);
+    setAiError(null);
+    const timeout = aiForm.timeout_ms.trim() === '' ? undefined : Number(aiForm.timeout_ms);
+    if (timeout !== undefined && (!Number.isFinite(timeout) || timeout < 0)) {
+      setAiError('timeout_ms must be empty (for the shipped default) or a non-negative number.');
+      setAiBusy(false);
+      return;
+    }
+    try {
+      const cfg = await s.api.saveAdminAI({
+        provider: aiForm.provider,
+        base_url: aiForm.provider === 'openai-compatible' ? aiForm.base_url.trim() : undefined,
+        model: aiForm.provider === 'openai-compatible' ? aiForm.model.trim() : undefined,
+        key: aiForm.key.trim() === '' ? undefined : aiForm.key.trim(),
+        timeout_ms: timeout,
+      });
+      applyAi(cfg);
+      s.toast('AI configuration saved and applied.');
+      load();
+    } catch (e) {
+      setAiError(e instanceof Error && e.message ? e.message : 'The AI configuration could not be saved.');
+    } finally {
+      setAiBusy(false);
     }
   }
 
@@ -152,6 +204,68 @@ export default function ManageScreen() {
                 <div className="healthrow"><dt>Dataset</dt><dd>{diagnostics.dataset.schema} v{diagnostics.dataset.version}</dd></div>
                 <div className="healthrow"><dt>Progress model</dt><dd>v{diagnostics.progress.version}</dd></div>
               </dl>
+            )}
+          </section>
+
+          <section className="card pad" aria-label="AI provider">
+            <h2>AI provider</h2>
+            {ai === null && !aiError && <p className="muted">Reading the configuration…</p>}
+            {aiError && <p className="authhint">{aiError}</p>}
+            {ai !== null && (
+              <form
+                className="aiform"
+                onSubmit={(e) => { e.preventDefault(); void saveAI(); }}
+              >
+                <p className="muted">
+                  Live configuration, source: <strong>{ai.source === 'database' ? 'saved here' : 'the config file'}</strong>.
+                  The key never travels back in a body; leave the field empty to keep the stored one.
+                </p>
+                <div className="airow">
+                  <label htmlFor="ai-provider">Provider</label>
+                  <select id="ai-provider" value={aiForm.provider} onChange={(e) => setAiForm({ ...aiForm, provider: e.target.value as typeof aiForm.provider })}>
+                    <option value="fake">fake — deterministic, no network</option>
+                    <option value="openai-compatible">openai-compatible</option>
+                    <option value="off">off</option>
+                  </select>
+                </div>
+                {aiForm.provider === 'openai-compatible' && (
+                  <>
+                    <div className="airow">
+                      <label htmlFor="ai-base">Base URL</label>
+                      <input id="ai-base" value={aiForm.base_url} onChange={(e) => setAiForm({ ...aiForm, base_url: e.target.value })} placeholder="https://llm.internal.example/v1" />
+                    </div>
+                    <div className="airow">
+                      <label htmlFor="ai-model">Model</label>
+                      <input id="ai-model" value={aiForm.model} onChange={(e) => setAiForm({ ...aiForm, model: e.target.value })} placeholder="inhouse-4" />
+                    </div>
+                    <div className="airow">
+                      <label htmlFor="ai-key">API key</label>
+                      <input id="ai-key" type="password" value={aiForm.key} onChange={(e) => setAiForm({ ...aiForm, key: e.target.value })} placeholder={ai.key_set ? 'Stored — leave empty to keep it' : 'Not set'} />
+                    </div>
+                  </>
+                )}
+                <div className="airow">
+                  <label htmlFor="ai-timeout">Call timeout (ms)</label>
+                  <input id="ai-timeout" inputMode="numeric" value={aiForm.timeout_ms} onChange={(e) => setAiForm({ ...aiForm, timeout_ms: e.target.value })} placeholder={String(ai.timeout_ms || 120000)} />
+                </div>
+                <div className="airow">
+                  <label htmlFor="ai-current">Current</label>
+                  <span id="ai-current" className="muted">
+                    {ai.provider === 'off' ? 'off' : `${ai.provider}${ai.model ? ` · ${ai.model}` : ''}${ai.source === 'database' ? ' · saved here' : ' · from the config file'}`}
+                  </span>
+                </div>
+                <div className="airow">
+                  <label aria-hidden="true" />
+                  <button className="primary" type="submit" disabled={aiBusy}>
+                    {aiBusy ? 'Applying…' : 'Save and apply'}
+                  </button>
+                </div>
+                <p className="muted">
+                  Saving applies to requests and jobs submitted afterwards; a run
+                  already in flight keeps the provider it started with. The
+                  setting survives a restart because the boot path applies it.
+                </p>
+              </form>
             )}
           </section>
 

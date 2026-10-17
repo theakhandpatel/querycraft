@@ -156,6 +156,8 @@ export function createExecutionApi(opts: {
     resetChallenge: (id) => call((svc) => svc.resetChallenge(id)),
     listCourses: () => call((svc) => svc.listCourses()),
     adminCourses: () => call((svc) => svc.adminCourses()),
+    adminAI: () => call((svc) => svc.adminAI()),
+    saveAdminAI: (update) => call((svc) => svc.saveAdminAI(update)),
     diagnostics: () => call((svc) => svc.diagnostics()),
     getCourse: (id) => call((svc) => svc.getCourse(id)),
     deleteCourse: (id) => call((svc) => svc.deleteCourse(id)),

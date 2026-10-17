@@ -382,6 +382,27 @@ export interface AiRecord {
  * read to the session, so this is only ever the caller's own id; it travels as
  * `undefined` when the route withheld it.
  */
+/** The live AI configuration an administrator reads. The key itself never
+    travels back: key_set is the only credential fact in a body. */
+export interface AdminAIConfig {
+  ok: boolean;
+  provider: 'off' | 'fake' | 'openai-compatible';
+  base_url?: string;
+  model?: string;
+  key_set: boolean;
+  timeout_ms: number;
+  source: 'database' | 'boot';
+}
+
+/** The write shape. An empty key keeps the stored one. */
+export interface AdminAIUpdate {
+  provider: 'off' | 'fake' | 'openai-compatible';
+  base_url?: string;
+  model?: string;
+  key?: string;
+  timeout_ms?: number;
+}
+
 export interface AiCourseRecord {
   plan: AiCoursePlan;
   outcome: AiOutcome;

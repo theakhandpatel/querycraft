@@ -2230,3 +2230,39 @@ Verified on this tree: go build/vet/test all green (including the two
 migration tests), `make test` exit 0 (1187 checks), `make verify` exit 0,
 typecheck/lint/build clean, and the screen driven against the built binary
 with real stored records.
+
+## Runtime AI provider configuration (admin), 2026-10-17
+
+The provider was boot-only: querycraft.json named it, and changing it meant a
+restart. The manage surface now owns it at runtime.
+
+- `GET /admin/ai` reports the effective configuration (provider, model,
+  base_url, key_set, timeout_ms) and its source: `database` when an
+  administrator saved one here, `boot` while the config file's provider is
+  live. `PUT /admin/ai` validates, persists under the store's `ai` key, and
+  swaps the running configuration. The key is write-only: it is stored, it is
+  never logged and never returned, so every read answers `key_set` and an
+  empty save keeps the stored key.
+- The swap is a mutex-guarded `ai.Config` holder on the Server
+  (`currentAI`/`SetAIConfig`), and every reader — the availability probe, the
+  per-request service, the per-job service — goes through it. Requests and
+  jobs submitted after the save use the new provider; a run already in flight
+  keeps the provider it started with. The run budget follows the boot
+  derivation from the saved call timeout (never shorter than one call).
+- The boot path applies the persisted setting over the config file's provider
+  (`AIConfigFromSetting`), so a save survives a restart; an unreadable row
+  keeps the file's provider and says why in the boot log. The config file
+  stays the boot document; the store is the runtime one.
+- Manage screen: an AI provider panel — provider select (fake /
+  openai-compatible / off), base URL, model, write-only key, call timeout —
+  with the live source and current values shown, and the offline adapter
+  refusing honestly (the panel reads gateway mode only).
+- New `app.settings` key/value table (one row per key, value jsonb) across
+  PostgreSQL, SQLite and the memory store; a key/value shape on purpose, so
+  the next runtime setting is a row, not a schema change.
+
+Verified end to end on the built binary: saving openai-compatible persisted
+the row (key included in the store, never in a response), swapped the live
+configuration, and a gateway restart applied it from the persisted setting
+(boot log names the provider and model). `make test` exit 0 (1187 checks,
+including the three new handler tests), `make verify` exit 0.

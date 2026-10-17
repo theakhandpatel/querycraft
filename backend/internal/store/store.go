@@ -57,6 +57,13 @@ type Store interface {
 	UserByID(ctx context.Context, id string) (User, bool, error)
 	CountUsers(ctx context.Context) (int, error)
 	SetPasswordHash(ctx context.Context, userID, hash string) error
+	// Setting reads one runtime setting by key. found is false when the key
+	// has never been saved; value is the raw JSON text it was saved with.
+	Setting(ctx context.Context, key string) (value string, found bool, err error)
+
+	// SaveSetting writes one runtime setting, replacing any previous value.
+	SaveSetting(ctx context.Context, key, value string) error
+
 	// UserIDs lists every account id, which is what the environment reaper uses
 	// to decide which per-account databases the store still references. It is the
 	// honest input for "drop the ones not named here": an orphan is a database

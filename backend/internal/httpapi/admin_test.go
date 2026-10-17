@@ -31,7 +31,7 @@ func adminServer(t *testing.T) (*Server, string, string, string, string) {
 		t.Fatalf("seed admin: %v", err)
 	}
 	s := New(&fakeExecutor{}, st, Config{MaxRows: 100, TimeoutMS: 1000, MaxConcurrent: 2}, log)
-	s.UseAI(ai.Config{Depot: st})
+	s.UseAI(ai.Config{Provider: ai.NewFakeProvider(), Depot: st})
 
 	w := do(t, s, http.MethodPost, "/auth/login", `{"email":"admin@querycraft.local","password":""}`)
 	if w.Code != http.StatusOK {
@@ -97,5 +97,127 @@ func TestAdminCoursesListIsEmptyNotInventedWhenAIOff(t *testing.T) {
 	}
 	if !strings.Contains(w.Body.String(), `"courses":[]`) {
 		t.Fatalf("ai-off body = %s, want an empty courses array", w.Body.String())
+	}
+}
+
+/* ---------- the AI configuration surface ---------- */
+
+// TestAdminAIReportsTheBootProvider: with nothing saved, the manage surface
+// reads the boot configuration and says so.
+func TestAdminAIReportsTheBootProvider(t *testing.T) {
+	s, adminToken, _, _, _ := adminServer(t)
+	w := doAs(t, s, adminToken, http.MethodGet, "/admin/ai", "")
+	if w.Code != http.StatusOK {
+		t.Fatalf("status = %d body = %s", w.Code, w.Body.String())
+	}
+	var view struct {
+		OK       bool   `json:"ok"`
+		Provider string `json:"provider"`
+		KeySet   bool   `json:"key_set"`
+		Source   string `json:"source"`
+	}
+	mustDecode(t, w, &view)
+	if !view.OK || view.Provider != "fake" || view.Source != "boot" || view.KeySet {
+		t.Fatalf("view = %+v, want the fake boot provider with source boot", view)
+	}
+}
+
+// TestAdminAISaveValidatesAndMasksTheKey: a save persists, swaps the running
+// configuration, and the key never travels back in a body.
+func TestAdminAISaveValidatesAndMasksTheKey(t *testing.T) {
+	s, adminToken, learnerToken, _, _ := adminServer(t)
+
+	// A learner is refused.
+	if w := doAs(t, s, learnerToken, http.MethodPut, "/admin/ai", `{"provider":"fake"}`); w.Code != http.StatusForbidden {
+		t.Fatalf("learner put status = %d, want 403", w.Code)
+	}
+	if w := doAs(t, s, learnerToken, http.MethodGet, "/admin/ai", ""); w.Code != http.StatusForbidden {
+		t.Fatalf("learner get status = %d, want 403", w.Code)
+	}
+
+	// An unknown provider and an incomplete openai-compatible configuration
+	// are refused before anything is persisted or swapped.
+	if w := doAs(t, s, adminToken, http.MethodPut, "/admin/ai", `{"provider":"claude"}`); w.Code != http.StatusBadRequest {
+		t.Fatalf("unknown provider status = %d, want 400", w.Code)
+	}
+	if w := doAs(t, s, adminToken, http.MethodPut, "/admin/ai", `{"provider":"openai-compatible","base_url":"http://llm.test/v1"}`); w.Code != http.StatusBadRequest {
+		t.Fatalf("openai-compatible without model status = %d, want 400", w.Code)
+	}
+
+	// The valid save swaps the running configuration.
+	body := `{"provider":"openai-compatible","base_url":"http://llm.test/v1","model":"inhouse-4","key":"sk-secret","timeout_ms":90000}`
+	w := doAs(t, s, adminToken, http.MethodPut, "/admin/ai", body)
+	if w.Code != http.StatusOK {
+		t.Fatalf("put status = %d body = %s", w.Code, w.Body.String())
+	}
+	if strings.Contains(w.Body.String(), "sk-secret") {
+		t.Fatal("the API key travelled back in the response body")
+	}
+	var view struct {
+		OK        bool   `json:"ok"`
+		Provider  string `json:"provider"`
+		Model     string `json:"model"`
+		BaseURL   string `json:"base_url"`
+		KeySet    bool   `json:"key_set"`
+		TimeoutMS int    `json:"timeout_ms"`
+		Source    string `json:"source"`
+	}
+	mustDecode(t, w, &view)
+	if !view.OK || view.Provider != "openai-compatible" || view.Model != "inhouse-4" || view.BaseURL != "http://llm.test/v1" || !view.KeySet || view.TimeoutMS != 90000 || view.Source != "database" {
+		t.Fatalf("view = %+v, want the saved configuration from the database", view)
+	}
+
+	// The running configuration actually changed: the availability probe and
+	// the per-request service read through the holder, not the boot field.
+	cfg, ok := s.currentAI()
+	if !ok {
+		t.Fatal("no AI configuration after the swap")
+	}
+	if d := cfg.Provider.Descriptor(); d.Name != "openai-compatible" || d.Model != "inhouse-4" {
+		t.Fatalf("live provider descriptor = %+v, want the swapped provider", d)
+	}
+
+	// A follow-up save without a key keeps the stored one: the key is
+	// write-only, so a round-trip through the form cannot demand a retype.
+	w = doAs(t, s, adminToken, http.MethodPut, "/admin/ai", `{"provider":"openai-compatible","base_url":"http://llm.test/v1","model":"inhouse-4"}`)
+	if w.Code != http.StatusOK {
+		t.Fatalf("second put status = %d body = %s", w.Code, w.Body.String())
+	}
+	var kept struct {
+		KeySet bool `json:"key_set"`
+	}
+	mustDecode(t, w, &kept)
+	if !kept.KeySet {
+		t.Fatal("an empty key on save dropped the stored key")
+	}
+
+	// Switching the provider off is a supported configuration, and the live
+	// availability answer follows it.
+	if w := doAs(t, s, adminToken, http.MethodPut, "/admin/ai", `{"provider":"off"}`); w.Code != http.StatusOK {
+		t.Fatalf("off put status = %d", w.Code)
+	}
+	if av := s.aiAvailability(); av.Provider != "" || av.Available {
+		t.Fatalf("availability after off = %+v, want the lab off", av)
+	}
+}
+
+// TestAdminAISettingSurvivesBoot is the restart half of the contract: the
+// boot path applies the persisted setting over the config file's provider.
+func TestAdminAISettingSurvivesBoot(t *testing.T) {
+	raw := `{"provider":"openai-compatible","base_url":"http://llm.test/v1","model":"inhouse-4","key":"sk-secret","timeout_ms":90000}`
+	base := ai.Config{Provider: ai.NewFakeProvider()}
+	cfg, err := AIConfigFromSetting(raw, base, slog.New(slog.NewTextHandler(io.Discard, nil)))
+	if err != nil {
+		t.Fatalf("apply setting: %v", err)
+	}
+	if d := cfg.Provider.Descriptor(); d.Name != "openai-compatible" || d.Model != "inhouse-4" {
+		t.Fatalf("boot-applied provider = %+v, want the persisted one", d)
+	}
+	// A broken row keeps the config file's provider and reports why.
+	if _, err := AIConfigFromSetting(`{"provider":`, base, slog.New(slog.NewTextHandler(io.Discard, nil))); err == nil {
+		t.Fatal("a broken setting applied without error")
+	}
+	if cfg.Provider.Descriptor().Name != "openai-compatible" {
+		t.Fatal("a broken setting modified the base configuration")
 	}
 }

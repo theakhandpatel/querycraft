@@ -247,6 +247,18 @@ var appTables = []ddlTable{
 			{name: "runs_owner_started_key", columns: "owner_id, started_at DESC, id DESC"},
 		},
 	},
+	{
+		/* Runtime settings an administrator changes while the gateway runs
+		 * (the AI provider, today). One row per key; value is the JSON the
+		 * feature owns. A key/value shape on purpose: the next runtime setting
+		 * is a row, not a schema change. */
+		name: "settings",
+		columns: []ddlColumn{
+			{name: "key", kind: kindText, primary: true},
+			{name: "value", kind: kindJSON, notNull: true},
+			{name: "updated_at", kind: kindTimestamp, notNull: true, def: nowDefault},
+		},
+	},
 }
 
 // postgresDDL renders the tables as the PostgreSQL script the gateway applies

@@ -280,14 +280,36 @@ func run(settings config.Settings) int {
 	if envManager != nil {
 		runner = envManager
 	}
-	api.UseAI(ai.Config{
+	aiCfg := ai.Config{
 		Provider:       aiProviderFrom(settings, log),
 		Depot:          st,
 		Runner:         runner,
 		Logger:         log,
 		Limits:         aiLimitsFrom(settings),
 		DatasetVersion: dataset.DatasetVersion,
-	})
+	}
+	api.UseAI(aiCfg)
+
+	// A configuration the manage surface saved outranks the config file's
+	// provider: it is the runtime truth, and the restart applies it before the
+	// first request. An unreadable setting keeps the file's provider and says
+	// why in the boot log, so a bad row cannot silently turn AI off.
+	if raw, found, err := st.Setting(ctx, "ai"); err != nil {
+		log.Warn("could not read the persisted AI setting; the config file's provider stays live", "err", err)
+	} else if found {
+		cfg, err := httpapi.AIConfigFromSetting(raw, aiCfg, log)
+		if err != nil {
+			log.Warn("the persisted AI setting is not readable; the config file's provider stays live", "err", err)
+		} else {
+			api.SetAIConfig(cfg)
+			if cfg.Provider != nil {
+				d := cfg.Provider.Descriptor()
+				log.Info("AI configuration applied from the persisted setting", "provider", d.Name, "model", d.Model)
+			} else {
+				log.Info("AI configuration applied from the persisted setting", "provider", "off")
+			}
+		}
+	}
 
 	srv := &http.Server{
 		Addr:              addr,

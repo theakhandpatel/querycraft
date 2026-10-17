@@ -194,6 +194,14 @@ button.small .ico{width:14px;height:14px}
 .inventorymain .muted{font-family:var(--mono);font-size:10.5px}
 .inventoryactions{display:flex;gap:6px;flex:none}
 .linklike{border:0;background:transparent;color:var(--accent-ink);cursor:pointer;padding:0;font:inherit;text-decoration:underline;text-underline-offset:2px}
+
+/* AI provider form */
+.aiform{display:grid;gap:10px;margin-top:10px}
+.airow{display:grid;grid-template-columns:150px minmax(0,1fr);align-items:center;gap:12px}
+.airow>label{font-size:11px;text-transform:uppercase;letter-spacing:.08em;color:var(--text-3);font-weight:600}
+.airow>input,.airow>select{background:var(--surface-2);border:1px solid var(--line);border-radius:var(--r-sm);padding:8px 10px;color:var(--text);font-size:13px;font-family:inherit;min-width:0}
+.airow>input:focus,.airow>select:focus{outline:2px solid var(--accent);outline-offset:1px}
+.airow>.muted{font-size:12.5px}
 .card p{color:var(--text-2);font-size:13px;line-height:1.6}
 .sectiontitle{display:flex;align-items:center;justify-content:space-between;gap:12px;flex-wrap:wrap}
 .sectiontitle h2{margin:0}

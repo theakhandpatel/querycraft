@@ -1,6 +1,8 @@
 import { Effect } from 'effect';
 import { GatewayError, asGatewayError } from './errors';
 import type {
+  AdminAIConfig,
+  AdminAIUpdate,
   AiArtifact,
   AiAttempt,
   AiAvailability,
@@ -74,6 +76,11 @@ export interface AiServiceShape {
   /* Every stored course, every owner: the administrator's inventory
      (GET /admin/courses). The gateway refuses a learner with 403. */
   adminCourses(): Effect.Effect<AiCourseRecord[], GatewayError>;
+  /* The live AI configuration (GET /admin/ai). The key is never in a body. */
+  adminAI(): Effect.Effect<AdminAIConfig, GatewayError>;
+  /* Save and apply one: persists under the store's 'ai' key and swaps the
+     running configuration. */
+  saveAdminAI(update: AdminAIUpdate): Effect.Effect<AdminAIConfig, GatewayError>;
   getCourse(id: string): Effect.Effect<AiCourseRecord | null, GatewayError>;
   deleteCourse(id: string): Effect.Effect<{ ok: boolean }, GatewayError>;
   /* Approve a course that stopped awaiting the outline's approval: continue the
@@ -124,6 +131,8 @@ export function browserAiMethods(reason: string = AI_UNAVAILABLE_REASON): AiServ
     /* No gateway, no inventory: there is nothing an administrator could act
        on in a page-local engine. */
     adminCourses: () => Effect.fail(unavailable),
+    adminAI: () => Effect.fail(unavailable),
+    saveAdminAI: () => Effect.fail(unavailable),
     resetChallenge: () => Effect.fail(unavailable),
     /* There is no background run to submit to without a gateway, and no job
        store to poll: a fabricated handle would send the screen chasing a run
@@ -196,6 +205,20 @@ const AI_ERROR_CODES: readonly AiErrorCode[] = [
 
 export function asAiErrorCode(code: string | null | undefined): AiErrorCode {
   return code && (AI_ERROR_CODES as readonly string[]).includes(code) ? (code as AiErrorCode) : 'ENVIRONMENT_UNAVAILABLE';
+}
+
+function asAdminAIConfig(body: unknown): AdminAIConfig {
+  const raw = isRecord(body) ? body : {};
+  const provider = raw.provider;
+  return {
+    ok: raw.ok === true,
+    provider: provider === 'fake' || provider === 'openai-compatible' ? provider : 'off',
+    base_url: typeof raw.base_url === 'string' ? raw.base_url : undefined,
+    model: typeof raw.model === 'string' ? raw.model : undefined,
+    key_set: raw.key_set === true,
+    timeout_ms: typeof raw.timeout_ms === 'number' ? raw.timeout_ms : 0,
+    source: raw.source === 'database' ? 'database' : 'boot',
+  };
 }
 
 function isRecord(value: unknown): value is Record<string, unknown> {
@@ -855,6 +878,14 @@ export function gatewayAiMethods(opts: AiGatewayOptions): AiServiceShape {
       requireOk('GET', '/courses', undefined, 'course list').pipe(Effect.map(asCourseRecords)),
     adminCourses: () =>
       requireOk('GET', '/admin/courses', undefined, 'admin course list').pipe(Effect.map(asCourseRecords)),
+    adminAI: () =>
+      requireOk('GET', '/admin/ai', undefined, 'admin AI read').pipe(
+        Effect.map((body) => asAdminAIConfig(body)),
+      ),
+    saveAdminAI: (update) =>
+      requireOk('PUT', '/admin/ai', update, 'admin AI save').pipe(
+        Effect.map((body) => asAdminAIConfig(body)),
+      ),
     getCourse: (id) =>
       requireOk('GET', `/courses/${encodeURIComponent(id)}`, undefined, 'course').pipe(
         Effect.catch((e) => {

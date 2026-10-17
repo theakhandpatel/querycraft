@@ -14,6 +14,7 @@ import (
 	"net/http"
 	"slices"
 	"strings"
+	"sync"
 
 	"github.com/querycraft/sqlquery/backend/internal/ai"
 	"github.com/querycraft/sqlquery/backend/internal/ai/jobs"
@@ -70,6 +71,11 @@ type Server struct {
 	// feature works without it. It is set once, before the handler is served,
 	// with UseAI.
 	aiCfg *ai.Config
+	// aiMu guards aiCfg: the administrator can swap the AI configuration while
+	// the gateway runs (see SetAIConfig), and every reader — the availability
+	// probe, the per-request service, the per-job service — goes through
+	// currentAI() instead of the field.
+	aiMu sync.RWMutex
 
 	// jobs is the asynchronous-generation registry. It lives on the server
 	// rather than being built per request, because a job outlives the request

@@ -28,6 +28,7 @@ type Memory struct {
 	courses    map[string]schema.CourseRecord  // key: course id
 	patches    map[string]memoryPatch          // key: patch id
 	runs       map[string]schema.RunTranscript // key: run id
+	settings   map[string]string               // key: setting key; value: raw JSON text
 }
 
 // memoryPatch is a stored proposal plus the approval that may follow it. An
@@ -490,6 +491,31 @@ func (m *Memory) CountUsers(_ context.Context) (int, error) {
 }
 
 // UserIDs implements Store: every account id, for the environment reaper.
+// Setting implements Store.
+func (m *Memory) Setting(_ context.Context, key string) (string, bool, error) {
+	m.mu.RLock()
+	defer m.mu.RUnlock()
+	if m.settings == nil {
+		return "", false, nil
+	}
+	v, ok := m.settings[key]
+	return v, ok, nil
+}
+
+// SaveSetting implements Store.
+func (m *Memory) SaveSetting(_ context.Context, key, value string) error {
+	if key == "" {
+		return errors.New("setting key is required")
+	}
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	if m.settings == nil {
+		m.settings = make(map[string]string)
+	}
+	m.settings[key] = value
+	return nil
+}
+
 func (m *Memory) UserIDs(_ context.Context) ([]string, error) {
 	m.mu.RLock()
 	defer m.mu.RUnlock()

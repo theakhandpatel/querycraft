@@ -446,6 +446,58 @@ const Spec = `{
         }
       }
     },
+    "/admin/ai": {
+      "get": {
+        "operationId": "getAdminAI",
+        "security": [{"bearerAuth": []}],
+        "tags": ["generation"],
+        "summary": "The live AI configuration and where it came from (administrators).",
+        "description": "Reports provider, model, base_url, timeout and key_set (the key itself never travels back in a body). Source is 'database' when an administrator saved a configuration through PUT /admin/ai and the boot path applied it, or 'boot' when the config file's provider is live and nothing has been saved here. A signed-in learner is refused with 403 ADMIN_REQUIRED.",
+        "responses": {
+          "200": {
+            "description": "The effective configuration.",
+            "content": {"application/json": {"schema": {"$ref": "#/components/schemas/AdminAIConfig"}}}
+          },
+          "401": {
+            "description": "No session.",
+            "content": {"application/json": {"schema": {"$ref": "#/components/schemas/ErrorEnvelope"}}}
+          },
+          "403": {
+            "description": "Signed in without the administrator role (ADMIN_REQUIRED).",
+            "content": {"application/json": {"schema": {"$ref": "#/components/schemas/ErrorEnvelope"}}}
+          }
+        }
+      },
+      "put": {
+        "operationId": "putAdminAI",
+        "security": [{"bearerAuth": []}],
+        "tags": ["generation"],
+        "summary": "Save and apply an AI configuration while the gateway runs (administrators).",
+        "description": "Persists the configuration under the store's 'ai' key (it survives a restart: the boot path applies it over the config file's provider) and swaps the running configuration. Provider is one of 'off', 'fake', 'openai-compatible'; the openai-compatible provider requires base_url and model. An empty key keeps the stored one, so a round-trip through the manage surface never demands the key again. The run budget follows the boot derivation from the saved call timeout. Requests and jobs submitted after the save build their services from the new configuration; a run already in flight keeps the provider it started with. Nothing here touches the config file: the file is the boot document, the store is the runtime one. A signed-in learner is refused with 403 ADMIN_REQUIRED.",
+        "requestBody": {
+          "required": true,
+          "content": {"application/json": {"schema": {"$ref": "#/components/schemas/AdminAIUpdate"}}}
+        },
+        "responses": {
+          "200": {
+            "description": "The saved configuration, now live.",
+            "content": {"application/json": {"schema": {"$ref": "#/components/schemas/AdminAIConfig"}}}
+          },
+          "400": {
+            "description": "Unknown provider, an openai-compatible configuration missing base_url or model, or a negative timeout (AI_INVALID_REQUEST).",
+            "content": {"application/json": {"schema": {"$ref": "#/components/schemas/ErrorEnvelope"}}}
+          },
+          "401": {
+            "description": "No session.",
+            "content": {"application/json": {"schema": {"$ref": "#/components/schemas/ErrorEnvelope"}}}
+          },
+          "403": {
+            "description": "Signed in without the administrator role (ADMIN_REQUIRED).",
+            "content": {"application/json": {"schema": {"$ref": "#/components/schemas/ErrorEnvelope"}}}
+          }
+        }
+      }
+    },
     "/courses/{id}": {
       "get": {
         "operationId": "getCourse",
@@ -1569,6 +1621,30 @@ const Spec = `{
           "outcome": {"$ref": "#/components/schemas/AIOutcome"},
           "status": {"enum": ["active", "rejected"]},
           "created_at": {"type": "string"}
+        }
+      },
+      "AdminAIConfig": {
+        "type": "object",
+        "required": ["ok", "provider", "key_set", "source"],
+        "properties": {
+          "ok": {"type": "boolean"},
+          "provider": {"type": "string", "enum": ["off", "fake", "openai-compatible"]},
+          "base_url": {"type": "string", "description": "Present for openai-compatible. Never present from a boot-configured provider: the config file holds it."},
+          "model": {"type": "string"},
+          "key_set": {"type": "boolean", "description": "Whether an API key is stored. The key itself never travels back in a body."},
+          "timeout_ms": {"type": "integer"},
+          "source": {"type": "string", "enum": ["database", "boot"]}
+        }
+      },
+      "AdminAIUpdate": {
+        "type": "object",
+        "required": ["provider"],
+        "properties": {
+          "provider": {"type": "string", "enum": ["off", "fake", "openai-compatible"]},
+          "base_url": {"type": "string"},
+          "model": {"type": "string"},
+          "key": {"type": "string", "description": "Write-only. Empty keeps the stored key."},
+          "timeout_ms": {"type": "integer", "description": "Per-call timeout. Zero saves the shipped default (120000)."}
         }
       },
       "AICourseList": {
