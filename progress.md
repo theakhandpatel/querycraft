@@ -2266,3 +2266,37 @@ the row (key included in the store, never in a response), swapped the live
 configuration, and a gateway restart applied it from the persisted setting
 (boot log names the provider and model). `make test` exit 0 (1187 checks,
 including the three new handler tests), `make verify` exit 0.
+
+## UI drive: the whole product as a learner, 2026-10-17
+
+Every learner-facing interaction was driven in the real app — the built binary
+in gateway mode, a fresh learner account, desktop and a 375px phone viewport —
+not read from code. The pass covered: auth (tabs, empty-submit validation,
+wrong-password 401, signup, re-login, sign-out with token cleared), the top
+bar (all five destinations with active underlines, Cmd/Ctrl+K search with 25
+hits on "joins", theme persistence), the course screen's chapter index, the
+lesson loop (Run on an example with a real result grid; a wrong-answer
+execution error reported as QUERY_RUNTIME_ERROR with "not a wrong answer";
+a wrong-result attempt graded with per-clause feedback, COLUMN_MISMATCH;
+authored hints; Show solution's reference panel; Accept recorded as
+accepted_by_user, not passed; the real pass with four clauses, Recorded and
+the toast; Keep query), bookmarks, the note prompt, Mark chapter complete
+with the progress readout moving, the chapters drawer (focus trap, jump,
+Escape), prev/next in the bar, the tables drawer with Reset workspace, the
+workbook (stats, notes & bookmarks, saved queries with Run and Copy,
+Export/Import), the progress history (immutable attempts, per-exercise
+versions, weekly bars), the challenge-lab surface, and the mobile shell
+(hamburger drawer with chapter moves, chapters drawer, lesson rendering and a
+real SQL run with no horizontal overflow).
+
+One defect was found and fixed in the drive: keyboard focus was lost after a
+drawer-initiated chapter jump — the drawer's close path restored focus to the
+opener (the bar's button on the screen just left), so a keyboard learner
+landed nowhere. The jump now moves focus to the lesson's main region, which
+is also the skip link's target.
+
+Two deliberate behaviors a driver could misread as bugs, recorded here so the
+next pass does not re-litigate them: Cmd/Ctrl+K closes an open drawer before
+focusing search (the drawers yield to search by design), and one Escape press
+closes one layer, topmost first. A third, cosmetic and pre-existing: the SQL
+cell's Ctrl+Enter chip is visible on touch screens where it is noise.

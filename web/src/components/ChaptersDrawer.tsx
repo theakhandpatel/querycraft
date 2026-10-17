@@ -23,6 +23,11 @@ export default function ChaptersDrawer() {
   const go = (i: number) => {
     s.setChaptersOpen(false);
     s.openLessonIn(course.id, i);
+    /* The drawer's close path restores focus to its opener, but the opener is
+       the bar's button on the screen the learner just left. A chapter change
+       should land where reading starts: the lesson's main region, which the
+       skip link also targets. */
+    requestAnimationFrame(() => document.getElementById('main')?.focus({ preventScroll: true }));
   };
 
   return (
