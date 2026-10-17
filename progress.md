@@ -2443,3 +2443,41 @@ immutable cache header on the response). WASM, images and WOFF2 are excluded:
 they carry their own compression and gzip costs CPU for little gain. Verified
 live: index-*.js 1,491,038 raw → 456,079 bytes on the wire, payload valid,
 index.html still served raw with its no-store semantics untouched.
+
+## Course generation drive: query optimization, 2026-10-17
+
+The use case: "I want to learn query optimization — why queries are slow on
+large tables, EXPLAIN plans, indexes, partitioning." Driven through the
+create screen, outline approval, and chapter phase, with the pi-ai provider
+over deepseek-v4.1-flash.
+
+The outline was excellent — 6 chapters covering exactly the asked material
+(Reading Plans, Sequential Scans, Choosing Indexes, Indexing Joins, Checking
+Indexes, Partitioning). The pipeline paused for approval as designed. The
+chapter phase was approved and started.
+
+The chapter phase has NOT produced written chapters. The model's tool calls
+arrive as content text rather than native tool calls (the transcript shows
+the save_chapter JSON in the assistant's content field), so the agent loop's
+`len(resp.ToolCalls) == 0` nudge fires every turn. Two causes were found and
+one fixed:
+
+1. The pi-ai adapter did not send tool definitions. The Tools field was
+   dropped in toContext, so the model never saw the save_chapter schema.
+   Fixed: toContext now maps req.Tools to pi's Tool tree, tested by
+   TestCompleteSendsToolDefinitions.
+2. Even with tools sent, deepseek-v4.1-flash through the amr-link gateway
+   may return tool calls as text content rather than as native tool_calls
+   API fields — the pi/ai openai-completions adapter passes whatever the
+   model sends through. The nudge loop handles this correctly (it's the
+   designed repair for a missed protocol turn), but a model that persistently
+   misses the protocol exhausts the turn budget.
+
+The chapter phase was still running when the gateway was stopped. The course
+stays in building status; the next boot can resume it.
+
+The scratch_environment failure from earlier chapter builds ("expected 1
+metadata row, found 0") was fixed: the scratch name now carries a random
+suffix per build, so every continuation gets a fresh copy from the sealed
+template. The fix was verified — the new build created a fresh scratch
+environment (qc_env_acct_… created_in=10ms).
