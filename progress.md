@@ -2481,3 +2481,45 @@ metadata row, found 0") was fixed: the scratch name now carries a random
 suffix per build, so every continuation gets a fresh copy from the sealed
 template. The fix was verified — the new build created a fresh scratch
 environment (qc_env_acct_… created_in=10ms).
+
+## Course agent refactor plan: pi's Agent replaces the hand-rolled loop, 2026-10-17
+
+The course generation drive proved that the hand-rolled agent loop in
+`course_agent.go` has the same problems the wire layer had: the tool
+definitions weren't sent (fixed), the nudge loop exhausted on a model that
+returns tool calls as text, and the loop is ~100 lines of infrastructure that
+pi's agent.Agent already solves.
+
+The refactor plan (mapped, pi's Agent API studied, the kill list confirmed):
+
+**Kill (~450 lines):**
+- `runCourseAgent`'s hand-rolled loop — tool calls, nudge, repair, transcript
+  recording. Replaced by `agent.NewAgent(AgentOptions{...})` +
+  `agent.Prompt(ctx, goal)` + `agent.WaitForIdle()`.
+- `piai/` — the adapter over pi/ai. Gone: pi's Agent talks to providers
+  natively through its own model + key resolution.
+- The provider interface for course generation. The challenge pipeline keeps
+  its one-shot `Provider.Complete` (it doesn't need an agent loop).
+
+**Stays ours (grading policy, the tools):**
+- `save_chapter` / `finish_course` / `run_sql` as `agent.AgentTool` values
+  with Execute functions that enforce grading policy
+- Scratch environment setup/teardown
+- Chapter verification (cross-check, adversarial fixtures)
+- Activation gate
+
+**New capability: `run_sql` tool.** The model can execute queries against the
+scratch environment to test its own exercises before saving the chapter —
+instead of the pipeline bouncing failed chapters through a repair loop.
+
+**What the implementation touches:**
+- `runCourseAgent` — replaced with the pi Agent version
+- `courseTools()` — returns `[]agent.AgentTool` with Execute closures
+- `saveChapterTool` — signature widens to accept `map[string]any` params
+- The Service needs the raw provider/model/key/base_url for model resolution
+  (currently behind the Provider interface; needs to be surfaced)
+- The pipeline's stage markers and transcript recording forward through the
+  agent's Listener callback
+
+The implementation is a focused next change: the plan, the API surface and
+the kill list are mapped here so it can be picked up cleanly.
