@@ -58,6 +58,12 @@ func Handler() http.Handler {
 		name := strings.TrimPrefix(clean, "/")
 		if f, err := distFS().Open(name); err == nil {
 			_ = f.Close()
+			// Hashed, immutable assets go out gzip-compressed from a cache.
+			// index.html is unhashed and keeps no-store semantics, so it is
+			// served raw rather than through this path.
+			if serveCompressed(w, r, name) {
+				return
+			}
 			r = r.Clone(r.Context())
 			r.URL.Path = clean
 			files.ServeHTTP(w, r)

@@ -2433,3 +2433,13 @@ Verified: two user themes created through the UI persist in
 `app.user_settings` (full 32-token sets), apply on selection, and the boot
 sync applies the account's document. go build/vet/test green,
 `make test` exit 0 (1187 checks), `make verify` exit 0.
+
+## Asset compression on the gateway, 2026-10-17
+
+The embedded static handler served every asset byte-for-byte — the 1.49 MB
+index bundle downloaded at full size. The handler now negotiates gzip and
+answers from an in-process cache (compressed once per content-hashed asset,
+immutable cache header on the response). WASM, images and WOFF2 are excluded:
+they carry their own compression and gzip costs CPU for little gain. Verified
+live: index-*.js 1,491,038 raw → 456,079 bytes on the wire, payload valid,
+index.html still served raw with its no-store semantics untouched.
