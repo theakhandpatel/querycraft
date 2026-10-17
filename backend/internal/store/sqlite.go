@@ -80,10 +80,72 @@ func NewSQLite(ctx context.Context, path string) (*SQLite, error) {
 		_ = db.Close()
 		return nil, fmt.Errorf("create metadata schema: %w", err)
 	}
+	if err := migrateAdditiveColumns(ctx, db); err != nil {
+		_ = db.Close()
+		return nil, fmt.Errorf("apply metadata migrations: %w", err)
+	}
 	return &SQLite{db: db, sqlStore: sqliteStore(db)}, nil
 }
 
 func (s *SQLite) Kind() string { return "sqlite" }
+
+// migrateAdditiveColumns adds declared-but-missing columns to tables that
+// already exist. SQLite has no ADD COLUMN IF NOT EXISTS, so the columns each
+// table actually has are read from table_info and compared with the
+// declaration; the additive set (see additiveColumns) is appended. A table
+// name here comes from this file's own declarations, never from input, so the
+// interpolated PRAGMA is safe.
+func migrateAdditiveColumns(ctx context.Context, db *sql.DB) error {
+	for _, t := range appTables {
+		existing := map[string]bool{}
+		rows, err := db.QueryContext(ctx, "PRAGMA table_info("+t.name+")")
+		if err != nil {
+			return fmt.Errorf("inspect %s: %w", t.name, err)
+		}
+		for rows.Next() {
+			var (
+				cid     int
+				name    string
+				kind    string
+				notNull int
+				dflt    *string
+				pk      int
+			)
+			if err := rows.Scan(&cid, &name, &kind, &notNull, &dflt, &pk); err != nil {
+				rows.Close()
+				return fmt.Errorf("read %s columns: %w", t.name, err)
+			}
+			existing[name] = true
+		}
+		if err := rows.Err(); err != nil {
+			rows.Close()
+			return fmt.Errorf("read %s columns: %w", t.name, err)
+		}
+		rows.Close()
+
+		// A table that does not exist yet has no columns; CREATE TABLE IF
+		// NOT EXISTS, run just before, has handled it.
+		if len(existing) == 0 {
+			continue
+		}
+		for _, c := range additiveColumns(t) {
+			if existing[c.name] {
+				continue
+			}
+			stmt := "ALTER TABLE " + t.name + " ADD COLUMN " + c.name + " " + c.kind.sqliteType()
+			if c.notNull {
+				stmt += " NOT NULL"
+			}
+			if d := c.sqliteDefault(); d != "" {
+				stmt += " DEFAULT " + d
+			}
+			if _, err := db.ExecContext(ctx, stmt); err != nil {
+				return fmt.Errorf("add %s.%s: %w", t.name, c.name, err)
+			}
+		}
+	}
+	return nil
+}
 func (s *SQLite) Close() error { return s.db.Close() }
 
 func timestamp(t time.Time) string {

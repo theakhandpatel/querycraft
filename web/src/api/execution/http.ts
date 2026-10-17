@@ -13,6 +13,7 @@ import type {
   ApiConfig,
   Course,
   DatasetId,
+  DiagnosticsReport,
   Dialect,
   EngineCapabilities,
   EnvironmentInfo,
@@ -192,6 +193,45 @@ export function httpLayer(opts: {
     /* The gateway enforces its own deadline server-side (QC_TIMEOUT_MS) and
        advertises it on /capabilities. A failed probe reports "unknown" rather
        than claiming a capability that could not be confirmed. */
+    diagnostics: () =>
+      request('GET', '/diagnostics').pipe(
+        Effect.map((json): DiagnosticsReport | null => {
+          const isRecord = (v: unknown): v is Record<string, unknown> => typeof v === 'object' && v !== null;
+          if (!isRecord(json)) return null;
+          const build = typeof json.build === 'string' ? json.build : '';
+          const engine = isRecord(json.engine) ? json.engine : null;
+          const store = isRecord(json.store) ? json.store : null;
+          const dataset = isRecord(json.dataset) ? json.dataset : null;
+          const progress = isRecord(json.progress) ? json.progress : null;
+          if (!engine || !store || !dataset || !progress) return null;
+          const limits = isRecord(engine.limits) ? engine.limits : {};
+          return {
+            build,
+            engine: {
+              name: typeof engine.name === 'string' ? engine.name : '',
+              ready: engine.ready === true,
+              reason: typeof engine.reason === 'string' ? engine.reason : '',
+              version: typeof engine.version === 'string' ? engine.version : '',
+              limits: {
+                max_rows: typeof limits.max_rows === 'number' ? limits.max_rows : 0,
+                max_bytes: typeof limits.max_bytes === 'number' ? limits.max_bytes : 0,
+                timeout_ms: typeof limits.timeout_ms === 'number' ? limits.timeout_ms : 0,
+                max_concurrent: typeof limits.max_concurrent === 'number' ? limits.max_concurrent : 0,
+              },
+            },
+            store: {
+              kind: typeof store.kind === 'string' ? store.kind : '',
+              persistent: store.persistent === true,
+            },
+            dataset: {
+              schema: typeof dataset.schema === 'string' ? dataset.schema : '',
+              version: typeof dataset.version === 'number' ? dataset.version : 0,
+            },
+            progress: { version: typeof progress.version === 'number' ? progress.version : 0 },
+          };
+        }),
+        Effect.catch(() => Effect.succeed<DiagnosticsReport | null>(null)),
+      ),
     capabilities: () =>
       request('GET', '/capabilities').pipe(
         Effect.map((json): EngineCapabilities | null => {

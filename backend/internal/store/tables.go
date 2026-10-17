@@ -294,6 +294,47 @@ func sqliteDDL(tables []ddlTable) string {
 	return b.String()
 }
 
+// additiveColumns returns the declared columns a store created before those
+// columns were declared can gain with ALTER TABLE: everything nullable or
+// carrying a default. A column that is neither would reject every existing
+// row, so widening one is a decision, not a migration. Primary keys and
+// foreign keys are excluded for the same reason: adding either to a table
+// with rows is backfill work, not a column append.
+func additiveColumns(t ddlTable) []ddlColumn {
+	out := make([]ddlColumn, 0, len(t.columns))
+	for _, c := range t.columns {
+		if c.primary || c.refs != "" || (c.notNull && c.def == noDefault) {
+			continue
+		}
+		out = append(out, c)
+	}
+	return out
+}
+
+// postgresMigrations renders the additive column migrations the gateway
+// applies after the schema script. CREATE TABLE IF NOT EXISTS is a no-op
+// against a table that already exists, so a metadata store created before a
+// column was declared keeps failing every query that selects it with
+// "column does not exist". PostgreSQL answers the gap with ADD COLUMN IF
+// NOT EXISTS; SQLite cannot, so its store inspects table_info instead (see
+// migrateAdditiveColumns).
+func postgresMigrations(tables []ddlTable) string {
+	var b strings.Builder
+	for _, t := range tables {
+		for _, c := range additiveColumns(t) {
+			stmt := fmt.Sprintf("ALTER TABLE %s.%s ADD COLUMN IF NOT EXISTS %s %s", AppSchema, t.name, c.name, c.kind.postgresType())
+			if c.notNull {
+				stmt += " NOT NULL"
+			}
+			if d := c.postgresDefault(); d != "" {
+				stmt += " DEFAULT " + d
+			}
+			b.WriteString(stmt + ";\n")
+		}
+	}
+	return b.String()
+}
+
 // tableBody renders the body of one table: each column on its own line, with
 // the composite key last when there is one. column renders one column without
 // the indentation.

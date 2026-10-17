@@ -419,6 +419,33 @@ const Spec = `{
         }
       }
     },
+    "/admin/courses": {
+      "get": {
+        "operationId": "adminListCourses",
+        "security": [{"bearerAuth": []}],
+        "tags": ["generation"],
+        "summary": "List every stored course, every owner (administrators).",
+        "description": "The course inventory the manage surface renders: every stored record with its owner id and status, including 'building' and 'awaiting_approval' courses no learner can see. A signed-in learner is refused with 403 ADMIN_REQUIRED; the role lives on the stored account and public signups never receive it. With AI off the answer is 503 and 'courses' is an empty array, never an invented row. Detail routes stay owner-scoped: a course that is not the caller's is still 404 there, so an id cannot be probed for existence.",
+        "responses": {
+          "200": {
+            "description": "Every stored course, newest first, with owner ids.",
+            "content": {"application/json": {"schema": {"$ref": "#/components/schemas/AICourseList"}}}
+          },
+          "401": {
+            "description": "No session.",
+            "content": {"application/json": {"schema": {"$ref": "#/components/schemas/ErrorEnvelope"}}}
+          },
+          "403": {
+            "description": "Signed in without the administrator role (ADMIN_REQUIRED).",
+            "content": {"application/json": {"schema": {"$ref": "#/components/schemas/ErrorEnvelope"}}}
+          },
+          "503": {
+            "description": "AI is off; the body is an AICourseList with ok=false and an empty 'courses'.",
+            "content": {"application/json": {"schema": {"$ref": "#/components/schemas/AICourseList"}}}
+          }
+        }
+      }
+    },
     "/courses/{id}": {
       "get": {
         "operationId": "getCourse",

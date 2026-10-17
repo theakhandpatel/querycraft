@@ -348,6 +348,24 @@ export interface ApiConfig {
 /** The execution capability surface (design §5.3). The one that matters to a
     learner is `hardTimeout`: a Web Worker or a server can be told to stop, a
     main-thread WASM engine cannot, and the UI must not claim otherwise. */
+/** The gateway's own readiness report (GET /diagnostics). Field names mirror
+    the gateway's JSON; a field the gateway does not send is simply absent, and
+    the decoder drops a body that cannot be read rather than inventing values. */
+export interface DiagnosticsReport {
+  build: string;
+  engine: {
+    name: string;
+    ready: boolean;
+    reason: string;
+    version: string;
+    limits: { max_rows: number; max_bytes: number; timeout_ms: number; max_concurrent: number };
+  };
+  store: { kind: string; persistent: boolean };
+  dataset: { schema: string; version: number };
+  progress: { version: number };
+  learner?: Record<string, unknown>;
+}
+
 export interface EngineCapabilities {
   placement: 'worker' | 'main' | 'server' | 'none';
   hardTimeout: boolean;
@@ -567,6 +585,14 @@ export interface ExecutionApi {
       (or a second tab, or a deep link) finds them. The offline adapters refuse:
       they have no course store to read. */
   listCourses(): Promise<AiCourseRecord[]>;
+  /** Admin. Every stored course, every owner, with owner ids and statuses.
+      The gateway refuses a learner with 403 ADMIN_REQUIRED; the offline
+      adapters refuse with AI_UNAVAILABLE, so call it only in gateway mode. */
+  adminCourses(): Promise<AiCourseRecord[]>;
+  /** Admin health: the gateway's measured readiness report, or null when
+      there is no gateway to ask (the offline adapters answer null, never a
+      fabricated report). */
+  diagnostics(): Promise<DiagnosticsReport | null>;
   getCourse(id: string): Promise<AiCourseRecord | null>;
   deleteCourse(id: string): Promise<{ ok: boolean }>;
   /** M10. Approve a paused course: continue its stored outline into the chapter
@@ -595,6 +621,7 @@ export type Screen =
   | 'create'
   | 'building'
   | 'review'
+  | 'manage'
   | 'lesson'
   | 'workbook'
   | 'workbook-progress'

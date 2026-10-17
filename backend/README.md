@@ -26,6 +26,7 @@ Module: `github.com/querycraft/sqlquery/backend`.
 | `POST` | `/events` | 🔒 Append an audit/attempt event; returns `202 Accepted`. |
 | `POST` | `/courses/generate` | Generate a course skeleton (title, chapters, exercises, dataset version). Set `require_approval: true` to stop after the outline: the outcome is then `awaiting_approval` and `POST /courses/{id}/build` continues it. |
 | `POST` | `/courses/{id}/build` | 🔒 Approve a paused course: continue its stored outline into the chapter phase. `404` for another account's course; `409` when the course is not still being built. Accepts `Prefer: respond-async` (or `async=1`) like the generate routes. |
+| `GET` | `/admin/courses` | 🔒👑 Every stored course, every owner, with owner ids and statuses — the manage surface's inventory. A learner is refused with `403 ADMIN_REQUIRED`. |
 | `POST` | `/challenges/generate` | Generate an AI challenge. |
 | `GET` | `/generation/{id}` | 🔒 Poll a generation submitted asynchronously: the pipeline's stages while it runs, the outcome and the stored record id when it finishes. |
 | `GET` | `/runs` | 🔒 List the caller's generation-run transcripts, newest first (bounded to 100). |

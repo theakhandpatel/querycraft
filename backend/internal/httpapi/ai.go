@@ -416,6 +416,32 @@ func (s *Server) handleListCourses(w http.ResponseWriter, r *http.Request) {
 	writeJSON(w, http.StatusOK, map[string]any{"ok": true, "courses": mine})
 }
 
+// handleAdminCourses implements GET /admin/courses: every stored course, every
+// owner, with the owner id kept in the body — an inventory an administrator can
+// act on, not a learner view. A learner is refused with 403; the owner-scoped
+// GET /courses stays the learner's own list. A course that is not the caller's
+// stays 404 on the detail routes, so an id still cannot be probed for
+// existence from here.
+func (s *Server) handleAdminCourses(w http.ResponseWriter, r *http.Request) {
+	if _, ok := s.requireAdmin(w, r); !ok {
+		return
+	}
+	depot := s.aiCourseDepot()
+	if depot == nil {
+		writeJSON(w, http.StatusServiceUnavailable, map[string]any{
+			"ok": false, "courses": []schema.CourseRecord{},
+			"error": map[string]string{"code": ai.CodeUnavailable, "message": "AI is off: no generation service is configured."},
+		})
+		return
+	}
+	recs, err := depot.Courses(r.Context())
+	if err != nil {
+		writeAIError(w, err)
+		return
+	}
+	writeJSON(w, http.StatusOK, map[string]any{"ok": true, "courses": recs})
+}
+
 // ownedCourse fetches a course by id and enforces the owner rule: a course that
 // is not the caller's is reported as missing, never as forbidden, so an id
 // cannot be probed for existence. The store error is returned so the caller can

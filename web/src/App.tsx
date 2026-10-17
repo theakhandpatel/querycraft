@@ -12,6 +12,7 @@ import LibraryScreen from './components/screens/LibraryScreen';
 import CreateScreen from './components/screens/CreateScreen';
 import BuildingScreen from './components/screens/BuildingScreen';
 import ReviewScreen from './components/screens/ReviewScreen';
+import ManageScreen from './components/screens/ManageScreen';
 import LessonScreen from './components/screens/LessonScreen';
 import WorkbookScreen from './components/screens/WorkbookScreen';
 import ProgressScreen from './components/screens/ProgressScreen';
@@ -28,6 +29,7 @@ const SCREENS = {
   create: CreateScreen,
   building: BuildingScreen,
   review: ReviewScreen,
+  manage: ManageScreen,
   lesson: LessonScreen,
   workbook: WorkbookScreen,
   'workbook-progress': ProgressScreen,

@@ -10,6 +10,7 @@ import type {
   Course,
   CourseGeneration,
   DatasetId,
+  DiagnosticsReport,
   Dialect,
   EngineCapabilities,
   EnvironmentInfo,
@@ -39,6 +40,9 @@ export { GatewayError };
 
 /** The capability surface, expressed as Effects with a typed error channel. */
 export interface ExecutionServiceShape extends AiServiceShape {
+  /* The gateway's measured readiness report. Null on the offline adapters:
+     there is no gateway to ask, and a lookalike would be a lie. */
+  diagnostics(): Effect.Effect<DiagnosticsReport | null>;
   readonly config: ApiConfig;
   /* Accounts. `me` resolves to null when there is no valid session (including a
      401 from the gateway, which also clears the stored token) so boot restore

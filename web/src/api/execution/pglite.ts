@@ -245,6 +245,10 @@ export function pgliteLayer(config: ApiConfig = PGLITE_CONFIG, note: NoteFn = ()
        planned. Answering with PGlite's own block alone would tell a SQLite
        chapter it is unsupported, and answering with the union of features would
        advertise a plan for an engine that has none. */
+    /* There is no gateway to ask for its readiness report, so the answer is
+       null rather than a report about the page-local engine: the field's
+       consumers render a gateway panel, and a lookalike would be a lie. */
+    diagnostics: () => Effect.succeed(null),
     capabilities: () =>
       Effect.sync(() => {
         const postgres = engineCapabilities();

@@ -66,7 +66,7 @@ export function TopBar() {
         <TopNavLink icon="book" label="Workbook" active={nav === 'workbook'} badge={`${s.pct}%`} onClick={() => s.showScreen('workbook')} />
         <TopNavLink icon="clock" label="Progress" active={nav === 'progress'} onClick={() => s.showScreen('workbook-progress')} />
         <TopNavLink icon="flask" label="Challenge lab" active={nav === 'lab'} onClick={() => s.showScreen('challenge-lab')} />
-        {isAdmin && <TopNavLink icon="sparkles" label="Create" active={nav === 'create'} onClick={() => s.showScreen('create')} />}
+        {isAdmin && <TopNavLink icon="sparkles" label="Manage" active={nav === 'manage'} onClick={() => s.showScreen('manage')} />}
       </nav>
 
       {onCourseTrack && course.id && (
@@ -194,7 +194,7 @@ export function NavDrawer() {
           </div>
           {isAdmin && (
             <div className="navgroup">
-              <NavButton icon="sparkles" label="Create a course" active={nav === 'create'} onClick={go(() => s.showScreen('create'))} />
+              <NavButton icon="sparkles" label="Manage courses" active={nav === 'manage'} onClick={go(() => s.showScreen('manage'))} />
             </div>
           )}
           {recent.length > 0 && (

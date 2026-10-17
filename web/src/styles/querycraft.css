@@ -180,6 +180,20 @@ button.small .ico{width:14px;height:14px}
 .grid3{display:grid;grid-template-columns:repeat(3,minmax(0,1fr));gap:16px}
 .card{background:var(--surface);border:0;border-radius:var(--r-lg);padding:20px 22px}
 .card>h2{margin-bottom:8px}
+
+/* ============ Manage (admin inventory + health) ============ */
+.healthrows{display:grid;gap:2px;margin-top:6px}
+.healthrow{display:flex;align-items:baseline;gap:14px;padding:7px 0;border-bottom:1px solid var(--line)}
+.healthrow:last-child{border-bottom:0}
+.healthrow dt{flex:0 0 128px;font-size:11px;text-transform:uppercase;letter-spacing:.08em;color:var(--text-3);font-weight:600}
+.healthrow dd{font-size:13px;color:var(--text);min-width:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+.inventory{display:grid;gap:6px;margin-top:10px}
+.inventoryrow{display:flex;align-items:center;gap:12px;padding:10px 12px;border-radius:var(--r-sm);background:var(--surface-2)}
+.inventorymain{display:flex;flex-direction:column;gap:2px;min-width:0;flex:1}
+.inventorymain strong{font-size:13.5px;font-weight:600}
+.inventorymain .muted{font-family:var(--mono);font-size:10.5px}
+.inventoryactions{display:flex;gap:6px;flex:none}
+.linklike{border:0;background:transparent;color:var(--accent-ink);cursor:pointer;padding:0;font:inherit;text-decoration:underline;text-underline-offset:2px}
 .card p{color:var(--text-2);font-size:13px;line-height:1.6}
 .sectiontitle{display:flex;align-items:center;justify-content:space-between;gap:12px;flex-wrap:wrap}
 .sectiontitle h2{margin:0}

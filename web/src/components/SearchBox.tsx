@@ -31,17 +31,17 @@ export default function SearchBox() {
   const hits = useMemo(() => search(index, query), [index, query]);
   const groups = useMemo(() => groupHits(hits), [hits]);
 
-  const { chaptersOpen, navOpen, tablesOpen } = s;
+  const { chaptersOpen, navOpen, tablesOpen, setChaptersOpen, setNavOpen, setTablesOpen } = s;
   useEffect(() => {
     const onKey = (e: KeyboardEvent) => {
       if ((e.metaKey || e.ctrlKey) && e.key.toLowerCase() === 'k') {
         e.preventDefault();
         /* A drawer holds focus in a trap; opening search from inside one would
            yank the learner behind the overlay. The drawers yield first. */
-        if (s.chaptersOpen || s.navOpen || s.tablesOpen) {
-          s.setChaptersOpen(false);
-          s.setNavOpen(false);
-          s.setTablesOpen(false);
+        if (chaptersOpen || navOpen || tablesOpen) {
+          setChaptersOpen(false);
+          setNavOpen(false);
+          setTablesOpen(false);
         }
         inputRef.current?.focus();
         setOpen(true);
@@ -64,7 +64,7 @@ export default function SearchBox() {
       document.removeEventListener('keydown', onKey, true);
       document.removeEventListener('mousedown', onDown);
     };
-  }, [chaptersOpen, navOpen, tablesOpen, open]);
+  }, [chaptersOpen, navOpen, tablesOpen, open, setChaptersOpen, setNavOpen, setTablesOpen]);
 
   function choose(doc: SearchDoc) {
     s.openSearchHit(doc);

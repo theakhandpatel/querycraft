@@ -90,6 +90,22 @@ func (s *Server) requireUser(w http.ResponseWriter, r *http.Request) (store.User
 	return store.User{}, false
 }
 
+// requireAdmin resolves the caller and refuses anyone without the admin role:
+// 401 for no session, 403 ADMIN_REQUIRED for a signed-in learner. The admin
+// surface is the course inventory; the role lives on the stored account, and
+// public signups never receive it.
+func (s *Server) requireAdmin(w http.ResponseWriter, r *http.Request) (store.User, bool) {
+	u, ok := s.requireUser(w, r)
+	if !ok {
+		return store.User{}, false
+	}
+	if !u.IsAdmin() {
+		errorEnvelope(w, http.StatusForbidden, "ADMIN_REQUIRED", "This surface is for course administrators.")
+		return store.User{}, false
+	}
+	return u, true
+}
+
 func authBadRequest(w http.ResponseWriter, err error) {
 	errorEnvelope(w, http.StatusBadRequest, "AUTH_INVALID_INPUT", err.Error())
 }

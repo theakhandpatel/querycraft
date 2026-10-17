@@ -60,6 +60,13 @@ func NewPostgres(ctx context.Context, dsn string) (*Postgres, error) {
 		pool.Close()
 		return nil, fmt.Errorf("apply metadata schema: %w", err)
 	}
+	// CREATE TABLE IF NOT EXISTS cannot widen a table that exists; the additive
+	// migrations do. Without this, a store created before a nullable column was
+	// declared fails every query that reads it.
+	if _, err := pool.Exec(ctx, postgresMigrations(appTables)); err != nil {
+		pool.Close()
+		return nil, fmt.Errorf("apply metadata migrations: %w", err)
+	}
 	return &Postgres{pool: pool, sqlStore: postgresStore(pool)}, nil
 }
 

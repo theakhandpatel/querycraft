@@ -2196,3 +2196,37 @@ gateway starts from, so `make serve` (repository root) and `go run ./cmd/api`
 to the other. `backend/README.md` and the README's "Try it" now say this, and
 `querycraft db status` prints the resolved paths. `make db-reset` now removes
 both locations instead of one.
+
+## Manage surface (admin), 2026-10-17
+
+The admin's job is authoring, and the authoring records had no home: a course a
+run did not finish was reachable only by remembering it existed, and
+/diagnostics answered to nothing. The manage screen (`#/manage`, admin-only,
+entered from the bar's Manage link) is the bounded answer: the gateway's own
+health panel and the full course inventory, with the learner-analytics question
+deliberately deferred until there are learners to measure.
+
+- Backend: `requireAdmin` (403 ADMIN_REQUIRED; the role lives on the stored
+  account, signups never receive it), `GET /admin/courses` over the unrouted
+  `Depot.Courses()`, documented in the OpenAPI surface and backend/README.
+  The detail routes stay owner-scoped (404), so an id still cannot be probed.
+- Frontend: `ManageScreen` renders the health rows (build, engine readiness,
+  limits, store, dataset and progress versions) and the inventory (status,
+  owner, date; Open for active, Resume build for awaiting_approval/building
+  through the store's run-breadcrumb resume path, Remove for own records).
+  Both adapters implement the seam: the offline one answers null/unavailable
+  honestly and the screen says what that means.
+- Found live while shooting the screen, and fixed: stores created before a
+  column was declared failed every Courses read with "column does not exist"
+  (CREATE TABLE IF NOT EXISTS cannot widen a table). Both backends now apply
+  additive column migrations on open (ADD COLUMN IF NOT EXISTS on PostgreSQL,
+  table_info-compare + ALTER on SQLite), limited to columns that are nullable
+  or carry a default; a NOT NULL column without a default is a decision, not a
+  migration. Tests cover the legacy shape on both backends. The migration
+  surfaced two generated courses from 2026-10-15 that had been invisible to
+  GET /courses.
+
+Verified on this tree: go build/vet/test all green (including the two
+migration tests), `make test` exit 0 (1187 checks), `make verify` exit 0,
+typecheck/lint/build clean, and the screen driven against the built binary
+with real stored records.
