@@ -1,4 +1,6 @@
 import Icon from '../ui/Icon';
+import { THEMES } from '../../lib/themes';
+import type { ThemeName } from '../../types';
 import { useStore } from '../../state/store';
 import ImportControl from '../ui/ImportControl';
 
@@ -53,20 +55,21 @@ export default function AppearanceScreen() {
 
       <div className="card">
         <h2>Theme</h2>
-        <p className="mt-8">Choose the palette. System follows your OS setting.</p>
+        <p className="mt-8">
+          Choose the palette. System follows your OS setting. Every preset
+          clears 4.5:1 on its key text pairs — the contrast audit gates them.
+        </p>
         <div className="themerow">
-          <button className={`themecard${s.theme === 'light' ? ' selected' : ''}`} onClick={() => s.setTheme('light')}>
-            <span className="swatch"><i style={{ background: '#f4f5f7' }}></i><i style={{ background: '#ffffff' }}></i><i style={{ background: '#0d7d68' }}></i></span>
-            <strong>Light · Ink &amp; Pine</strong>
-          </button>
-          <button className={`themecard${s.theme === 'dark' ? ' selected' : ''}`} onClick={() => s.setTheme('dark')}>
-            <span className="swatch"><i style={{ background: '#121316' }}></i><i style={{ background: '#181a1f' }}></i><i style={{ background: '#34d3a6' }}></i></span>
-            <strong>Dark · Pine on Slate</strong>
-          </button>
           <button className={`themecard${s.theme === 'system' ? ' selected' : ''}`} onClick={() => s.setTheme('system')}>
             <span className="swatch"><i style={{ background: '#f4f5f7' }}></i><i style={{ background: '#181a1f' }}></i><i style={{ background: '#0d7d68' }}></i></span>
             <strong>System</strong>
           </button>
+          {THEMES.map((t) => (
+            <button key={t.id} className={`themecard${s.theme === t.id ? ' selected' : ''}`} onClick={() => s.setTheme(t.id as ThemeName)}>
+              <span className="swatch"><i style={{ background: t.swatch.bg }}></i><i style={{ background: t.swatch.surface }}></i><i style={{ background: t.swatch.accent }}></i></span>
+              <strong>{t.label}</strong>
+            </button>
+          ))}
         </div>
       </div>
 

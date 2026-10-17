@@ -1,4 +1,5 @@
 @import "./fonts.css";
+@import "./themes.css";
 /* OD-LAYOUT-PRIMITIVES v1 — structure only. Product CSS outside the layer wins. */
 @layer od-layout {
   :where(.od-stack,.od-row,.od-row-top,.od-cluster,.od-grid) > :where(*) { min-width: 0; }
@@ -12,6 +13,7 @@
 /* /OD-LAYOUT-PRIMITIVES v1 */
 
 /* ============ Ink & Pine tokens ============ */
+
 :root{
   color-scheme:light;
   --bg:#f4f5f7; --surface:#ffffff; --surface-2:#f7f8fa; --surface-3:#eef0f3;
@@ -27,6 +29,7 @@
      has to carry white text, while the ink has to clear 4.5:1 on every surface
      it can sit on, including --accent-soft. #0d7d68 measured 4.13:1 there. */
   --accent:#0c6f5c; --accent-ink:#0c6f5c; --accent-solid:#0b6b59; --accent-hover:#0a5c4d;
+  --on-accent:#fff;
   --accent-soft:rgba(12,111,92,.09); --accent-line:rgba(12,111,92,.26);
   --green:#1a7f4f; --green-soft:rgba(26,127,79,.11); --green-ink:#15663f;
   --amber:#8a5a10; --amber-soft:rgba(138,90,16,.12); --amber-ink:#6f4909;
@@ -41,6 +44,7 @@
   --line:#2a2e36; --line-strong:#3a404a;
   --text:#eef0f2; --text-2:#a7aeb8; --text-3:#99a1ab;
   --accent:#34d3a6; --accent-ink:#34d3a6; --accent-solid:#2fbb92; --accent-hover:#46e0b4;
+  --on-accent:#04231b;
   --accent-soft:rgba(52,211,166,.12); --accent-line:rgba(52,211,166,.30);
   --green:#4bd39a; --green-soft:rgba(75,211,154,.13); --green-ink:#7ce3b0;
   --amber:#e0b35c; --amber-soft:rgba(224,179,92,.14); --amber-ink:#f0c877;
@@ -89,8 +93,7 @@ html[data-motion="reduced"] *,html[data-motion="reduced"] *::before,html[data-mo
 
 button{display:inline-flex;align-items:center;justify-content:center;gap:7px;cursor:pointer;color:var(--text);background:var(--surface-3);border:0;border-radius:var(--r-sm);padding:8px 13px;font-size:13px;font-weight:500;white-space:nowrap;transition:background var(--dur) var(--ease),color var(--dur) var(--ease)}
 button:hover{background:var(--line)}
-button.primary{background:var(--accent-solid);color:#fff;font-weight:600}
-[data-theme="dark"] button.primary{color:#04231b}
+button.primary{background:var(--accent-solid);color:var(--on-accent);font-weight:600}
 button.primary:hover{background:var(--accent-hover)}
 button.ghost{background:transparent;color:var(--text-2)}
 button.ghost:hover{background:var(--surface-3);color:var(--text)}
@@ -392,9 +395,6 @@ button.small .ico{width:14px;height:14px}
 .fb.passed .fbhead{color:var(--green-ink)}
 .fb.failed .fbhead{color:var(--amber-ink)}
 .fb.error .fbhead{color:var(--red-ink)}
-[data-theme="dark"] .fb.passed .fbhead{color:#7ce3b0}
-[data-theme="dark"] .fb.failed .fbhead{color:#f0c877}
-[data-theme="dark"] .fb.error .fbhead{color:#f7a3a3}
 .fbcode{font-family:var(--mono);font-size:11px;color:var(--text-3);background:var(--surface-3);border:0;border-radius:4px;padding:1px 6px;overflow-wrap:anywhere}
 .checklist{display:flex;flex-direction:column;gap:5px;margin-top:8px;list-style:none;padding:0}
 .checklist li{display:flex;align-items:flex-start;gap:8px;font-size:12.5px;color:var(--text-2)}

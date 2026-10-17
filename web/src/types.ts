@@ -656,7 +656,18 @@ export interface PromptRequest {
   onSubmit: (value: string) => void;
 }
 
-export type ThemeName = 'light' | 'dark' | 'system';
+export type ThemeName =
+  | 'light'
+  | 'dark'
+  | 'paper'
+  | 'ocean-light'
+  | 'contrast-light'
+  | 'midnight'
+  | 'ember'
+  | 'ocean-dark'
+  | 'terminal'
+  | 'contrast-dark'
+  | 'system';
 
 export interface UiState {
   selectedCourseId: string;

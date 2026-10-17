@@ -34,7 +34,7 @@ SMOKE_PG_DIR  ?= $(BACKEND_DIR)/.data/smoke
 # cache but keep the smoke cluster's data and runtime dirs isolated.
 PG_BINARIES_DIR ?= $(BACKEND_DIR)/.data/pg/binaries
 
-.PHONY: help install web typecheck check-cgo embed backend build test verify verify-mock serve run dev docs dataset audit-lessons audit-content audit-storage audit-search audit-courses audit-progress audit-export audit-import audit-fixtures audit-metrics audit-metrics-live audit-adversarial audit-adversarial-live audit-load audit-parity audit-ai audit-ai-adapters audit-course-store audit-ai-live audit-perf audit-perf-content audit-perf-seam audit-perf-fixtures audit-dataset-map audit-shell audit-sqlite-errors audit-boot audit-course-gen db-reset clean disk
+.PHONY: help install web typecheck check-cgo embed backend build test verify verify-mock serve run dev docs dataset audit-lessons audit-content audit-storage audit-search audit-courses audit-progress audit-export audit-import audit-fixtures audit-themes audit-metrics audit-metrics-live audit-adversarial audit-adversarial-live audit-load audit-parity audit-ai audit-ai-adapters audit-course-store audit-ai-live audit-perf audit-perf-content audit-perf-seam audit-perf-fixtures audit-dataset-map audit-shell audit-sqlite-errors audit-boot audit-course-gen db-reset clean disk
 
 help: ## List the available targets with a one-line description.
 	@echo "Querycraft — make targets"
@@ -79,7 +79,7 @@ backend: ## Compile the gateway to backend/bin/querycraft, stamping BuildVersion
 
 build: web embed backend ## Produce the single deployable binary (web + embed + backend).
 
-test: typecheck lint check-cgo audit-lessons audit-content audit-courses audit-storage audit-search audit-progress audit-export audit-import audit-fixtures audit-metrics audit-adversarial audit-parity audit-dataset-map audit-sqlite-errors audit-perf audit-perf-fixtures audit-perf-content audit-perf-seam audit-ai-adapters audit-course-store audit-course-gen audit-shell audit-boot ## Run the Go test suite, the frontend type-check, the linter and the audit suites.
+test: typecheck lint check-cgo audit-lessons audit-content audit-courses audit-storage audit-search audit-progress audit-export audit-import audit-fixtures audit-themes audit-metrics audit-adversarial audit-parity audit-dataset-map audit-sqlite-errors audit-perf audit-perf-fixtures audit-perf-content audit-perf-seam audit-ai-adapters audit-course-store audit-course-gen audit-shell audit-boot ## Run the Go test suite, the frontend type-check, the linter and the audit suites.
 	cd $(BACKEND_DIR) && $(GO) test ./...
 
 check-cgo: ## Prove the single binary stays cgo-free (CGO_ENABLED=0 build + a cgo dependency scan).
@@ -331,6 +331,9 @@ audit-fixtures: ## Check the language-neutral result-contract fixtures against t
 	cd $(WEB_DIR) && ./node_modules/.bin/esbuild --bundle --format=cjs --platform=node \
 		--outfile=/tmp/fixtures.cjs src/api/compare.ts >/dev/null
 	node scripts/fixtures-audit.mjs
+
+audit-themes: ## Every shipped theme clears 4.5:1 on its key text pairs.
+	node scripts/theme-contrast.mjs
 
 audit-metrics: ## Check /metrics and /diagnostics on an isolated gateway with no database (design 13.1, M3).
 	cd $(WEB_DIR) && ./node_modules/.bin/esbuild --bundle --format=cjs --platform=node \

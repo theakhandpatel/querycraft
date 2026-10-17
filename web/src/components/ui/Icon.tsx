@@ -3,6 +3,7 @@ import React from 'react';
 const SYMBOLS = {
   'i-terminal': '<path d="M4 17l5-5-5-5"/><path d="M12 19h8"/>',
   'i-plus': '<path d="M12 5v14M5 12h14"/>',
+  'i-palette': '<path d="M12 21a9 9 0 1 1 9-9c0 2-1.5 3-3 3h-1.5a1.5 1.5 0 0 0-1.2 2.4c.4.5.7 1 .7 1.6 0 1.1-.9 2-2 2z"/><circle cx="7.5" cy="10.5" r=".9"/><circle cx="12" cy="7.5" r=".9"/><circle cx="16.5" cy="10.5" r=".9"/>',
   'i-menu': '<path d="M4 7h16M4 12h16M4 17h16"/>',
   'i-logout': '<path d="M9 21H5a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h4"/><path d="M16 17l5-5-5-5M21 12H9"/>',
   'i-list': '<circle cx="4.5" cy="6" r="1"/><circle cx="4.5" cy="12" r="1"/><circle cx="4.5" cy="18" r="1"/><path d="M9 6h11M9 12h11M9 18h11"/>',

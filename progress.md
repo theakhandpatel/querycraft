@@ -2366,3 +2366,33 @@ embedded pi catalog — 1,529 chat models across 41 providers, the same list the
 provider resolver matches model refs against, sourced from models.dev — and
 the model field offers it as a datalist picker when pi-ai is selected. A
 customer who wants any provider, any model types two characters and picks.
+
+## Theming engine: 18 presets, registry, contrast audit, 2026-10-17
+
+The request: more themes, selected easily. The engine: one token set (32
+custom properties the whole UI already read), one CSS block per preset, one
+registry entry (src/lib/themes.ts) that powers the Appearance screen's swatch
+grid. The scattered [data-theme="dark"] component overrides folded into
+tokens (--on-accent; the three feedback-head overrides were already identical
+to dark's ink tokens and dropped). The top-bar toggle became a palette button
+to Appearance, where the picker lives: System plus 18 presets.
+
+Ten presets are designed for the product's Ink & Pine world (Paper, Ocean,
+High contrast, Midnight, Ember, Terminal in both families). Eight are ports
+of palettes VS Code users already chose — One Dark, Dracula, Tokyo Night,
+Nord, Monokai, Rosé Pine, Solarized Light, GitHub Dimmed — pointed at by
+vscodethemes.com. Ports, not copies: where an original ships a comment ink
+below 4.5:1 (VS Code does not hold comment colors to AA), the port brightens
+that step; the divergence is disclosed here and in themes.css.
+
+The gate: scripts/theme-contrast.mjs (make audit-themes, part of make test)
+parses every theme block and checks 252 pairs — body, secondary and metadata
+text on canvas and surface, accent ink, the verdict inks, the primary-button
+ink on its fills — at 4.5:1. All 18 themes pass.
+
+Driving the switch surfaced two cascade defects the first build had, both
+fixed in place: the themes.css @import sat after an @layer block and was
+dropped by the browser (imports precede every rule), and the theme blocks
+tied :root's specificity and lost to the light default (theme blocks are now
+:root[data-theme=…], 0,2,0). Verified live: Dracula applied, persisted across
+reload, and rendering the whole lesson surface correctly.

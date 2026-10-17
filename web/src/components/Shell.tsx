@@ -97,8 +97,8 @@ export function TopBar() {
           <span className="dot"></span>{' '}
           {s.api.mode === 'http' ? 'gateway · live' : 'postgres 18 · in-browser'}
         </span>
-        <button className="small ghost" onClick={s.cycleTheme} aria-label="Toggle theme" title="Toggle theme">
-          <Icon name={s.effectiveTheme === 'dark' ? 'sun' : 'moon'} />
+        <button className="small ghost" onClick={() => s.showScreen('appearance-settings')} aria-label="Themes" title="Themes">
+          <Icon name="palette" />
         </button>
         <button
           className="avatar avatarbtn"

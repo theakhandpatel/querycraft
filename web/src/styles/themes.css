@@ -1,0 +1,287 @@
+/*
+ * Theme token blocks — one per preset, over the same custom properties the
+ * whole UI reads. The registry that names these for the picker is
+ * src/lib/themes.ts; the contrast audit that gates them is
+ * scripts/theme-contrast.mjs (every preset clears 4.5:1 on its key text
+ * pairs). Adding a theme: one block here, one entry in the registry.
+ *
+ * Structural tokens (fonts, radii, easing) stay in querycraft.css's :root —
+ * they are not per-theme.
+ */
+
+/* ---------- light family ---------- */
+
+/* Paper · warm reading light: cream surfaces, warm ink, the pine accent kept
+   for brand. Chapters read like a book. */
+:root[data-theme="paper"]{
+  color-scheme:light;
+  --bg:#f5f0e5; --surface:#fbf7ee; --surface-2:#f1ebdd; --surface-3:#e9e1cf;
+  --line:#d9cfba; --line-strong:#c2b59d;
+  --text:#1f1910; --text-2:#574f3e; --text-3:#6b6350;
+  --accent:#0c6f5c; --accent-ink:#0a5f4f; --accent-solid:#0b6b59; --accent-hover:#0a5c4d;
+  --accent-soft:rgba(12,111,92,.10); --accent-line:rgba(12,111,92,.26);
+  --on-accent:#fff;
+  --green:#1a7f4f; --green-soft:rgba(26,127,79,.11); --green-ink:#15663f;
+  --amber:#8a5a10; --amber-soft:rgba(138,90,16,.12); --amber-ink:#6f4909;
+  --red:#b3352f; --red-soft:rgba(179,53,47,.10); --red-ink:#8f2a25;
+  --code-bg:#faf6ec; --code-text:#2a2418; --code-line:#e2dac6;
+  --shadow:0 1px 2px rgba(64,52,28,.06),0 10px 30px -18px rgba(64,52,28,.30);
+  --shadow-lg:0 24px 60px -30px rgba(64,52,28,.44);
+}
+
+/* Ocean · cool light: slate neutrals, a blue accent. */
+:root[data-theme="ocean-light"]{
+  color-scheme:light;
+  --bg:#edf1f6; --surface:#ffffff; --surface-2:#f2f5f9; --surface-3:#e7edf4;
+  --line:#d5dde7; --line-strong:#b9c6d6;
+  --text:#101820; --text-2:#3f4c5c; --text-3:#4f5e70;
+  --accent:#1d5fb0; --accent-ink:#1a56a0; --accent-solid:#1a56a0; --accent-hover:#164a8c;
+  --accent-soft:rgba(29,95,176,.09); --accent-line:rgba(29,95,176,.25);
+  --on-accent:#fff;
+  --green:#1a7f4f; --green-soft:rgba(26,127,79,.11); --green-ink:#15663f;
+  --amber:#8a5a10; --amber-soft:rgba(138,90,16,.12); --amber-ink:#6f4909;
+  --red:#b3352f; --red-soft:rgba(179,53,47,.10); --red-ink:#8f2a25;
+  --code-bg:#f8fafc; --code-text:#1c2a3a; --code-line:#e2e8f0;
+  --shadow:0 1px 2px rgba(16,24,32,.05),0 10px 30px -18px rgba(16,24,32,.28);
+  --shadow-lg:0 24px 60px -30px rgba(16,24,32,.42);
+}
+
+/* High contrast · light: near-black ink on white, strong lines. */
+:root[data-theme="contrast-light"]{
+  color-scheme:light;
+  --bg:#ffffff; --surface:#ffffff; --surface-2:#f2f2f2; --surface-3:#e6e6e6;
+  --line:#b3b3b3; --line-strong:#8c8c8c;
+  --text:#000000; --text-2:#1a1a1a; --text-3:#2e2e2e;
+  --accent:#003ea0; --accent-ink:#003ea0; --accent-solid:#003ea0; --accent-hover:#002f7a;
+  --accent-soft:rgba(0,62,160,.10); --accent-line:rgba(0,62,160,.45);
+  --on-accent:#fff;
+  --green:#0d6b3f; --green-soft:rgba(13,107,63,.12); --green-ink:#0a5230;
+  --amber:#6b4400; --amber-soft:rgba(107,68,0,.12); --amber-ink:#573600;
+  --red:#a01f1a; --red-soft:rgba(160,31,26,.12); --red-ink:#7f1915;
+  --code-bg:#f5f5f5; --code-text:#000000; --code-line:#d0d0d0;
+  --shadow:0 1px 2px rgba(0,0,0,.10),0 10px 30px -18px rgba(0,0,0,.35);
+  --shadow-lg:0 24px 60px -30px rgba(0,0,0,.5);
+}
+
+/* ---------- dark family ---------- */
+
+/* Midnight · deep blue-black, a soft blue accent, softer text for night
+   reading without dropping under 4.5:1. */
+:root[data-theme="midnight"]{
+  color-scheme:dark;
+  --bg:#0b0e17; --surface:#101524; --surface-2:#151b2d; --surface-3:#1b2338;
+  --line:#26304b; --line-strong:#37426a;
+  --text:#e9edf8; --text-2:#a7b2cf; --text-3:#98a4c2;
+  --accent:#7da7ff; --accent-ink:#8db4ff; --accent-solid:#5c8ef0; --accent-hover:#93b7ff;
+  --accent-soft:rgba(125,167,255,.13); --accent-line:rgba(125,167,255,.32);
+  --on-accent:#0a1430;
+  --green:#5fd39a; --green-soft:rgba(95,211,154,.13); --green-ink:#8fe3bd;
+  --amber:#e0b35c; --amber-soft:rgba(224,179,92,.14); --amber-ink:#f0c877;
+  --red:#f08a8a; --red-soft:rgba(240,138,138,.13); --red-ink:#f7a3a3;
+  --code-bg:#0a0e19; --code-text:#d9e0f2; --code-line:#212943;
+  --shadow:0 1px 2px rgba(0,0,0,.3),0 12px 34px -20px rgba(0,0,0,.7);
+  --shadow-lg:0 30px 70px -34px rgba(0,0,0,.85);
+}
+
+/* Ember · warm charcoal, an amber accent. The one warm-dark preset. */
+:root[data-theme="ember"]{
+  color-scheme:dark;
+  --bg:#151110; --surface:#1d1917; --surface-2:#242019; --surface-3:#2c2721;
+  --line:#35302a; --line-strong:#4a4238;
+  --text:#f2ece4; --text-2:#c0b6a8; --text-3:#b1a695;
+  --accent:#f0a24a; --accent-ink:#f5b265; --accent-solid:#e08f35; --accent-hover:#f5b265;
+  --accent-soft:rgba(240,162,74,.13); --accent-line:rgba(240,162,74,.30);
+  --on-accent:#2a1a05;
+  --green:#6fd08f; --green-soft:rgba(111,208,143,.13); --green-ink:#9ce3b6;
+  --amber:#f0b35c; --amber-soft:rgba(240,179,92,.14); --amber-ink:#f5c87d;
+  --red:#f08a8a; --red-soft:rgba(240,138,138,.13); --red-ink:#f7a3a3;
+  --code-bg:#100d0c; --code-text:#e5ddd2; --code-line:#2a251f;
+  --shadow:0 1px 2px rgba(0,0,0,.3),0 12px 34px -20px rgba(0,0,0,.7);
+  --shadow-lg:0 30px 70px -34px rgba(0,0,0,.85);
+}
+
+/* Ocean · deep dark: blue-black surfaces, a cyan accent. */
+:root[data-theme="ocean-dark"]{
+  color-scheme:dark;
+  --bg:#0a0f16; --surface:#0f1723; --surface-2:#14202f; --surface-3:#192839;
+  --line:#223349; --line-strong:#31465f;
+  --text:#e6eef5; --text-2:#a3b5c8; --text-3:#93a8bd;
+  --accent:#4fc3f7; --accent-ink:#6fd0fa; --accent-solid:#35aee0; --accent-hover:#6fd0fa;
+  --accent-soft:rgba(79,195,247,.12); --accent-line:rgba(79,195,247,.30);
+  --on-accent:#04222e;
+  --green:#4bd39a; --green-soft:rgba(75,211,154,.13); --green-ink:#7ce3b0;
+  --amber:#e0b35c; --amber-soft:rgba(224,179,92,.14); --amber-ink:#f0c877;
+  --red:#f08a8a; --red-soft:rgba(240,138,138,.13); --red-ink:#f7a3a3;
+  --code-bg:#070b12; --code-text:#d5e0ec; --code-line:#1c2836;
+  --shadow:0 1px 2px rgba(0,0,0,.3),0 12px 34px -20px rgba(0,0,0,.7);
+  --shadow-lg:0 30px 70px -34px rgba(0,0,0,.85);
+}
+
+/* Terminal · green on black. A SQL app may have one. */
+:root[data-theme="terminal"]{
+  color-scheme:dark;
+  --bg:#050a06; --surface:#081109; --surface-2:#0b170e; --surface-3:#0f2015;
+  --line:#17301e; --line-strong:#24492c;
+  --text:#c9f2d3; --text-2:#9ed4ae; --text-3:#8bc39c;
+  --accent:#4ade80; --accent-ink:#6ee7a0; --accent-solid:#35b56a; --accent-hover:#6ee7a0;
+  --accent-soft:rgba(74,222,128,.12); --accent-line:rgba(74,222,128,.30);
+  --on-accent:#04140a;
+  --green:#4ade80; --green-soft:rgba(74,222,128,.13); --green-ink:#86efac;
+  --amber:#fbbf24; --amber-soft:rgba(251,191,36,.14); --amber-ink:#fcd34d;
+  --red:#f87171; --red-soft:rgba(248,113,113,.13); --red-ink:#fca5a5;
+  --code-bg:#030805; --code-text:#b5f0c5; --code-line:#122b19;
+  --shadow:0 1px 2px rgba(0,0,0,.4),0 12px 34px -20px rgba(0,0,0,.8);
+  --shadow-lg:0 30px 70px -34px rgba(0,0,0,.9);
+}
+
+/* High contrast · dark: white on black. */
+:root[data-theme="contrast-dark"]{
+  color-scheme:dark;
+  --bg:#000000; --surface:#0d0d0d; --surface-2:#141414; --surface-3:#1c1c1c;
+  --line:#2e2e2e; --line-strong:#4d4d4d;
+  --text:#ffffff; --text-2:#e8e8e8; --text-3:#d4d4d4;
+  --accent:#7ab7ff; --accent-ink:#9cc9ff; --accent-solid:#4a94f0; --accent-hover:#9cc9ff;
+  --accent-soft:rgba(122,183,255,.14); --accent-line:rgba(122,183,255,.40);
+  --on-accent:#000000;
+  --green:#5fe39c; --green-soft:rgba(95,227,156,.14); --green-ink:#8fefbc;
+  --amber:#f0c063; --amber-soft:rgba(240,192,99,.15); --amber-ink:#ffd88a;
+  --red:#ff9d9d; --red-soft:rgba(255,157,157,.14); --red-ink:#ffb8b8;
+  --code-bg:#050505; --code-text:#f2f2f2; --code-line:#222222;
+  --shadow:0 1px 2px rgba(0,0,0,.4),0 12px 34px -20px rgba(0,0,0,.8);
+  --shadow-lg:0 30px 70px -34px rgba(0,0,0,.9);
+}
+
+/* ---------- ported presets: the palettes VS Code users already chose ----------
+
+   Ports, not copies: where the original ships a comment ink under 4.5:1 the
+   port brightens that step to clear the gate (disclosed divergence; VS Code
+   does not hold its comment colors to AA). The accent-soft and accent-line
+   washes are derived from each accent. */
+
+:root[data-theme="one-dark"]{
+  color-scheme:dark;
+  --bg:#282c34; --surface:#21252b; --surface-2:#2d323b; --surface-3:#333842;
+  --line:#3e4451; --line-strong:#525867;
+  --text:#d7dae0; --text-2:#abb2bf; --text-3:#abb2bf;
+  --accent:#61afef; --accent-ink:#61afef; --accent-solid:#4c9ef0; --accent-hover:#7cc2ff;
+  --accent-soft:rgba(97,175,239,.12); --accent-line:rgba(97,175,239,.30);
+  --on-accent:#000000;
+  --green:#98c379; --green-soft:rgba(152,195,121,.13); --green-ink:#98c379;
+  --amber:#e5c07b; --amber-soft:rgba(229,192,123,.14); --amber-ink:#e5c07b;
+  --red:#e06c75; --red-soft:rgba(224,108,117,.13); --red-ink:#e06c75;
+  --code-bg:#1e2228; --code-text:#c5cad3; --code-line:#353b45;
+  --shadow:0 1px 2px rgba(0,0,0,.3),0 12px 34px -20px rgba(0,0,0,.7);
+  --shadow-lg:0 30px 70px -34px rgba(0,0,0,.85);
+}
+
+:root[data-theme="dracula"]{
+  color-scheme:dark;
+  --bg:#282a36; --surface:#21222c; --surface-2:#343746; --surface-3:#3b3d4f;
+  --line:#44475a; --line-strong:#565a75;
+  --text:#f8f8f2; --text-2:#c3c6d4; --text-3:#c3c6d4;
+  --accent:#bd93f9; --accent-ink:#bd93f9; --accent-solid:#a781e8; --accent-hover:#cfa9ff;
+  --accent-soft:rgba(189,147,249,.12); --accent-line:rgba(189,147,249,.30);
+  --on-accent:#000000;
+  --green:#50fa7b; --green-soft:rgba(80,250,123,.13); --green-ink:#50fa7b;
+  --amber:#ffb86c; --amber-soft:rgba(255,184,108,.14); --amber-ink:#ffb86c;
+  --red:#ff5555; --red-soft:rgba(255,85,85,.13); --red-ink:#ff5555;
+  --code-bg:#1e1f29; --code-text:#e6e6e9; --code-line:#3a3d4d;
+  --shadow:0 1px 2px rgba(0,0,0,.3),0 12px 34px -20px rgba(0,0,0,.7);
+  --shadow-lg:0 30px 70px -34px rgba(0,0,0,.85);
+}
+
+:root[data-theme="tokyo-night"]{
+  color-scheme:dark;
+  --bg:#1a1b26; --surface:#16161e; --surface-2:#1f202e; --surface-3:#24283b;
+  --line:#2f334d; --line-strong:#414863;
+  --text:#c0caf5; --text-2:#a9b1d6; --text-3:#a9b1d6;
+  --accent:#7aa2f7; --accent-ink:#7aa2f7; --accent-solid:#6183d9; --accent-hover:#94c2ff;
+  --accent-soft:rgba(122,162,247,.12); --accent-line:rgba(122,162,247,.30);
+  --on-accent:#000000;
+  --green:#9ece6a; --green-soft:rgba(158,206,106,.13); --green-ink:#9ece6a;
+  --amber:#e0af68; --amber-soft:rgba(224,175,104,.14); --amber-ink:#e0af68;
+  --red:#f7768e; --red-soft:rgba(247,118,142,.13); --red-ink:#f7768e;
+  --code-bg:#13131a; --code-text:#c4c9e0; --code-line:#2a2e45;
+  --shadow:0 1px 2px rgba(0,0,0,.3),0 12px 34px -20px rgba(0,0,0,.7);
+  --shadow-lg:0 30px 70px -34px rgba(0,0,0,.85);
+}
+
+:root[data-theme="nord"]{
+  color-scheme:dark;
+  --bg:#2e3440; --surface:#292e39; --surface-2:#333b4a; --surface-3:#3b4252;
+  --line:#434c5e; --line-strong:#4c566a;
+  --text:#eceff4; --text-2:#c0c8d4; --text-3:#c0c8d4;
+  --accent:#88c0d0; --accent-ink:#88c0d0; --accent-solid:#6fa8bd; --accent-hover:#a5d8e6;
+  --accent-soft:rgba(136,192,208,.12); --accent-line:rgba(136,192,208,.30);
+  --on-accent:#000000;
+  --green:#a3be8c; --green-soft:rgba(163,190,140,.13); --green-ink:#a3be8c;
+  --amber:#ebcb8b; --amber-soft:rgba(235,203,139,.14); --amber-ink:#ebcb8b;
+  --red:#bf616a; --red-soft:rgba(191,97,106,.13); --red-ink:#cc8188;
+  --code-bg:#242933; --code-text:#d8dee9; --code-line:#3b4252;
+  --shadow:0 1px 2px rgba(0,0,0,.3),0 12px 34px -20px rgba(0,0,0,.7);
+  --shadow-lg:0 30px 70px -34px rgba(0,0,0,.85);
+}
+
+:root[data-theme="monokai"]{
+  color-scheme:dark;
+  --bg:#272822; --surface:#1f201a; --surface-2:#2f3129; --surface-3:#383a30;
+  --line:#49483e; --line-strong:#5f5f4f;
+  --text:#f8f8f2; --text-2:#c4c4b8; --text-3:#c4c4b8;
+  --accent:#a6e22e; --accent-ink:#a6e22e; --accent-solid:#8bc424; --accent-hover:#c3f355;
+  --accent-soft:rgba(166,226,46,.12); --accent-line:rgba(166,226,46,.30);
+  --on-accent:#000000;
+  --green:#a6e22e; --green-soft:rgba(166,226,46,.13); --green-ink:#a6e22e;
+  --amber:#e6b74c; --amber-soft:rgba(230,183,76,.14); --amber-ink:#e6b74c;
+  --red:#f92672; --red-soft:rgba(249,38,114,.13); --red-ink:#f9367d;
+  --code-bg:#1d1e19; --code-text:#e8e8dd; --code-line:#3b3c32;
+  --shadow:0 1px 2px rgba(0,0,0,.3),0 12px 34px -20px rgba(0,0,0,.7);
+  --shadow-lg:0 30px 70px -34px rgba(0,0,0,.85);
+}
+
+:root[data-theme="rose-pine"]{
+  color-scheme:dark;
+  --bg:#191724; --surface:#1f1d2e; --surface-2:#26233a; --surface-3:#2a2740;
+  --line:#3f3a5c; --line-strong:#565280;
+  --text:#e0def4; --text-2:#b8b1d4; --text-3:#b8b1d4;
+  --accent:#c4a7e7; --accent-ink:#c4a7e7; --accent-solid:#a98cd1; --accent-hover:#d8c0f2;
+  --accent-soft:rgba(196,167,231,.12); --accent-line:rgba(196,167,231,.30);
+  --on-accent:#000000;
+  --green:#95d1a0; --green-soft:rgba(149,209,160,.13); --green-ink:#95d1a0;
+  --amber:#f0c07d; --amber-soft:rgba(240,192,125,.14); --amber-ink:#f0c07d;
+  --red:#eb6f92; --red-soft:rgba(235,111,146,.13); --red-ink:#eb6f92;
+  --code-bg:#14121d; --code-text:#d8d3e8; --code-line:#2a2740;
+  --shadow:0 1px 2px rgba(0,0,0,.3),0 12px 34px -20px rgba(0,0,0,.7);
+  --shadow-lg:0 30px 70px -34px rgba(0,0,0,.85);
+}
+
+:root[data-theme="solarized-light"]{
+  color-scheme:light;
+  --bg:#fdf6e3; --surface:#fffbf0; --surface-2:#f2ecd9; --surface-3:#e8e0c9;
+  --line:#dcd4b8; --line-strong:#c3bb9e;
+  --text:#073642; --text-2:#37555e; --text-3:#37555e;
+  --accent:#268bd2; --accent-ink:#2076b2; --accent-solid:#1f78bd; --accent-hover:#4ba3e8;
+  --accent-soft:rgba(38,139,210,.12); --accent-line:rgba(38,139,210,.30);
+  --on-accent:#ffffff;
+  --green:#5d7d00; --green-soft:rgba(93,125,0,.13); --green-ink:#5d7d00;
+  --amber:#a35600; --amber-soft:rgba(163,86,0,.14); --amber-ink:#a35600;
+  --red:#c4303a; --red-soft:rgba(196,48,58,.13); --red-ink:#c4303a;
+  --code-bg:#f7f1df; --code-text:#1a3a44; --code-line:#e0d8c2;
+  --shadow:0 1px 2px rgba(0,0,0,.3),0 12px 34px -20px rgba(0,0,0,.7);
+  --shadow-lg:0 30px 70px -34px rgba(0,0,0,.85);
+}
+
+:root[data-theme="github-dimmed"]{
+  color-scheme:dark;
+  --bg:#22272e; --surface:#1c2128; --surface-2:#2d333b; --surface-3:#373e47;
+  --line:#444c56; --line-strong:#596776;
+  --text:#cdd9e5; --text-2:#9eadba; --text-3:#9eadba;
+  --accent:#539bf5; --accent-ink:#539bf5; --accent-solid:#4184e4; --accent-hover:#71b8ff;
+  --accent-soft:rgba(83,155,245,.12); --accent-line:rgba(83,155,245,.30);
+  --on-accent:#000000;
+  --green:#57ab5a; --green-soft:rgba(87,171,90,.13); --green-ink:#57ab5a;
+  --amber:#c69026; --amber-soft:rgba(198,144,38,.14); --amber-ink:#c69026;
+  --red:#f47067; --red-soft:rgba(244,112,103,.13); --red-ink:#f47067;
+  --code-bg:#1a1f24; --code-text:#b6c3cf; --code-line:#2f3742;
+  --shadow:0 1px 2px rgba(0,0,0,.3),0 12px 34px -20px rgba(0,0,0,.7);
+  --shadow-lg:0 30px 70px -34px rgba(0,0,0,.85);
+}

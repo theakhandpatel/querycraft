@@ -210,7 +210,7 @@ export interface StoreValue {
   closePrompt: () => void;
 
   theme: ThemeName;
-  effectiveTheme: 'light' | 'dark';
+  effectiveTheme: Exclude<ThemeName, 'system'>;
   setTheme: (m: ThemeName) => void;
   cycleTheme: () => void;
   motion: boolean;
