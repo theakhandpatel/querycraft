@@ -2,6 +2,7 @@ package httpapi
 
 import (
 	"context"
+	"encoding/json"
 	"io"
 	"log/slog"
 	"net/http"
@@ -219,5 +220,82 @@ func TestAdminAISettingSurvivesBoot(t *testing.T) {
 	}
 	if cfg.Provider.Descriptor().Name != "openai-compatible" {
 		t.Fatal("a broken setting modified the base configuration")
+	}
+}
+
+/* ---------- per-account preferences ---------- */
+
+// TestPreferencesArePerAccountAndOwnerScoped: two accounts keep independent
+// documents; a learner without a document reads null, never an invented
+// default; and the account comes from the session, never the body.
+func TestPreferencesArePerAccountAndOwnerScoped(t *testing.T) {
+	s, adminToken, learnerToken, _, _ := adminServer(t)
+
+	// No document yet: null, not an invented default.
+	w := doAs(t, s, learnerToken, http.MethodGet, "/preferences", "")
+	if w.Code != http.StatusOK {
+		t.Fatalf("get status = %d body = %s", w.Code, w.Body.String())
+	}
+	var empty struct {
+		OK          bool            `json:"ok"`
+		Preferences json.RawMessage `json:"preferences"`
+	}
+	mustDecode(t, w, &empty)
+	if !empty.OK || string(empty.Preferences) != "null" {
+		t.Fatalf("first read = %s, want null preferences", empty.Preferences)
+	}
+
+	// The learner saves one document.
+	body := `{"theme":"midnight","customThemes":[{"id":"mine","name":"Mine","accent":"#ff5c8a"}]}`
+	if w := doAs(t, s, learnerToken, http.MethodPut, "/preferences", body); w.Code != http.StatusOK {
+		t.Fatalf("put status = %d body = %s", w.Code, w.Body.String())
+	}
+
+	// The learner reads their own document back, whole.
+	w = doAs(t, s, learnerToken, http.MethodGet, "/preferences", "")
+	mustDecode(t, w, &empty)
+	if string(empty.Preferences) != body {
+		t.Fatalf("read-back = %s, want the saved document", empty.Preferences)
+	}
+
+	// The admin's account is independent: still no document.
+	w = doAs(t, s, adminToken, http.MethodGet, "/preferences", "")
+	mustDecode(t, w, &empty)
+	if string(empty.Preferences) != "null" {
+		t.Fatalf("admin read = %s, want null (documents are per account)", empty.Preferences)
+	}
+
+	// Anonymous is refused like every authed route.
+	if w := do(t, s, http.MethodGet, "/preferences", ""); w.Code != http.StatusUnauthorized {
+		t.Fatalf("anon status = %d, want 401", w.Code)
+	}
+}
+
+// TestPreferencesReplaceWholesaleAndRejectMalformed: PUT replaces the whole
+// document, and a malformed body is a 400 that changes nothing.
+func TestPreferencesReplaceWholesaleAndRejectMalformed(t *testing.T) {
+	s, learnerToken, _, _, _ := adminServer(t)
+	if w := doAs(t, s, learnerToken, http.MethodPut, "/preferences", `{"theme":"midnight"}`); w.Code != http.StatusOK {
+		t.Fatalf("first put = %d", w.Code)
+	}
+	if w := doAs(t, s, learnerToken, http.MethodPut, "/preferences", `{"theme":"ember"}`); w.Code != http.StatusOK {
+		t.Fatalf("second put = %d", w.Code)
+	}
+	w := doAs(t, s, learnerToken, http.MethodGet, "/preferences", "")
+	var got struct {
+		Preferences json.RawMessage `json:"preferences"`
+	}
+	mustDecode(t, w, &got)
+	if string(got.Preferences) != `{"theme":"ember"}` {
+		t.Fatalf("document = %s, want the wholesale replacement", got.Preferences)
+	}
+	if w := doAs(t, s, learnerToken, http.MethodPut, "/preferences", `{"theme":`); w.Code != http.StatusBadRequest {
+		t.Fatalf("malformed put = %d, want 400", w.Code)
+	}
+	// And the stored document survived the malformed attempt.
+	w = doAs(t, s, learnerToken, http.MethodGet, "/preferences", "")
+	mustDecode(t, w, &got)
+	if string(got.Preferences) != `{"theme":"ember"}` {
+		t.Fatalf("document after malformed put = %s, want it untouched", got.Preferences)
 	}
 }

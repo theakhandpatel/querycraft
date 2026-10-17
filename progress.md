@@ -2401,3 +2401,35 @@ Post-commit gate note: the first make test run failed at lint (a PATH ordering
 issue on this machine, not the tree) and audit-shell held the old toggle's
 name strings; the check now holds the themes button's ("aria-label=Themes"),
 verified with the same intent — an icon-only control must keep its name.
+
+## User-defined themes + per-account preference sync, 2026-10-17
+
+The theming engine's promised second stage: users make their own themes, and
+preferences follow the account.
+
+- Creation: name, accent (color picker), base family (light/dark surfaces).
+  The full token set derives from the base plus the accent, with the same
+  contrast math the shipped presets pass — accent-ink and the button ink are
+  tuned toward the base text color until they clear 4.5:1, and the button
+  fill is pulled if neither pure ink does. A user theme cannot fail the gate
+  because it is built by the gate's rule. The derived 32 tokens are stored
+  with the theme, so rendering injects a style element over the stored JSON
+  and never re-derives.
+- Sync: `app.user_settings` (per account, per key) and `GET/PUT /preferences`
+  (owner-scoped by session; the account never comes from the body). The
+  client persists the theme id and custom themes to the gateway on every
+  change and applies the account's document on boot — the theme follows the
+  learner across devices. Offline adapters answer null honestly and the
+  device's localStorage stands. The gateway stores and returns the document
+  without interpreting it.
+- Found live and fixed: a theme change and a custom-theme save fired in the
+  same handler, and the theme's sync read the previous render's custom-theme
+  array — clobbering the doc. The sync now reads a ref updated
+  synchronously by every mutation. (One earlier-created theme was lost to the
+  bug's clobbered doc before the fix; the second and third creations prove
+  accumulation.)
+
+Verified: two user themes created through the UI persist in
+`app.user_settings` (full 32-token sets), apply on selection, and the boot
+sync applies the account's document. go build/vet/test green,
+`make test` exit 0 (1187 checks), `make verify` exit 0.

@@ -37,6 +37,8 @@ import { datasetFor } from '../lib/dataset';
 import { dialectFor } from '../lib/dialect';
 import { datasetVersion } from '../api/dataset';
 import { scrollToNode } from '../lib/scroll';
+import { injectUserThemes } from '../lib/userThemes';
+import type { UserTheme } from '../lib/userThemes';
 import { clearRun, readRun, writeRun } from '../lib/runResume';
 import { jobIsRunning } from '../api/ai';
 import type { AiAvailability, AiOutcome } from '../api/aiContract';
@@ -69,6 +71,7 @@ import type {
   Screen,
   SignupInput,
   ThemeName,
+  ThemePreference,
   UiState,
   UserRole,
 } from '../types';
@@ -209,9 +212,12 @@ export interface StoreValue {
   requestPrompt: (req: PromptRequest) => void;
   closePrompt: () => void;
 
-  theme: ThemeName;
-  effectiveTheme: Exclude<ThemeName, 'system'>;
-  setTheme: (m: ThemeName) => void;
+  theme: ThemePreference;
+  effectiveTheme: ThemePreference;
+  customThemes: UserTheme[];
+  saveCustomTheme: (t: UserTheme) => void;
+  deleteCustomTheme: (id: string) => void;
+  setTheme: (m: ThemePreference) => void;
   cycleTheme: () => void;
   motion: boolean;
   setMotion: () => void;
@@ -399,7 +405,7 @@ export function StoreProvider({ children }: { children: React.ReactNode }) {
     if (entry.chapterIndex != null) return entry.chapterIndex;
     return nextChapterIndexOf(entry.courseId ? courseById(entry.courseId) : COURSES[0], progress);
   });
-  const [theme, setThemeState] = useState<ThemeName>(() => loadJSON<ThemeName>(THEME_KEY, 'light'));
+  const [theme, setThemeState] = useState<ThemePreference>(() => loadJSON<ThemePreference>(THEME_KEY, 'light'));
   const [motion, setMotionState] = useState<boolean>(() => loadJSON<boolean>(MOTION_KEY, false));
   const [reviewTab, setReviewTab] = useState('overview');
   const [tablesOpen, setTablesOpen] = useState(false);
@@ -507,10 +513,44 @@ export function StoreProvider({ children }: { children: React.ReactNode }) {
   }, [api]);
 
   /* ---------- theme + motion ---------- */
+  /* User-defined themes: their token blocks are injected as a style element,
+     so any id resolves the moment the data-theme attribute names it. The
+     list itself is state (rendered by the Appearance picker) and is synced
+     to the account with the theme preference. */
+  const initialCustom = loadJSON<UserTheme[]>('qc.customThemes', []);
+  const [customThemes, setCustomThemes] = useState<UserTheme[]>(initialCustom);
+  /* The sync saves in setTheme read this ref, not the state variable: a save
+     and a theme change fire in the same handler, and the state variable would
+     still hold the previous render's array. The ref is updated synchronously
+     by every mutation. */
+  const customThemesRef = useRef<UserTheme[]>(initialCustom);
+  useEffect(() => {
+    injectUserThemes(customThemes);
+    saveJSON('qc.customThemes', customThemes);
+  }, [customThemes]);
+
   const effectiveTheme = theme === 'system' ? (window.matchMedia && window.matchMedia('(prefers-color-scheme: dark)').matches ? 'dark' : 'light') : theme;
   useEffect(() => {
     document.documentElement.setAttribute('data-theme', effectiveTheme);
   }, [effectiveTheme]);
+  /* The account's preference outranks the device's localStorage once it is
+     known: the theme follows the learner across devices. The offline adapter
+     answers null and the device choice stands. */
+  useEffect(() => {
+    if (api.mode !== 'http' || !authReady || !session) return;
+    let alive = true;
+    void api.preferences().then((prefs) => {
+      if (!alive || !prefs) return;
+      const savedTheme = typeof prefs.theme === 'string' ? prefs.theme : null;
+      const savedCustom = Array.isArray(prefs.customThemes) ? (prefs.customThemes as UserTheme[]) : null;
+      if (savedCustom) { customThemesRef.current = savedCustom; setCustomThemes(savedCustom); }
+      if (savedTheme && savedTheme !== theme) {
+        setThemeState(savedTheme as ThemePreference);
+        saveJSON(THEME_KEY, savedTheme);
+      }
+    }).catch(() => { /* the gateway could not be asked; the device choice stands */ });
+    return () => { alive = false; };
+  }, [api, authReady, session]);
   useEffect(() => {
     const mq = window.matchMedia ? window.matchMedia('(prefers-color-scheme: dark)') : null;
     if (!mq) return;
@@ -1860,9 +1900,35 @@ export function StoreProvider({ children }: { children: React.ReactNode }) {
     // theme
     theme,
     effectiveTheme,
-    setTheme: (m: ThemeName) => {
+    setTheme: (m: ThemePreference) => {
       setThemeState(m);
       saveJSON(THEME_KEY, m);
+      // The preference follows the account: written to the gateway when one
+      // is attached, in addition to the device's localStorage above.
+      if (api.mode === 'http' && session?.token) {
+        void api.savePreferences({ theme: m, customThemes: customThemesRef.current }).catch(() => { /* device keeps it */ });
+      }
+    },
+    customThemes,
+    saveCustomTheme: (t: UserTheme) => {
+      const next = customThemesRef.current.some((x) => x.id === t.id)
+        ? customThemesRef.current.map((x) => (x.id === t.id ? t : x))
+        : [...customThemesRef.current, t];
+      customThemesRef.current = next;
+      setCustomThemes(next);
+      saveJSON('qc.customThemes', next);
+      if (api.mode === 'http' && session?.token) {
+        void api.savePreferences({ theme, customThemes: next }).catch(() => { /* device keeps it */ });
+      }
+    },
+    deleteCustomTheme: (id: string) => {
+      const next = customThemesRef.current.filter((x) => x.id !== id);
+      customThemesRef.current = next;
+      setCustomThemes(next);
+      saveJSON('qc.customThemes', next);
+      if (api.mode === 'http' && session?.token) {
+        void api.savePreferences({ theme, customThemes: next }).catch(() => { /* device keeps it */ });
+      }
     },
     cycleTheme: () => {
       const next = theme === 'light' ? 'dark' : 'light';

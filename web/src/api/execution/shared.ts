@@ -43,6 +43,11 @@ export interface ExecutionServiceShape extends AiServiceShape {
   /* The gateway's measured readiness report. Null on the offline adapters:
      there is no gateway to ask, and a lookalike would be a lie. */
   diagnostics(): Effect.Effect<DiagnosticsReport | null>;
+  /* Per-account client preferences. The gateway stores the document without
+     interpreting it; the offline adapters answer null honestly and their
+     saves resolve to the stored value they cannot keep. */
+  preferences(): Effect.Effect<Record<string, unknown> | null>;
+  savePreferences(prefs: Record<string, unknown>): Effect.Effect<Record<string, unknown>>;
   readonly config: ApiConfig;
   /* Accounts. `me` resolves to null when there is no valid session (including a
      401 from the gateway, which also clears the stored token) so boot restore

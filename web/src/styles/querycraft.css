@@ -198,6 +198,15 @@ button.small .ico{width:14px;height:14px}
 .inventoryactions{display:flex;gap:6px;flex:none}
 .linklike{border:0;background:transparent;color:var(--accent-ink);cursor:pointer;padding:0;font:inherit;text-decoration:underline;text-underline-offset:2px}
 
+/* User theme cards + creator */
+.themecard{position:relative;display:flex;flex-direction:column;gap:8px;align-items:flex-start;padding:12px;border-radius:var(--r-md);border:1px solid var(--line);background:var(--surface);cursor:pointer;text-align:left;min-width:150px}
+.themecard.selected{border-color:var(--accent);box-shadow:0 0 0 1px var(--accent)}
+.themecardhit{all:unset;display:flex;flex-direction:column;gap:8px;align-items:flex-start;cursor:pointer;width:100%}
+.themecardactions{position:absolute;top:8px;right:8px;display:flex;gap:4px}
+.themecardactions .small{padding:3px 6px}
+.themecreator{margin:0 0 14px;max-width:520px}
+.themecreator h3{font-size:14px;margin-bottom:8px}
+
 /* AI provider form */
 .aiform{display:grid;gap:10px;margin-top:10px}
 .airow{display:grid;grid-template-columns:150px minmax(0,1fr);align-items:center;gap:12px}

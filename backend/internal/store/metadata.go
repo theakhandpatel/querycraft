@@ -275,6 +275,12 @@ const (
 
 	settingSQL = `SELECT value FROM %s WHERE key = ?`
 
+	saveUserSettingSQL = `INSERT INTO %s (user_id, key, value, updated_at)
+		 VALUES (?, ?, ?, ?)
+		 ON CONFLICT (user_id, key) DO UPDATE SET value = excluded.value, updated_at = excluded.updated_at`
+
+	userSettingSQL = `SELECT value FROM %s WHERE user_id = ? AND key = ?`
+
 	createSessionSQL = `INSERT INTO %s (token, user_id, created_at, expires_at)
 		 VALUES (?, ?, ?, ?)`
 
@@ -340,6 +346,35 @@ func (s *sqlStore) SaveSetting(ctx context.Context, key, value string) error {
 func (s *sqlStore) Setting(ctx context.Context, key string) (string, bool, error) {
 	var raw []byte
 	err := s.queryRow(ctx, s.stmt(settingSQL, "settings"), key).Scan(&raw)
+	if s.dialect.noRows(err) {
+		return "", false, nil
+	}
+	if err != nil {
+		return "", false, err
+	}
+	return string(raw), true, nil
+}
+
+// SaveUserSetting implements Store. Owner-scoped: the user id comes from the
+// session in the handler, never from the body.
+func (s *sqlStore) SaveUserSetting(ctx context.Context, userID, key, value string) error {
+	if userID == "" {
+		return errors.New("user is required")
+	}
+	if key == "" {
+		return errors.New("setting key is required")
+	}
+	raw, err := s.dialect.encodeJSON(json.RawMessage(value))
+	if err != nil {
+		return err
+	}
+	return s.exec(ctx, s.stmt(saveUserSettingSQL, "user_settings"), userID, key, raw, s.dialect.stamp(time.Now()))
+}
+
+// UserSetting implements Store.
+func (s *sqlStore) UserSetting(ctx context.Context, userID, key string) (string, bool, error) {
+	var raw []byte
+	err := s.queryRow(ctx, s.stmt(userSettingSQL, "user_settings"), userID, key).Scan(&raw)
 	if s.dialect.noRows(err) {
 		return "", false, nil
 	}

@@ -158,6 +158,8 @@ export function createExecutionApi(opts: {
     adminCourses: () => call((svc) => svc.adminCourses()),
     adminAI: () => call((svc) => svc.adminAI()),
     adminAIModels: () => call((svc) => svc.adminAIModels()),
+    preferences: () => call((svc) => svc.preferences()),
+    savePreferences: (prefs) => call((svc) => svc.savePreferences(prefs)),
     saveAdminAI: (update) => call((svc) => svc.saveAdminAI(update)),
     diagnostics: () => call((svc) => svc.diagnostics()),
     getCourse: (id) => call((svc) => svc.getCourse(id)),

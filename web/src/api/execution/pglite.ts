@@ -249,6 +249,11 @@ export function pgliteLayer(config: ApiConfig = PGLITE_CONFIG, note: NoteFn = ()
        null rather than a report about the page-local engine: the field's
        consumers render a gateway panel, and a lookalike would be a lie. */
     diagnostics: () => Effect.succeed(null),
+    /* There is no server to keep preferences on, and inventing a durable
+       answer would be a lie; the browser's own localStorage already carries
+       the theme offline. */
+    preferences: () => Effect.succeed(null),
+    savePreferences: (prefs) => Effect.succeed(prefs),
     capabilities: () =>
       Effect.sync(() => {
         const postgres = engineCapabilities();

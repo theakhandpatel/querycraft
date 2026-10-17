@@ -446,6 +446,50 @@ const Spec = `{
         }
       }
     },
+    "/preferences": {
+      "get": {
+        "operationId": "getPreferences",
+        "security": [{"bearerAuth": []}],
+        "tags": ["system"],
+        "summary": "The caller's client preferences (theme, custom themes).",
+        "description": "One JSON document per account under the 'ui' key. It is what makes a theme follow the account across devices; a device that has never saved preferences gets ok with null preferences, never an invented default. The body is client-owned JSON: the gateway stores and returns it, it does not interpret it.",
+        "responses": {
+          "200": {
+            "description": "The stored preference document, or null when the account has none.",
+            "content": {"application/json": {"schema": {"$ref": "#/components/schemas/PreferencesResponse"}}}
+          },
+          "401": {
+            "description": "No session (AUTH_REQUIRED).",
+            "content": {"application/json": {"schema": {"$ref": "#/components/schemas/ErrorEnvelope"}}}
+          }
+        }
+      },
+      "put": {
+        "operationId": "putPreferences",
+        "security": [{"bearerAuth": []}],
+        "tags": ["system"],
+        "summary": "Save the caller's client preferences.",
+        "description": "Replaces the account's 'ui' document wholesale. Owner-scoped: the account comes from the session, never the body. The document is client-owned JSON (theme id, custom theme token sets); the gateway stores it and does not interpret it. Bounded by the same body limit as every write.",
+        "requestBody": {
+          "required": true,
+          "content": {"application/json": {"schema": {"$ref": "#/components/schemas/PreferencesUpdate"}}}
+        },
+        "responses": {
+          "200": {
+            "description": "Saved; the response echoes ok with the stored document.",
+            "content": {"application/json": {"schema": {"$ref": "#/components/schemas/PreferencesResponse"}}}
+          },
+          "400": {
+            "description": "Malformed JSON or the document exceeds the body limit.",
+            "content": {"application/json": {"schema": {"$ref": "#/components/schemas/ErrorEnvelope"}}}
+          },
+          "401": {
+            "description": "No session (AUTH_REQUIRED).",
+            "content": {"application/json": {"schema": {"$ref": "#/components/schemas/ErrorEnvelope"}}}
+          }
+        }
+      }
+    },
     "/admin/ai": {
       "get": {
         "operationId": "getAdminAI",
@@ -1658,6 +1702,18 @@ const Spec = `{
           "timeout_ms": {"type": "integer"},
           "source": {"type": "string", "enum": ["database", "boot"]}
         }
+      },
+      "PreferencesResponse": {
+        "type": "object",
+        "required": ["ok", "preferences"],
+        "properties": {
+          "ok": {"type": "boolean"},
+          "preferences": {"description": "The client-owned preference document, or null when the account has none."}
+        }
+      },
+      "PreferencesUpdate": {
+        "type": "object",
+        "description": "The client-owned preference document, stored wholesale under the account's 'ui' key."
       },
       "AdminAIModelList": {
         "type": "object",

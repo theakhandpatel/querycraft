@@ -75,6 +75,8 @@ func (s *Server) routes() []route {
 		// Owner-scoped learner data.
 		{http.MethodGet, "/progress/{course}", s.handleGetProgress, authRequired},
 		{http.MethodPut, "/progress/{course}", s.handlePutProgress, authRequired},
+		{http.MethodGet, "/preferences", s.handleGetPreferences, authRequired},
+		{http.MethodPut, "/preferences", s.handlePutPreferences, authRequired},
 		{http.MethodPost, "/events", s.handleEvent, authRequired},
 
 		// Generation and the records it stores.

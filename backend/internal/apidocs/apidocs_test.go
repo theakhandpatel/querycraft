@@ -35,6 +35,8 @@ var openAPIOperations = []struct {
 	{http.MethodGet, "/courses"},
 	{http.MethodGet, "/admin/courses"},
 	{http.MethodGet, "/admin/ai"},
+	{http.MethodGet, "/preferences"},
+	{http.MethodPut, "/preferences"},
 	{http.MethodPut, "/admin/ai"},
 	{http.MethodGet, "/admin/ai/models"},
 	{http.MethodGet, "/courses/{id}"},

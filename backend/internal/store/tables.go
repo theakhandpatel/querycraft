@@ -248,6 +248,19 @@ var appTables = []ddlTable{
 		},
 	},
 	{
+		/* Per-user client preferences (theme, custom themes), owner-scoped by
+		 * the session like progress. One row per user per key; value is the
+		 * JSON the client feature owns. */
+		name: "user_settings",
+		columns: []ddlColumn{
+			{name: "user_id", kind: kindText, notNull: true, refs: "users(id)", onDelete: "CASCADE"},
+			{name: "key", kind: kindText, notNull: true},
+			{name: "value", kind: kindJSON, notNull: true},
+			{name: "updated_at", kind: kindTimestamp, notNull: true, def: nowDefault},
+		},
+		primary: []string{"user_id", "key"},
+	},
+	{
 		/* Runtime settings an administrator changes while the gateway runs
 		 * (the AI provider, today). One row per key; value is the JSON the
 		 * feature owns. A key/value shape on purpose: the next runtime setting

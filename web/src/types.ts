@@ -598,6 +598,11 @@ export interface ExecutionApi {
   /** Admin. Every chat model in the gateway's embedded catalog — the picker
       behind the pi-ai provider's model field. Offline adapters answer empty. */
   adminAIModels(): Promise<AdminAIModelEntry[]>;
+  /** The caller's client preferences (theme, custom themes), or null when the
+      account has none. Offline adapters answer null honestly. */
+  preferences(): Promise<Record<string, unknown> | null>;
+  /** Replace the caller's preference document wholesale. */
+  savePreferences(prefs: Record<string, unknown>): Promise<Record<string, unknown>>;
   /** Admin. Save and apply an AI configuration while the gateway runs; it
       survives a restart because the boot path applies the stored setting. */
   saveAdminAI(update: AdminAIUpdate): Promise<AdminAIConfig>;
@@ -668,6 +673,10 @@ export type ThemeName =
   | 'terminal'
   | 'contrast-dark'
   | 'system';
+
+/** The theme preference is any preset id, a user theme id ('user-…'), or
+    'system'. It is a string in the store because user themes are dynamic. */
+export type ThemePreference = ThemeName | `user-${string}`;
 
 export interface UiState {
   selectedCourseId: string;

@@ -1,6 +1,8 @@
 import Icon from '../ui/Icon';
+import { useState } from 'react';
 import { THEMES } from '../../lib/themes';
-import type { ThemeName } from '../../types';
+import { buildUserTheme, deriveUserTokens, type UserTheme } from '../../lib/userThemes';
+import type { ThemePreference } from '../../types';
 import { useStore } from '../../state/store';
 import ImportControl from '../ui/ImportControl';
 
@@ -11,8 +13,28 @@ function Switch({ labelledBy, on, onClick }: { labelledBy: string; on: boolean; 
   return <div className="switch" role="switch" aria-checked={on} aria-labelledby={labelledBy} tabIndex={0} onClick={onClick} onKeyDown={(e) => { if (e.key === ' ' || e.key === 'Enter') { e.preventDefault(); onClick(); } }}></div>;
 }
 
+
 export default function AppearanceScreen() {
   const s = useStore();
+  /* The creator state: a name, an accent, and the base family the neutral
+     tokens come from. Saving derives the full token set (the same contrast
+     math the shipped presets pass) and applies it immediately. */
+  const [form, setForm] = useState({ name: '', accent: '#7da7ff', base: 'light' as 'light' | 'dark' });
+  const [editing, setEditing] = useState<{ id: string; name: string; accent: string; base: 'light' | 'dark' } | null>(null);
+
+  function saveCustom() {
+    const name = (editing ? editing.name : form.name).trim() || 'My theme';
+    const accent = (editing ? editing.accent : form.accent).trim();
+    const base = editing ? editing.base : form.base;
+    const theme: UserTheme = editing
+      ? { ...editing, name, accent, tokens: deriveUserTokens(accent, base) }
+      : buildUserTheme(name, accent, base);
+    s.saveCustomTheme(theme);
+    s.setTheme(theme.id as ThemePreference);
+    setEditing(null);
+    setForm({ name: '', accent: '#7da7ff', base: 'light' });
+  }
+
   const last = s.apiLog[0];
   /* Report what is actually behind the surface for the active adapter. */
   const engineLine =
@@ -56,16 +78,65 @@ export default function AppearanceScreen() {
       <div className="card">
         <h2>Theme</h2>
         <p className="mt-8">
-          Choose the palette. System follows your OS setting. Every preset
-          clears 4.5:1 on its key text pairs — the contrast audit gates them.
+          Choose the palette. System follows your OS setting. Every preset —
+          and every theme you make — clears 4.5:1 on its key text pairs; the
+          derivation tunes the inks itself. Your theme follows your account.
         </p>
+        {(form.name || form.accent || true) && (
+          <div className="themecreator card pad">
+            <h3>{editing ? 'Edit your theme' : 'Make your own'}</h3>
+            <div className="airow">
+              <label htmlFor="theme-name">Name</label>
+              <input id="theme-name" value={editing ? editing.name : form.name} onChange={(e) => (editing ? setEditing({ ...editing, name: e.target.value }) : setForm({ ...form, name: e.target.value }))} placeholder="My theme" />
+            </div>
+            <div className="airow">
+              <label htmlFor="theme-accent">Accent</label>
+              <input id="theme-accent" type="color" value={editing ? editing.accent : form.accent} onChange={(e) => (editing ? setEditing({ ...editing, accent: e.target.value }) : setForm({ ...form, accent: e.target.value }))} />
+            </div>
+            <div className="airow">
+              <label htmlFor="theme-base">Base</label>
+              <select id="theme-base" value={editing ? editing.base : form.base} onChange={(e) => (editing ? setEditing({ ...editing, base: e.target.value as 'light' | 'dark' }) : setForm({ ...form, base: e.target.value as 'light' | 'dark' }))}>
+                <option value="light">Light surfaces</option>
+                <option value="dark">Dark surfaces</option>
+              </select>
+            </div>
+            <div className="airow">
+              <label aria-hidden="true" />
+              <button className="primary" onClick={saveCustom}>
+                {editing ? 'Save theme' : 'Create and apply'}
+              </button>
+            </div>
+            {editing && (
+              <div className="airow">
+                <label aria-hidden="true" />
+                <button className="small ghost" onClick={() => setEditing(null)}>Cancel edit</button>
+              </div>
+            )}
+          </div>
+        )}
         <div className="themerow">
+          {s.customThemes.map((t) => (
+            <div key={t.id} className={`themecard${s.theme === t.id ? ' selected' : ''}`}>
+              <button className="themecardhit" onClick={() => s.setTheme(t.id as ThemePreference)} aria-label={`Use ${t.name}`}>
+                <span className="swatch"><i style={{ background: t.tokens['--bg'] }}></i><i style={{ background: t.tokens['--surface'] }}></i><i style={{ background: t.tokens['--accent'] }}></i></span>
+                <strong>{t.name}</strong>
+              </button>
+              <div className="themecardactions">
+                <button className="small ghost" aria-label={`Edit ${t.name}`} title="Edit accent" onClick={() => setEditing({ id: t.id, name: t.name, accent: t.accent, base: t.base as 'light' | 'dark' })}>
+                  <Icon name="edit" />
+                </button>
+                <button className="small ghost" aria-label={`Delete ${t.name}`} title="Delete" onClick={() => s.deleteCustomTheme(t.id)}>
+                  <Icon name="x" />
+                </button>
+              </div>
+            </div>
+          ))}
           <button className={`themecard${s.theme === 'system' ? ' selected' : ''}`} onClick={() => s.setTheme('system')}>
             <span className="swatch"><i style={{ background: '#f4f5f7' }}></i><i style={{ background: '#181a1f' }}></i><i style={{ background: '#0d7d68' }}></i></span>
             <strong>System</strong>
           </button>
           {THEMES.map((t) => (
-            <button key={t.id} className={`themecard${s.theme === t.id ? ' selected' : ''}`} onClick={() => s.setTheme(t.id as ThemeName)}>
+            <button key={t.id} className={`themecard${s.theme === t.id ? ' selected' : ''}`} onClick={() => s.setTheme(t.id as ThemePreference)}>
               <span className="swatch"><i style={{ background: t.swatch.bg }}></i><i style={{ background: t.swatch.surface }}></i><i style={{ background: t.swatch.accent }}></i></span>
               <strong>{t.label}</strong>
             </button>

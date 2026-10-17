@@ -177,7 +177,10 @@ export function httpLayer(opts: {
       return parsed;
     });
 
-  const service: ExecutionServiceShape = {
+    const isRecordBody = (v: unknown): v is Record<string, unknown> =>
+    typeof v === "object" && v !== null && !Array.isArray(v);
+
+const service: ExecutionServiceShape = {
     config,
     /* AI operations (design §11). Generation always resolves to an outcome the
        screen can render; the non-outcome calls keep the typed error channel.
@@ -231,6 +234,29 @@ export function httpLayer(opts: {
           };
         }),
         Effect.catch(() => Effect.succeed<DiagnosticsReport | null>(null)),
+      ),
+    preferences: () =>
+      request('GET', '/preferences').pipe(
+        Effect.catch(() => Effect.succeed(null)),
+        Effect.map((json): Record<string, unknown> | null => {
+          if (!isRecordBody(json)) return null;
+          const prefs = (json as { preferences?: unknown }).preferences;
+          return prefs && typeof prefs === 'object' && !Array.isArray(prefs)
+            ? (prefs as Record<string, unknown>)
+            : null;
+        }),
+      ),
+    savePreferences: (prefs) =>
+      request('PUT', '/preferences', prefs).pipe(
+        Effect.catch(() => Effect.succeed(prefs)),
+        Effect.map((json): Record<string, unknown> => {
+          const parsed = json && typeof json === 'object' && !Array.isArray(json)
+            ? (json as { preferences?: unknown }).preferences
+            : null;
+          return parsed && typeof parsed === 'object' && !Array.isArray(parsed)
+            ? (parsed as Record<string, unknown>)
+            : prefs;
+        }),
       ),
     capabilities: () =>
       request('GET', '/capabilities').pipe(

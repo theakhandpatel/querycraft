@@ -57,6 +57,14 @@ type Store interface {
 	UserByID(ctx context.Context, id string) (User, bool, error)
 	CountUsers(ctx context.Context) (int, error)
 	SetPasswordHash(ctx context.Context, userID, hash string) error
+	// UserSetting reads one client preference row for an account. found is
+	// false when the account has never saved that key.
+	UserSetting(ctx context.Context, userID, key string) (value string, found bool, err error)
+
+	// SaveUserSetting writes one client preference row for an account,
+	// replacing any previous value.
+	SaveUserSetting(ctx context.Context, userID, key, value string) error
+
 	// Setting reads one runtime setting by key. found is false when the key
 	// has never been saved; value is the raw JSON text it was saved with.
 	Setting(ctx context.Context, key string) (value string, found bool, err error)

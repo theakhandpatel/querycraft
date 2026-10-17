@@ -29,6 +29,7 @@ type Memory struct {
 	patches    map[string]memoryPatch          // key: patch id
 	runs       map[string]schema.RunTranscript // key: run id
 	settings   map[string]string               // key: setting key; value: raw JSON text
+	userPrefs  map[string]map[string]string    // key: user id; value: key → raw JSON text
 }
 
 // memoryPatch is a stored proposal plus the approval that may follow it. An
@@ -491,6 +492,37 @@ func (m *Memory) CountUsers(_ context.Context) (int, error) {
 }
 
 // UserIDs implements Store: every account id, for the environment reaper.
+// UserSetting implements Store.
+func (m *Memory) UserSetting(_ context.Context, userID, key string) (string, bool, error) {
+	m.mu.RLock()
+	defer m.mu.RUnlock()
+	if m.userPrefs == nil || m.userPrefs[userID] == nil {
+		return "", false, nil
+	}
+	v, ok := m.userPrefs[userID][key]
+	return v, ok, nil
+}
+
+// SaveUserSetting implements Store.
+func (m *Memory) SaveUserSetting(_ context.Context, userID, key, value string) error {
+	if userID == "" {
+		return errors.New("user is required")
+	}
+	if key == "" {
+		return errors.New("setting key is required")
+	}
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	if m.userPrefs == nil {
+		m.userPrefs = make(map[string]map[string]string)
+	}
+	if m.userPrefs[userID] == nil {
+		m.userPrefs[userID] = make(map[string]string)
+	}
+	m.userPrefs[userID][key] = value
+	return nil
+}
+
 // Setting implements Store.
 func (m *Memory) Setting(_ context.Context, key string) (string, bool, error) {
 	m.mu.RLock()
