@@ -2300,3 +2300,18 @@ next pass does not re-litigate them: Cmd/Ctrl+K closes an open drawer before
 focusing search (the drawers yield to search by design), and one Escape press
 closes one layer, topmost first. A third, cosmetic and pre-existing: the SQL
 cell's Ctrl+Enter chip is visible on touch screens where it is noise.
+
+## Instance configuration: live AI provider, 2026-10-17
+
+This deployment's AI provider is configured through the manage surface's own
+runtime path: openai-compatible at the operator's model gateway, model
+deepseek-v4.1-flash, key stored (write-only, never in a response body). Proof,
+not intention: `/capabilities` answers available with that provider and model,
+and a full challenge generation ran through the real pipeline with it —
+validated, executed in a scratch environment, cross-checked, adversarial
+fixtures, stored, and active ("Customer completed-order totals").
+
+A second OpenAI-compatible credential (cline-pass) exists in the operator's
+local opencode credential store and can be switched to from the manage panel
+when its base URL is supplied; it is deliberately not recorded here in any
+usable form, and the key is not in this repository.
