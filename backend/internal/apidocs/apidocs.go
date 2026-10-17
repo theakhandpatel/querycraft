@@ -473,7 +473,7 @@ const Spec = `{
         "security": [{"bearerAuth": []}],
         "tags": ["generation"],
         "summary": "Save and apply an AI configuration while the gateway runs (administrators).",
-        "description": "Persists the configuration under the store's 'ai' key (it survives a restart: the boot path applies it over the config file's provider) and swaps the running configuration. Provider is one of 'off', 'fake', 'openai-compatible'; the openai-compatible provider requires base_url and model. An empty key keeps the stored one, so a round-trip through the manage surface never demands the key again. The run budget follows the boot derivation from the saved call timeout. Requests and jobs submitted after the save build their services from the new configuration; a run already in flight keeps the provider it started with. Nothing here touches the config file: the file is the boot document, the store is the runtime one. A signed-in learner is refused with 403 ADMIN_REQUIRED.",
+        "description": "Persists the configuration under the store's 'ai' key (it survives a restart: the boot path applies it over the config file's provider) and swaps the running configuration. Provider is one of 'off', 'fake', 'openai-compatible', 'pi-ai'; the openai-compatible provider requires base_url and model. 'pi-ai' runs every completion through pi's unified multi-provider API (Anthropic, OpenAI completions and responses, Gemini): a model ref such as anthropic/claude-sonnet-4-5 resolves against the embedded model catalog, or set base_url and model to target any custom OpenAI-compatible server. An empty key keeps the stored one, so a round-trip through the manage surface never demands the key again. The run budget follows the boot derivation from the saved call timeout. Requests and jobs submitted after the save build their services from the new configuration; a run already in flight keeps the provider it started with. Nothing here touches the config file: the file is the boot document, the store is the runtime one. A signed-in learner is refused with 403 ADMIN_REQUIRED.",
         "requestBody": {
           "required": true,
           "content": {"application/json": {"schema": {"$ref": "#/components/schemas/AdminAIUpdate"}}}
@@ -1628,7 +1628,7 @@ const Spec = `{
         "required": ["ok", "provider", "key_set", "source"],
         "properties": {
           "ok": {"type": "boolean"},
-          "provider": {"type": "string", "enum": ["off", "fake", "openai-compatible"]},
+          "provider": {"type": "string", "enum": ["off", "fake", "openai-compatible", "pi-ai"]},
           "base_url": {"type": "string", "description": "Present for openai-compatible. Never present from a boot-configured provider: the config file holds it."},
           "model": {"type": "string"},
           "key_set": {"type": "boolean", "description": "Whether an API key is stored. The key itself never travels back in a body."},
@@ -1640,7 +1640,7 @@ const Spec = `{
         "type": "object",
         "required": ["provider"],
         "properties": {
-          "provider": {"type": "string", "enum": ["off", "fake", "openai-compatible"]},
+          "provider": {"type": "string", "enum": ["off", "fake", "openai-compatible", "pi-ai"]},
           "base_url": {"type": "string"},
           "model": {"type": "string"},
           "key": {"type": "string", "description": "Write-only. Empty keeps the stored key."},

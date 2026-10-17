@@ -169,3 +169,26 @@ policy would live in code we review.
 - **Residual risk, stated:** a provider can still return a contract-shaped
   mistake. The §11.1 cross-check catches some of those, not all, because two
   solutions can share a mistake: no interface choice removes that.
+
+## Reopening note, 2026-10-17: the wire layer is adopted, not owned
+
+The decision above held until the providers customers actually asked for went
+past the OpenAI wire format. The 250-line client had no SSE streaming, no
+Retry-After-aware retries, no token accounting and no native Anthropic or
+Gemini support — and none of those primitives are this product's to own: they
+are solved problems with tested implementations.
+
+The wire layer is now `github.com/sky-valley/pi/ai` (the Go port of pi's
+unified multi-provider LLM API), wrapped as one more `provider.Provider`
+implementation in `internal/ai/provider/piai`. The seam is unchanged: two
+methods, one completion in, text out. The pipeline, the repair rules, the
+schema enforcement and the redaction stay in the gateway, because grading
+policy is the product. The fake provider stays, so CI still proves the whole
+pipeline offline. A custom OpenAI-compatible server (a model gateway, vLLM,
+llama.cpp) is supported through the same adapter by naming a base URL instead
+of a catalog entry.
+
+Cost of the adoption, stated plainly: the backend's Go floor moves from 1.25
+to 1.26 (the port declares `go 1.26`), and a fast-moving third-party module
+now sits in the grading path — contained behind the seam, where a revert or a
+replacement is one package.

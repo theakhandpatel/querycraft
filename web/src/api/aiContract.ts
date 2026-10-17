@@ -386,7 +386,7 @@ export interface AiRecord {
     travels back: key_set is the only credential fact in a body. */
 export interface AdminAIConfig {
   ok: boolean;
-  provider: 'off' | 'fake' | 'openai-compatible';
+  provider: 'off' | 'fake' | 'openai-compatible' | 'pi-ai';
   base_url?: string;
   model?: string;
   key_set: boolean;
@@ -396,7 +396,7 @@ export interface AdminAIConfig {
 
 /** The write shape. An empty key keeps the stored one. */
 export interface AdminAIUpdate {
-  provider: 'off' | 'fake' | 'openai-compatible';
+  provider: 'off' | 'fake' | 'openai-compatible' | 'pi-ai';
   base_url?: string;
   model?: string;
   key?: string;

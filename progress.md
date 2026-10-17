@@ -2315,3 +2315,38 @@ A second OpenAI-compatible credential (cline-pass) exists in the operator's
 local opencode credential store and can be switched to from the manage panel
 when its base URL is supplied; it is deliberately not recorded here in any
 usable form, and the key is not in this repository.
+
+## Wire layer adopted: pi/ai behind the provider seam, 2026-10-17
+
+The spike the provider discussion called for is in. `internal/ai/provider/piai`
+implements the two-method seam over github.com/sky-valley/pi/ai — pi's unified
+multi-provider LLM API ported to Go. What the gateway no longer owns: the
+Anthropic, OpenAI completions/responses and Gemini wire adapters, SSE parsing,
+Retry-After-aware retries, the embedded model catalog and token accounting.
+What stays ours: the pipeline, the repair rules, the schema enforcement, the
+redaction, the key handling, and the deterministic fake provider for CI.
+
+- Two modes. A catalog ref (`provider/model`, e.g. `anthropic/claude-sonnet-4-5`)
+  resolves against the embedded catalog and serves any of its providers. A
+  base_url targets any custom OpenAI-compatible server (a model gateway, vLLM,
+  llama.cpp) with the model id that server knows. Both arrive through the
+  manage surface's `pi-ai` provider kind, persisted and hot-swapped like the
+  others.
+- The mapping is tested offline: a scripted Api provider registered under a
+  test-only name proves the request mapping (system prompt on the transcript,
+  UserContent's repair context and schema instruction, the course agent's
+  tool-call/tool-result turns), the response mapping (text, parsed tool calls,
+  token counts) and the error path — no network.
+- Found live, fixed: pi's catalog adapters register in init via a blank import
+  of ai/providers, the documented contract for using ai without pi's coding
+  package. The first live call answered "No API provider registered for api:
+  openai-completions"; the blank import fixed it, and the next tutor call
+  graded a real attempt through deepseek with actionable feedback.
+- Cost, stated plainly: the backend Go floor is now 1.26 (the port declares
+  go 1.26; the machine toolchain was upgraded and the READMEs updated), and a
+  fast-moving third-party module sits in the grading path — contained behind
+  the two-method seam, where a revert or replacement is one package.
+
+Verified: go build/vet/test green under Go 1.26.9 (adapter tests + the full
+suite), `make test` exit 0 (1187 checks), `make verify` exit 0, and a live
+tutor completion through deepseek-v4.1-flash via the pi-ai provider.

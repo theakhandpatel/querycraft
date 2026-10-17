@@ -43,7 +43,7 @@ export default function ManageScreen() {
   const [busyId, setBusyId] = useState<string | null>(null);
 
   const [ai, setAi] = useState<AdminAIConfig | null>(null);
-  const [aiForm, setAiForm] = useState<{ provider: 'off' | 'fake' | 'openai-compatible'; base_url: string; model: string; key: string; timeout_ms: string }>({
+  const [aiForm, setAiForm] = useState<{ provider: 'off' | 'fake' | 'openai-compatible' | 'pi-ai'; base_url: string; model: string; key: string; timeout_ms: string }>({
     provider: 'fake',
     base_url: '',
     model: '',
@@ -138,8 +138,8 @@ export default function ManageScreen() {
     try {
       const cfg = await s.api.saveAdminAI({
         provider: aiForm.provider,
-        base_url: aiForm.provider === 'openai-compatible' ? aiForm.base_url.trim() : undefined,
-        model: aiForm.provider === 'openai-compatible' ? aiForm.model.trim() : undefined,
+        base_url: aiForm.provider === 'openai-compatible' || aiForm.provider === 'pi-ai' ? aiForm.base_url.trim() || undefined : undefined,
+        model: aiForm.provider === 'off' ? undefined : aiForm.model.trim(),
         key: aiForm.key.trim() === '' ? undefined : aiForm.key.trim(),
         timeout_ms: timeout,
       });
@@ -211,7 +211,9 @@ export default function ManageScreen() {
             <h2>AI provider</h2>
             {ai === null && !aiError && <p className="muted">Reading the configuration…</p>}
             {aiError && <p className="authhint">{aiError}</p>}
-            {ai !== null && (
+            {ai !== null && (() => {
+              const mode = aiForm.provider;
+              return (
               <form
                 className="aiform"
                 onSubmit={(e) => { e.preventDefault(); void saveAI(); }}
@@ -225,18 +227,19 @@ export default function ManageScreen() {
                   <select id="ai-provider" value={aiForm.provider} onChange={(e) => setAiForm({ ...aiForm, provider: e.target.value as typeof aiForm.provider })}>
                     <option value="fake">fake — deterministic, no network</option>
                     <option value="openai-compatible">openai-compatible</option>
+                    <option value="pi-ai">pi-ai — any catalog provider (Anthropic, OpenAI, Gemini, …)</option>
                     <option value="off">off</option>
                   </select>
                 </div>
-                {aiForm.provider === 'openai-compatible' && (
+                {(mode === 'openai-compatible' || mode === 'pi-ai') && (
                   <>
                     <div className="airow">
-                      <label htmlFor="ai-base">Base URL</label>
-                      <input id="ai-base" value={aiForm.base_url} onChange={(e) => setAiForm({ ...aiForm, base_url: e.target.value })} placeholder="https://llm.internal.example/v1" />
+                      <label htmlFor="ai-base">{mode === 'pi-ai' ? 'Base URL (optional)' : 'Base URL'}</label>
+                      <input id="ai-base" value={aiForm.base_url} onChange={(e) => setAiForm({ ...aiForm, base_url: e.target.value })} placeholder={mode === 'pi-ai' ? 'Custom OpenAI-compatible server; empty uses the catalog' : 'https://llm.internal.example/v1'} />
                     </div>
                     <div className="airow">
                       <label htmlFor="ai-model">Model</label>
-                      <input id="ai-model" value={aiForm.model} onChange={(e) => setAiForm({ ...aiForm, model: e.target.value })} placeholder="inhouse-4" />
+                      <input id="ai-model" value={aiForm.model} onChange={(e) => setAiForm({ ...aiForm, model: e.target.value })} placeholder={mode === 'pi-ai' ? 'provider/model, e.g. anthropic/claude-sonnet-4-5' : 'inhouse-4'} />
                     </div>
                     <div className="airow">
                       <label htmlFor="ai-key">API key</label>
@@ -266,7 +269,8 @@ export default function ManageScreen() {
                   setting survives a restart because the boot path applies it.
                 </p>
               </form>
-            )}
+              );
+            })()}
           </section>
 
           <section className="card pad" aria-label="Stored courses">

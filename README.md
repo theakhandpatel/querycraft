@@ -60,7 +60,7 @@ a skip link, visible focus, and dialogs that trap and return focus.
 
 ## Try it
 
-You need Go 1.25 or later and Node 20.19 or later. If `go` is not on `PATH`,
+You need Go 1.26 or later and Node 20.19 or later. If `go` is not on `PATH`,
 run `export PATH=$PATH:/usr/local/go/bin`.
 
 ```sh

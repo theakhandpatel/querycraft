@@ -10,7 +10,7 @@ one contract seam (`contracts/`, JSON Schema):
 | Track | Path | Stack |
 | --- | --- | --- |
 | Frontend | `web/` | React 18 + TypeScript + Vite, Effect for the execution layer; default execution is real PostgreSQL (WASM) via PGlite, in a Web Worker, with learner data in IndexedDB |
-| Backend | `backend/` | Go 1.25 + real PostgreSQL (embedded local server by default, or any `database_url` in `querycraft.json`), JSON HTTP gateway (Swagger/OpenAPI docs) |
+| Backend | `backend/` | Go 1.26 + real PostgreSQL (embedded local server by default, or any `database_url` in `querycraft.json`), JSON HTTP gateway (Swagger/OpenAPI docs) |
 | Vendored Effect source | `.worktrees/vendor-effect/vendor/effect/` | git subtree of Effect-TS/effect |
 
 The tracks have disjoint file sets. Work on one does not disturb the other.

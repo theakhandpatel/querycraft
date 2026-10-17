@@ -5,10 +5,12 @@ import (
 	"encoding/json"
 	"log/slog"
 	"net/http"
+	"strings"
 	"time"
 
 	"github.com/querycraft/sqlquery/backend/internal/ai"
 	"github.com/querycraft/sqlquery/backend/internal/ai/provider"
+	"github.com/querycraft/sqlquery/backend/internal/ai/provider/piai"
 )
 
 /*
@@ -109,7 +111,7 @@ func (s *Server) handleAdminAISave(w http.ResponseWriter, r *http.Request) {
 	switch body.Provider {
 	case "", "off", "none", "disabled":
 		body.Provider = "off"
-	case "fake", "deterministic", "openai", "openai-compatible":
+	case "fake", "deterministic", "openai", "openai-compatible", "pi-ai":
 		if body.Provider == "fake" || body.Provider == "deterministic" {
 			body.Provider = "fake"
 		}
@@ -120,6 +122,18 @@ func (s *Server) handleAdminAISave(w http.ResponseWriter, r *http.Request) {
 			if body.BaseURL == "" || body.Model == "" {
 				errorEnvelope(w, http.StatusBadRequest, "AI_INVALID_REQUEST",
 					"The openai-compatible provider needs base_url and model.")
+				return
+			}
+		}
+		if body.Provider == "pi-ai" {
+			if body.Model == "" {
+				errorEnvelope(w, http.StatusBadRequest, "AI_INVALID_REQUEST",
+					"The pi-ai provider needs a model ref (provider/model, e.g. anthropic/claude-sonnet-4-5) or a base_url and model for a custom server.")
+				return
+			}
+			if body.BaseURL == "" && !strings.Contains(body.Model, "/") {
+				errorEnvelope(w, http.StatusBadRequest, "AI_INVALID_REQUEST",
+					"The pi-ai provider's model is a provider/model ref (e.g. anthropic/claude-sonnet-4-5), or set base_url and model for a custom server.")
 				return
 			}
 		}
@@ -209,6 +223,28 @@ func providerFromAISetting(s aiSetting, log *slog.Logger) provider.Provider {
 			Timeout:        time.Duration(s.TimeoutMS) * time.Millisecond,
 			MaxOutputBytes: provider.DefaultMaxOutputBytes,
 		})
+	case "pi-ai":
+		if s.BaseURL != "" {
+			// A custom OpenAI-compatible server: the model id is the server's own.
+			p, err := piai.New(piai.Config{Model: s.Model, APIKey: s.Key, BaseURL: s.BaseURL, TimeoutMS: s.TimeoutMS, MaxRetries: 2})
+			if err != nil {
+				log.Warn("AI stays off: the pi-ai provider rejected the configuration", "err", err)
+				return nil
+			}
+			return p
+		}
+		// A catalog ref: provider/model resolves against the embedded catalog.
+		ref := strings.SplitN(s.Model, "/", 2)
+		if len(ref) != 2 {
+			log.Warn("AI stays off: the pi-ai provider needs a provider/model model ref", "model", s.Model)
+			return nil
+		}
+		p, err := piai.New(piai.Config{Provider: ref[0], Model: ref[1], APIKey: s.Key, TimeoutMS: s.TimeoutMS, MaxRetries: 2})
+		if err != nil {
+			log.Warn("AI stays off: the pi-ai provider rejected the configuration", "err", err)
+			return nil
+		}
+		return p
 	default: // "off"
 		log.Info("AI generation is off by configuration")
 		return nil

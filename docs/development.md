@@ -72,7 +72,7 @@ the verdicts for the run on 2026-10-16.
 
 ## Working on the gateway
 
-You need Go 1.25 or later. If `go` is not on `PATH`, run
+You need Go 1.26 or later. If `go` is not on `PATH`, run
 `export PATH=$PATH:/usr/local/go/bin`.
 
 ```sh

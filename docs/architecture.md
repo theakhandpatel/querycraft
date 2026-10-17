@@ -36,7 +36,7 @@ graph TB
     RUNS["run"]
   end
 
-  subgraph Backend["backend/<br/>Go 1.25 gateway (one binary)"]
+  subgraph Backend["backend/<br/>Go 1.26 gateway (one binary)"]
     HAPI["httpapi<br/>JSON API + OpenAPI + /docs"]
     ENG["engine<br/>one Execute path"]
     EVAL["eval + perf<br/>grading"]
