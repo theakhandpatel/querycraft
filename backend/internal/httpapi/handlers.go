@@ -1,5 +1,22 @@
 package httpapi
 
+/* Core request handlers.
+ *
+ * This file serves the routes no sibling file owns: /health and /capabilities
+ * describe what the gateway is, /query, /explain and /answers/evaluate run the
+ * learner's SQL, and the progress, preferences and event routes persist
+ * owner-scoped learner data. The dataset, environment, plan, dialect, run and
+ * AI handlers live in dataset.go, environment.go, plan.go, dialect.go, runs.go
+ * and ai.go.
+ *
+ * Every handler follows the same shape. It reads and validates the body with
+ * readJSON, then resolves the caller with requireUser. It does the work through
+ * a collaborator: engine.Executor for a statement, the store for learner data.
+ * It writes one contract shape with writeJSON. A refusal is an errorEnvelope or
+ * a QueryResult, and the writer names its stable code through a note* helper so
+ * the access log can filter on it.
+ */
+
 import (
 	"bytes"
 	"context"
@@ -27,7 +44,7 @@ func (s *Server) handleHealth(w http.ResponseWriter, r *http.Request) {
 	// which chapters it may offer.
 	writeJSON(w, http.StatusOK, map[string]any{
 		"status":   "ok",
-		"engine":   engine.DialectOf(s.exec),
+		"engine":   s.exec.Dialect(),
 		"version":  version,
 		"dialects": s.Dialects(),
 		// True only when the seeded default administrator can be signed in with
@@ -64,9 +81,9 @@ func (s *Server) handleCapabilities(w http.ResponseWriter, r *http.Request) {
 		// step 1). PostgreSQL is always present and always the default.
 		"dialects": s.Dialects(),
 		// Whether a signed-in learner gets a writable workspace on this
-		// gateway. The client cannot know this on its own — a session is not a
-		// workspace — so the gateway answers the half of the question it owns
-		// and the client answers the other half (does it have a session).
+		// gateway. The client cannot know this on its own: a session is not a
+		// workspace. The gateway answers the half of the question it owns, and
+		// the client answers the other half (does it have a session).
 		"writable": writable,
 		// The M5 plan lab (design 14): what a client needs to know before it
 		// offers an Explain button, and why it is off when it is off.
@@ -87,19 +104,22 @@ type statementRequest struct {
 	Dataset string `json:"dataset"`
 }
 
-// perfMarker is the exercise's PerfContract, read only to route a plan lesson
-// to the perf dataset when the request names no dataset itself. It is the same
-// "exercise" object the evaluator reads; see evaluateRequest.UnmarshalJSON.
-type perfMarker struct {
-	Exercise *planExercise `json:"exercise"`
-}
-
 // queryRequest is the POST /query body.
 type queryRequest struct {
 	statementRequest
 	SQL      string        `json:"sql"`
 	Limits   engine.Limits `json:"limits"`
 	Exercise *planExercise `json:"exercise"`
+}
+
+// noteStatement names a statement's refusal code for the access log. The code
+// lives inside the contract shape the client reads and only the writer knows
+// which shape it is writing, so the writer says it rather than a reader
+// guessing where in the body it lives.
+func noteStatement(w http.ResponseWriter, res engine.QueryResult) {
+	if res.Error != nil {
+		noteError(w, res.Error.Code)
+	}
 }
 
 func (s *Server) handleQuery(w http.ResponseWriter, r *http.Request) {
@@ -118,6 +138,7 @@ func (s *Server) handleQuery(w http.ResponseWriter, r *http.Request) {
 	if !admitted {
 		res := s.busyResult(ctx, start)
 		s.recordStatement(res)
+		noteStatement(w, res)
 		writeJSON(w, http.StatusBadRequest, res)
 		return
 	}
@@ -130,6 +151,7 @@ func (s *Server) handleQuery(w http.ResponseWriter, r *http.Request) {
 	if refusal != nil {
 		refusal.DurationMS = engine.RoundMS(time.Since(start))
 		s.recordStatement(*refusal)
+		noteStatement(w, *refusal)
 		writeJSON(w, http.StatusBadRequest, refusal)
 		return
 	}
@@ -140,6 +162,7 @@ func (s *Server) handleQuery(w http.ResponseWriter, r *http.Request) {
 	if res.Status != "succeeded" {
 		status = http.StatusBadRequest
 	}
+	noteStatement(w, res)
 	writeJSON(w, status, res)
 }
 
@@ -159,6 +182,7 @@ func (s *Server) handleEvaluate(w http.ResponseWriter, r *http.Request) {
 	if !admitted {
 		qr := s.busyResult(ctx, start)
 		s.recordStatement(qr)
+		noteStatement(w, qr)
 		writeJSON(w, http.StatusOK, eval.Response{
 			QR:         qr,
 			Checks:     []eval.CheckResult{},
@@ -177,6 +201,7 @@ func (s *Server) handleEvaluate(w http.ResponseWriter, r *http.Request) {
 	if refusal != nil {
 		refusal.DurationMS = engine.RoundMS(time.Since(start))
 		s.recordStatement(*refusal)
+		noteStatement(w, *refusal)
 		writeJSON(w, http.StatusOK, eval.Response{
 			QR:         *refusal,
 			Checks:     []eval.CheckResult{},
@@ -188,6 +213,7 @@ func (s *Server) handleEvaluate(w http.ResponseWriter, r *http.Request) {
 
 	resp := eval.Evaluate(ctx, exec, req.Request)
 	s.recordStatement(resp.QR)
+	noteStatement(w, resp.QR)
 	writeJSON(w, http.StatusOK, resp)
 }
 
@@ -196,11 +222,11 @@ func (s *Server) handleEvaluate(w http.ResponseWriter, r *http.Request) {
 // inlines eval.Request's fields, so an existing client's body decodes unchanged
 // and a new one may add "dialect" and "dataset".
 //
-// The body's single "exercise" key carries two things at once — the evaluator's
+// The body's single "exercise" key carries two things at once: the evaluator's
 // exercise spec and the perf marker that routes the statement to the perf
-// dataset — so the request is decoded twice, each pass reading the shape it
-// knows. A single reflection-based decode cannot hold both, because the two
-// fields would share one JSON key.
+// dataset. The request is decoded twice, each pass reading the shape it knows.
+// A single reflection-based decode cannot hold both, because the two fields
+// would share one JSON key.
 type evaluateRequest struct {
 	eval.Request
 	statementRequest
@@ -217,13 +243,16 @@ func (req *evaluateRequest) UnmarshalJSON(data []byte) error {
 	}
 	var routing struct {
 		statementRequest
-		perfMarker
+		// The exercise's PerfContract, read only to route a plan lesson to the
+		// perf dataset when the request names no dataset itself. It is the same
+		// "exercise" object the evaluator reads.
+		Exercise *planExercise `json:"exercise"`
 	}
 	if err := json.Unmarshal(data, &routing); err != nil {
 		return err
 	}
 	req.statementRequest = routing.statementRequest
-	req.Exercise = routing.perfMarker.Exercise
+	req.Exercise = routing.Exercise
 	return nil
 }
 
@@ -245,120 +274,6 @@ func (s *Server) handleTables(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	writeJSON(w, http.StatusOK, res)
-}
-
-// handleSQLiteTables introspects the SQLite workspace over the executor seam: the
-// live relations, their declared types verbatim, the row counts, and a header
-// preview (column names, no invented rows — the same honesty rule the perf
-// tables response follows).
-func (s *Server) handleSQLiteTables(w http.ResponseWriter, r *http.Request, datasetID string) {
-	if s.sqlite == nil {
-		errorEnvelope(w, http.StatusBadRequest, engine.CodeDialectMismatch,
-			"This gateway does not serve the sqlite dialect.")
-		return
-	}
-	ctx := r.Context()
-	ex, err := s.sqliteExecutor(ctx, r)
-	if err != nil {
-		environmentUnavailable(w, err)
-		return
-	}
-
-	names, qerr := sqliteTableNames(ctx, ex)
-	if qerr != nil {
-		writeSQLiteTablesError(w, qerr)
-		return
-	}
-	out := dataset.TablesResponse{Dataset: datasetID, Version: 1}
-	for _, name := range names {
-		cols, info, qerr := sqliteTableColumns(ctx, ex, name)
-		if qerr != nil {
-			writeSQLiteTablesError(w, qerr)
-			return
-		}
-		info.Name = name
-		info.Cols = cols
-		previewCols := make([]string, 0, len(cols))
-		for _, c := range cols {
-			previewCols = append(previewCols, c[0])
-		}
-		info.Preview = [][]string{previewCols}
-		info.Rows = sqliteRowCount(ctx, ex, name)
-		out.Rows += info.Rows
-		out.Tables = append(out.Tables, info)
-	}
-	writeJSON(w, http.StatusOK, out)
-}
-
-// sqliteTableNames lists the learner-visible relations, excluding SQLite's own
-// bookkeeping tables.
-func sqliteTableNames(ctx context.Context, ex engine.Executor) ([]string, *engine.QueryError) {
-	res := engine.Execute(ctx, ex,
-		"SELECT name FROM sqlite_master WHERE type='table' AND name NOT LIKE 'sqlite_%' ORDER BY name",
-		engine.DefaultLimits())
-	if res.Status != "succeeded" {
-		return nil, res.Error
-	}
-	names := make([]string, 0, len(res.Rows))
-	for _, row := range res.Rows {
-		if len(row) == 0 {
-			continue
-		}
-		names = append(names, fmt.Sprint(row[0]))
-	}
-	return names, nil
-}
-
-// sqliteTableColumns reads PRAGMA table_info for one table: name, declared type,
-// and whether the column is part of the primary key.
-func sqliteTableColumns(ctx context.Context, ex engine.Executor, table string) ([][]string, dataset.TableInfo, *engine.QueryError) {
-	res := engine.Execute(ctx, ex, "PRAGMA table_info("+quoteSQLiteIdent(table)+")", engine.DefaultLimits())
-	if res.Status != "succeeded" {
-		return nil, dataset.TableInfo{}, res.Error
-	}
-	// PRAGMA table_info columns: cid, name, type, notnull, dflt_value, pk.
-	cols := make([][]string, 0, len(res.Rows))
-	for _, row := range res.Rows {
-		if len(row) < 6 {
-			continue
-		}
-		name := fmt.Sprint(row[1])
-		declType := fmt.Sprint(row[2])
-		flags := ""
-		if fmt.Sprint(row[5]) != "0" {
-			flags = "pk"
-		}
-		cols = append(cols, []string{name, declType, flags})
-	}
-	return cols, dataset.TableInfo{}, nil
-}
-
-// sqliteRowCount counts one table's rows; a count failure is reported as 0 rather
-// than failing the whole drawer, because a missing count is not a missing schema.
-func sqliteRowCount(ctx context.Context, ex engine.Executor, table string) int {
-	res := engine.Execute(ctx, ex, "SELECT count(*) FROM "+quoteSQLiteIdent(table), engine.DefaultLimits())
-	if res.Status != "succeeded" || len(res.Rows) != 1 || len(res.Rows[0]) != 1 {
-		return 0
-	}
-	switch n := res.Rows[0][0].(type) {
-	case int64:
-		return int(n)
-	case int:
-		return n
-	case float64:
-		return int(n)
-	}
-	return 0
-}
-
-// quoteSQLiteIdent wraps an identifier in double quotes, escaping any embedded
-// quote, so a table name that is a keyword still resolves.
-func quoteSQLiteIdent(name string) string {
-	return `"` + strings.ReplaceAll(name, `"`, `""`) + `"`
-}
-
-func writeSQLiteTablesError(w http.ResponseWriter, qerr *engine.QueryError) {
-	errorEnvelope(w, http.StatusBadRequest, qerr.Code, qerr.Message)
 }
 
 func (s *Server) handleGetProgress(w http.ResponseWriter, r *http.Request) {

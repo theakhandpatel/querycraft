@@ -46,9 +46,6 @@ func TestWritableExecutorCommitsAndReadOnlyRollsBack(t *testing.T) {
 		t.Fatalf("open the writable executor: %v", err)
 	}
 	defer writable.Close()
-	if !writable.Writable() {
-		t.Fatal("a writable executor reports itself read-only")
-	}
 
 	// The default executor is a different pool on the same DSN. It is the only
 	// proof of commit that a single connection cannot fake: a row written and
@@ -58,9 +55,6 @@ func TestWritableExecutorCommitsAndReadOnlyRollsBack(t *testing.T) {
 		t.Fatalf("open the read-only executor: %v", err)
 	}
 	defer readonly.Close()
-	if readonly.Writable() {
-		t.Fatal("NewPgxExecutor produced a writable executor; the default must stay read-only")
-	}
 
 	// 1. An INSERT through the writable executor succeeds.
 	if res := Execute(ctx, writable,

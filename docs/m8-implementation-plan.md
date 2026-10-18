@@ -53,11 +53,16 @@ model writes the next one.
 | --- | --- |
 | Outline accepted | `building`, plan carries title/level/objectives and the planned chapters with no sections yet |
 | Each `save_chapter` pass | `building`, that chapter's sections and exercises appended, with its measured rows |
+| Paused for approval | `awaiting_approval`, the outline still the whole plan |
 | `finish_course` / all chapters verified | `active` |
+| A build that stopped without finishing | `interrupted`, keeping the chapters that verified; POST /courses/{id}/build resumes it |
 | No chapter ever verified | the run is refused and nothing is activated |
 
-A learner who reloads mid-run sees the chapters that already passed. A run that
-dies leaves a `building` course with the chapters it managed, instead of nothing.
+A learner who reloads mid-run sees the chapters that already passed. A run whose
+process died is swept at the next boot: a row with a written chapter becomes
+`interrupted` and can be resumed, and a row with none is removed rather than
+left as a ghost. A pause is its own status too, so a live build, a paused one
+and a stopped one are never confused on a reload.
 
 ## Bounds
 

@@ -1,5 +1,5 @@
 // Package piai implements the gateway's provider seam over sky-valley/pi's ai
-// package — the Go port of pi's unified multi-provider LLM API.
+// package. It is the Go port of pi's unified multi-provider LLM API.
 //
 // The split this package exists to honor: the wire primitives are a solved
 // problem and not ours. pi/ai owns the Anthropic Messages, OpenAI completions
@@ -10,11 +10,10 @@
 // gateway's own ProviderResponse.
 //
 // Two things deliberately stay out of here. The JSON-schema enforcement is the
-// pipeline's: pi carries the prompt, the gateway grades the reply against the
-// schema itself. And the API key is passed through to pi's request options
-// exactly once — pi's adapters handle the header, the scrubbing and the retry
-// policy, which is the reason this dependency was adopted (ADR 0005's reopening
-// note: the primitives are commodity; the policy is not).
+// pipeline's: pi carries the prompt, and the gateway grades the reply against
+// the schema itself. And the API key passes to pi's request options exactly
+// once, because pi's adapters own the header, the scrubbing and the retry
+// policy. That policy is the reason the dependency was adopted (ADR 0005).
 package piai
 
 import (
@@ -22,6 +21,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"strings"
+	"time"
 
 	"github.com/sky-valley/pi/ai"
 
@@ -35,10 +35,10 @@ import (
 	"github.com/querycraft/sqlquery/backend/internal/ai/provider"
 )
 
-// Config selects the model. Provider+Model name a catalog entry (any of the
-// embedded catalog's providers — anthropic, openai, google, openrouter, …).
-// BaseURL, when set, targets a custom OpenAI-compatible server instead — a
-// model gateway, vLLM, llama.cpp — and Provider is ignored.
+// Config selects the model. Provider and Model name an entry in the embedded
+// catalog (anthropic, openai, google, openrouter, and the rest). BaseURL, when
+// set, targets a custom OpenAI-compatible server instead (a model gateway,
+// vLLM, llama.cpp) and ignores Provider.
 type Config struct {
 	Provider   string
 	Model      string
@@ -53,7 +53,6 @@ type Config struct {
 type PIAI struct {
 	cfg    Config
 	model  *ai.Model
-	api    string
 	provID string
 }
 
@@ -67,17 +66,7 @@ func New(cfg Config) (*PIAI, error) {
 	}
 	p := &PIAI{cfg: cfg}
 	if cfg.BaseURL != "" {
-		p.model = &ai.Model{
-			ID:            cfg.Model,
-			Name:          cfg.Model,
-			Api:           "openai-completions",
-			Provider:      "custom",
-			BaseURL:       cfg.BaseURL,
-			Input:         []string{"text"},
-			ContextWindow: 128000,
-			MaxTokens:     16384,
-		}
-		p.api = "openai-completions"
+		p.model = provider.CustomModel(cfg.BaseURL, cfg.Model)
 		p.provID = "custom"
 		return p, nil
 	}
@@ -89,7 +78,6 @@ func New(cfg Config) (*PIAI, error) {
 		return nil, fmt.Errorf("pi-ai: unknown model %s/%s in the model catalog", cfg.Provider, cfg.Model)
 	}
 	p.model = model
-	p.api = model.Api
 	p.provID = string(model.Provider)
 	return p, nil
 }
@@ -101,9 +89,9 @@ type CatalogEntry struct {
 	Name     string
 }
 
-// Catalog lists every chat model pi's embedded catalog knows — the same list
-// the provider resolver matches Model refs against, sourced from models.dev.
-// The manage surface offers it as the provider picker.
+// Catalog lists every chat model pi's embedded catalog knows, sourced from
+// models.dev. It is the same list the provider resolver matches Model refs
+// against, so the manage surface offers it as the provider picker.
 func Catalog() []CatalogEntry {
 	out := make([]CatalogEntry, 0, 1024)
 	for _, prov := range ai.GetProviders() {
@@ -130,9 +118,20 @@ func (p *PIAI) Descriptor() provider.ProviderDescriptor {
 	}
 }
 
+// Course is the pi-ai provider's answer to the course-agent capability: the
+// model it resolved at construction and the configured key. StreamFn is nil,
+// so the agent loop streams through pi's own provider adapters.
+func (p *PIAI) Course() provider.CourseCapability {
+	return provider.CourseCapability{
+		Model: p.model,
+		Key:   func(string) string { return p.cfg.APIKey },
+	}
+}
+
 // Complete implements provider.Provider. It is one pi completion: the request
 // becomes a Context, the reply's text and usage come back through the seam.
 func (p *PIAI) Complete(ctx context.Context, req provider.ProviderRequest) (provider.ProviderResponse, error) {
+	start := time.Now()
 	aiCtx := p.toContext(req)
 	opts := &ai.SimpleStreamOptions{
 		StreamOptions: ai.StreamOptions{
@@ -151,11 +150,7 @@ func (p *PIAI) Complete(ctx context.Context, req provider.ProviderRequest) (prov
 		return provider.ProviderResponse{}, fmt.Errorf("pi-ai: %s", msg.ErrorMessage)
 	}
 	resp := provider.ProviderResponse{
-		FinishReason: string(msg.StopReason),
-		Provider:     "pi-ai",
-		Model:        p.model.ID,
-		TokensIn:     msg.Usage.Input,
-		TokensOut:    msg.Usage.Output,
+		LatencyMS: float64(time.Since(start).Microseconds()) / 1000,
 	}
 	var text strings.Builder
 	for _, c := range msg.Content {
@@ -180,41 +175,15 @@ func (p *PIAI) Complete(ctx context.Context, req provider.ProviderRequest) (prov
 	return resp, nil
 }
 
-// toContext maps the seam's request onto pi's Context. A single-shot request
-// is the system prompt plus the user message the proven transport builds —
-// UserContent carries the repair context and the schema instruction, so a
-// pi-ai reply has exactly the shape the pipeline validates. A conversation is
-// mapped turn by turn, including the tool turns the course agent writes.
+// toContext maps the seam's one-shot request onto pi's Context: the system
+// prompt plus the user message the proven transport builds. UserContent
+// carries the repair context and the schema instruction, so a pi-ai reply has
+// exactly the shape the pipeline validates.
 func (p *PIAI) toContext(req provider.ProviderRequest) ai.Context {
-	if len(req.Messages) == 0 {
-		return ai.Context{
-			SystemPrompt: req.System,
-			Messages: []ai.Message{
-				ai.UserMessage{Content: ai.ContentList{ai.TextContent{Text: provider.UserContent(req)}}},
-			},
-		}
+	return ai.Context{
+		SystemPrompt: req.System,
+		Messages: []ai.Message{
+			ai.UserMessage{Content: ai.ContentList{ai.TextContent{Text: provider.UserContent(req)}}},
+		},
 	}
-	out := make([]ai.Message, 0, len(req.Messages))
-	for _, m := range req.Messages {
-		switch m.Role {
-		case "system":
-			out = append(out, ai.SystemMessage{Content: ai.ContentList{ai.TextContent{Text: m.Content}}})
-		case "assistant":
-			content := ai.ContentList{ai.TextContent{Text: m.Content}}
-			for _, tc := range m.ToolCalls {
-				args := map[string]any{}
-				_ = json.Unmarshal([]byte(tc.Function.Arguments), &args)
-				content = append(content, ai.ToolCall{ID: tc.ID, Name: tc.Function.Name, Arguments: args})
-			}
-			out = append(out, ai.AssistantMessage{Content: content})
-		case "tool":
-			out = append(out, ai.ToolResultMessage{
-				ToolCallID: m.ToolCallID,
-				Content:    ai.ContentList{ai.TextContent{Text: m.Content}},
-			})
-		default: // "user" and anything unrecognized reads as the learner's turn.
-			out = append(out, ai.UserMessage{Content: ai.ContentList{ai.TextContent{Text: m.Content}}})
-		}
-	}
-	return ai.Context{Messages: out}
 }

@@ -4,10 +4,9 @@
 // of the §11.1 pipeline has passed against a real engine, and a generated
 // challenge is never graded by anything except the deterministic evaluator.
 //
-// The package is provider-neutral on purpose (§11.2): it depends on the small
-// Provider interface and a deterministic in-memory provider ships with it, so
-// generation can be exercised with no network, no key and no vendor SDK. The
-// provider decision is settled in an ADR after a spike, not by preference.
+// The package is provider-neutral (§11.2): it depends on the small Provider
+// interface, and a deterministic in-memory provider ships with it, so
+// generation can run with no network, no key and no vendor SDK.
 package ai
 
 import (
@@ -28,17 +27,31 @@ import (
 // enum (contracts/query-result.schema.json): a generation is not a query. Any
 // QueryResult embedded in an AI response still uses the closed enum.
 const (
-	CodeAIAvailable      = "AI_AVAILABLE"
-	CodeUnavailable      = "AI_UNAVAILABLE"
-	CodeInvalidRequest   = "AI_INVALID_REQUEST"
-	CodeInvalidArtifact  = "AI_INVALID_ARTIFACT"
-	CodeReferenceFailed  = "AI_REFERENCE_FAILED"
+	// CodeUnavailable: the provider is off, a provider call failed, or a store
+	// write failed.
+	CodeUnavailable = "AI_UNAVAILABLE"
+	// CodeInvalidRequest: the caller's request is malformed.
+	CodeInvalidRequest = "AI_INVALID_REQUEST"
+	// CodeInvalidArtifact: the generated bundle failed the policy gate, or a
+	// reply carried a stored solution and was discarded.
+	CodeInvalidArtifact = "AI_INVALID_ARTIFACT"
+	// CodeReferenceFailed: the reference solution does not satisfy its own
+	// result contract.
+	CodeReferenceFailed = "AI_REFERENCE_FAILED"
+	// CodeCrossCheckFailed: the two solutions disagree under the contract.
 	CodeCrossCheckFailed = "AI_CROSS_CHECK_FAILED"
-	CodeRepairExhausted  = "AI_REPAIR_EXHAUSTED"
-	CodeNotFound         = "AI_NOT_FOUND"
-	CodePatchUnverified  = "AI_PATCH_UNVERIFIED"
-	CodePatchUnapproved  = "AI_PATCH_UNAPPROVED"
-	CodeEnvironmentDown  = "ENVIRONMENT_UNAVAILABLE"
+	// CodeRepairExhausted: no more specific stage code applies and the repair
+	// budget is spent.
+	CodeRepairExhausted = "AI_REPAIR_EXHAUSTED"
+	// CodeNotFound: no such challenge or patch.
+	CodeNotFound = "AI_NOT_FOUND"
+	// CodePatchUnverified: a patch passed the approval but failed verification.
+	CodePatchUnverified = "AI_PATCH_UNVERIFIED"
+	// CodePatchUnapproved: a patch was submitted without an approval.
+	CodePatchUnapproved = "AI_PATCH_UNAPPROVED"
+	// CodeEnvironmentDown: no database is available to verify against, or a
+	// scratch environment could not be created.
+	CodeEnvironmentDown = "ENVIRONMENT_UNAVAILABLE"
 )
 
 // NewError builds an envelope error. It is the one constructor for the closed
@@ -47,9 +60,6 @@ const (
 func NewError(code, stage, message, detail string) *schema.Error {
 	return &schema.Error{Code: code, Stage: stage, Message: message, Detail: detail}
 }
-
-// ErrNotConfigured is returned when no provider is wired at all.
-var ErrNotConfigured = errors.New("ai: no provider configured")
 
 /* ---------- tutoring, critique, defects ---------- */
 
@@ -120,11 +130,11 @@ type PatchDecision struct {
 	ApprovedBy  string `json:"approved_by"`
 }
 
-// PatchResult reports what happened to the approval.
+// PatchResult reports what happened to the approval. A refusal carries the
+// reason in the returned error, so the struct never repeats it.
 type PatchResult struct {
 	Applied bool                  `json:"applied"`
 	Patch   *schema.PatchProposal `json:"patch"`
-	Error   *schema.Error         `json:"error"`
 }
 
 /* ---------- availability ---------- */
@@ -142,9 +152,8 @@ type Availability struct {
 	// always answers, whether it activated an artifact or refused one. The
 	// gateway hands the pipeline this budget plus headroom on the request
 	// context, so a client that waits at least this long always reads the
-	// pipeline's own honest failure instead of a transport error. A browser
-	// that picks a shorter deadline turns "still working" into "unreachable",
-	// which is how a real course generation was reported as a dead gateway.
+	// pipeline's own failure instead of a transport error. A browser that
+	// picks a shorter deadline turns "still working" into "unreachable".
 	TimeoutMS int64 `json:"timeout_ms,omitempty"`
 }
 
@@ -161,31 +170,18 @@ type Runner interface {
 	Scratch(ctx context.Context, name string) (engine.Executor, func(), error)
 }
 
-// ProvidedRunner is a test seam: it returns an executor directly.
-type ProvidedRunner struct {
-	Exec engine.Executor
-}
-
-// Scratch implements Runner.
-func (p ProvidedRunner) Scratch(context.Context, string) (engine.Executor, func(), error) {
-	if p.Exec == nil {
-		return nil, nil, ErrNotConfigured
-	}
-	return p.Exec, func() {}, nil
-}
-
 /* ---------- limits ---------- */
 
 // Limits bound the cost of a generation run. Every field has a default; a zero
 // value means "use the default", never "unlimited".
 type Limits struct {
-	MaxOutputBytes     int
-	MaxSetupStatements int
-	MaxRepairs         int
-	MaxHints           int
-	MaxConcurrent      int
-	Timeout            time.Duration
-	MaxPromptChars     int
+	MaxOutputBytes     int           // largest provider reply or artifact prompt, in bytes
+	MaxSetupStatements int           // most setup statements one bundle may carry
+	MaxRepairs         int           // most repair calls per run
+	MaxHints           int           // most hints a challenge may carry
+	MaxConcurrent      int           // most generation runs in flight at once
+	Timeout            time.Duration // wall clock for one whole run
+	MaxPromptChars     int           // most characters in one request text field
 }
 
 // DefaultLimits are the bounds unless config says otherwise.
@@ -199,9 +195,9 @@ func DefaultLimits() Limits {
 		MaxHints:           3,
 		MaxConcurrent:      2,
 		// A run makes several provider calls (bundle, cross-check, adversarial
-		// fixtures, then up to MaxRepairs more). A 20 s budget fit an offline
-		// fake and cut a real model off mid-run, which surfaced as a failed
-		// request rather than as a slow one.
+		// fixtures, then up to MaxRepairs more), so the budget must cover all
+		// of them. A shorter budget cuts a real model off mid-run, which the
+		// client then reads as a failed request rather than a slow one.
 		Timeout:        120 * time.Second,
 		MaxPromptChars: 4000,
 	}
@@ -239,6 +235,11 @@ func (l Limits) Merge(fallback Limits) Limits {
 // Runner is required to validate anything. Missing pieces are reported as
 // Availability rather than as a crash, because "AI is off" is a supported mode
 // (§11.2: core features work without it).
+//
+// Provider is the model seam. A provider that also implements
+// provider.CourseProvider serves the course chapter conversation; see
+// provider.CourseCapability. A provider that does not is refused for a course
+// request with a reason, rather than guessed at.
 type Config struct {
 	Provider provider.Provider
 	Depot    schema.Depot
@@ -248,13 +249,10 @@ type Config struct {
 	// DatasetVersion is stamped into provenance. It is a field rather than an
 	// import so this package does not depend on the dataset's contents.
 	DatasetVersion int
-	// AdversarialFixtures are wrong queries that the evaluator must reject for
-	// every generated artifact. Injected so the caller owns the fixtures.
-	AdversarialFixtures func(a schema.Artifact) []Fixture
 }
 
-// Fixture is one deliberately wrong query.
-type Fixture struct {
+// fixture is one deliberately wrong query.
+type fixture struct {
 	Name string
 	SQL  string
 }
@@ -277,7 +275,7 @@ func (s *Service) Available() Availability {
 	// pipeline, not whether a provider is attached, and a client that has read
 	// it once keeps it across a provider that is temporarily unavailable.
 	if s != nil {
-		av.TimeoutMS = s.cfg.Limits.Merge(DefaultLimits()).Timeout.Milliseconds()
+		av.TimeoutMS = s.cfg.Limits.Timeout.Milliseconds()
 	}
 	if s == nil || s.cfg.Provider == nil {
 		return av
@@ -312,14 +310,14 @@ func (s *Service) Available() Availability {
 	return av
 }
 
-// Limits returns the effective pipeline limits, with defaults applied. The
-// transport layer reads it to give the pipeline headroom inside its own
-// deadline instead of cutting it off mid-stage.
+// Limits returns the effective pipeline limits. The transport layer reads it to
+// give the pipeline headroom inside its own deadline instead of cutting it off
+// mid-stage.
 func (s *Service) Limits() Limits {
 	if s == nil {
 		return DefaultLimits()
 	}
-	return s.cfg.Limits.Merge(DefaultLimits())
+	return s.cfg.Limits
 }
 
 // GenerateChallenge runs the §11.1 pipeline for one challenge.
@@ -332,34 +330,6 @@ func (s *Service) GenerateChallenge(ctx context.Context, req schema.GenerationRe
 func (s *Service) GenerateCourse(ctx context.Context, req schema.GenerationRequest) schema.Outcome {
 	req.Kind = "course"
 	return s.generate(ctx, req)
-}
-
-// Tutor answers with a hint that never reveals the reference solution.
-func (s *Service) Tutor(ctx context.Context, req TutorRequest) (TutorResponse, error) {
-	return s.tutor(ctx, req)
-}
-
-// Critique reviews the learner's query on demand.
-func (s *Service) Critique(ctx context.Context, req CritiqueRequest) (CritiqueResponse, error) {
-	return s.critique(ctx, req)
-}
-
-// ReportDefect verifies a claimed defect by execution before proposing a patch.
-func (s *Service) ReportDefect(ctx context.Context, rep DefectReport) (DefectVerdict, error) {
-	return s.reportDefect(ctx, rep)
-}
-
-// ApplyPatch applies a previously verified patch, and only with approval.
-func (s *Service) ApplyPatch(ctx context.Context, dec PatchDecision) (PatchResult, error) {
-	return s.applyPatch(ctx, dec)
-}
-
-// Challenges lists stored challenges, newest first.
-func (s *Service) Challenges(ctx context.Context) ([]schema.Record, error) {
-	if s == nil || s.cfg.Depot == nil {
-		return nil, NewError(CodeUnavailable, "", "No challenge store is configured.", "")
-	}
-	return s.cfg.Depot.Challenges(ctx)
 }
 
 // ChallengesFor lists one owner's challenges, filtered by the store so the
@@ -404,11 +374,7 @@ func (s *Service) UnavailableOutcome(kind string, avail Availability) schema.Out
 // unavailable is the honest "AI is off" outcome, used by every entry point
 // that cannot proceed without a provider.
 func (s *Service) unavailable(kind string, avail Availability) schema.Outcome {
-	code := CodeUnavailable
 	msg := avail.Reason
-	if s != nil && s.cfg.Provider != nil && s.cfg.Runner == nil {
-		code = CodeEnvironmentDown
-	}
 	if msg == "" {
 		msg = "AI generation is not available."
 	}
@@ -418,8 +384,18 @@ func (s *Service) unavailable(kind string, avail Availability) schema.Outcome {
 		Artifact: nil,
 		Stages:   []schema.Stage{},
 		Attempts: []schema.Attempt{},
-		Error:    NewError(code, "", msg, ""),
+		Error:    NewError(s.unavailableCode(), "", msg, ""),
 	}
+}
+
+// unavailableCode picks the envelope code for an AI-off outcome. A configured
+// provider with no database is an environment failure; anything else is the
+// provider being off.
+func (s *Service) unavailableCode() string {
+	if s != nil && s.cfg.Provider != nil && s.cfg.Runner == nil {
+		return CodeEnvironmentDown
+	}
+	return CodeUnavailable
 }
 
 // decodeJSON decodes a schema-constrained provider reply into v, rejecting

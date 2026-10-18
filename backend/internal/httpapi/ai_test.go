@@ -24,7 +24,6 @@ import (
 type recordingDepot struct {
 	saved        []schema.Record
 	savedCourses []schema.CourseRecord
-	savedRuns    []schema.RunTranscript
 }
 
 func (d *recordingDepot) SaveChallenge(_ context.Context, rec schema.Record) error {
@@ -62,10 +61,7 @@ func (d *recordingDepot) CoursesFor(context.Context, string) ([]schema.CourseRec
 }
 func (d *recordingDepot) DeleteCourse(context.Context, string) error { return nil }
 
-func (d *recordingDepot) SaveRun(_ context.Context, rec schema.RunTranscript) error {
-	d.savedRuns = append(d.savedRuns, rec)
-	return nil
-}
+func (d *recordingDepot) SaveRun(context.Context, schema.RunTranscript) error { return nil }
 func (d *recordingDepot) Run(context.Context, string) (schema.RunTranscript, bool, error) {
 	return schema.RunTranscript{}, false, nil
 }

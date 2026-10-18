@@ -82,38 +82,36 @@ export default function AppearanceScreen() {
           and every theme you make — clears 4.5:1 on its key text pairs; the
           derivation tunes the inks itself. Your theme follows your account.
         </p>
-        {(form.name || form.accent || true) && (
-          <div className="themecreator card pad">
-            <h3>{editing ? 'Edit your theme' : 'Make your own'}</h3>
-            <div className="airow">
-              <label htmlFor="theme-name">Name</label>
-              <input id="theme-name" value={editing ? editing.name : form.name} onChange={(e) => (editing ? setEditing({ ...editing, name: e.target.value }) : setForm({ ...form, name: e.target.value }))} placeholder="My theme" />
-            </div>
-            <div className="airow">
-              <label htmlFor="theme-accent">Accent</label>
-              <input id="theme-accent" type="color" value={editing ? editing.accent : form.accent} onChange={(e) => (editing ? setEditing({ ...editing, accent: e.target.value }) : setForm({ ...form, accent: e.target.value }))} />
-            </div>
-            <div className="airow">
-              <label htmlFor="theme-base">Base</label>
-              <select id="theme-base" value={editing ? editing.base : form.base} onChange={(e) => (editing ? setEditing({ ...editing, base: e.target.value as 'light' | 'dark' }) : setForm({ ...form, base: e.target.value as 'light' | 'dark' }))}>
-                <option value="light">Light surfaces</option>
-                <option value="dark">Dark surfaces</option>
-              </select>
-            </div>
+        <div className="themecreator card pad">
+          <h3>{editing ? 'Edit your theme' : 'Make your own'}</h3>
+          <div className="airow">
+            <label htmlFor="theme-name">Name</label>
+            <input id="theme-name" value={editing ? editing.name : form.name} onChange={(e) => (editing ? setEditing({ ...editing, name: e.target.value }) : setForm({ ...form, name: e.target.value }))} placeholder="My theme" />
+          </div>
+          <div className="airow">
+            <label htmlFor="theme-accent">Accent</label>
+            <input id="theme-accent" type="color" value={editing ? editing.accent : form.accent} onChange={(e) => (editing ? setEditing({ ...editing, accent: e.target.value }) : setForm({ ...form, accent: e.target.value }))} />
+          </div>
+          <div className="airow">
+            <label htmlFor="theme-base">Base</label>
+            <select id="theme-base" value={editing ? editing.base : form.base} onChange={(e) => (editing ? setEditing({ ...editing, base: e.target.value as 'light' | 'dark' }) : setForm({ ...form, base: e.target.value as 'light' | 'dark' }))}>
+              <option value="light">Light surfaces</option>
+              <option value="dark">Dark surfaces</option>
+            </select>
+          </div>
+          <div className="airow">
+            <label aria-hidden="true" />
+            <button className="primary" onClick={saveCustom}>
+              {editing ? 'Save theme' : 'Create and apply'}
+            </button>
+          </div>
+          {editing && (
             <div className="airow">
               <label aria-hidden="true" />
-              <button className="primary" onClick={saveCustom}>
-                {editing ? 'Save theme' : 'Create and apply'}
-              </button>
+              <button className="small ghost" onClick={() => setEditing(null)}>Cancel edit</button>
             </div>
-            {editing && (
-              <div className="airow">
-                <label aria-hidden="true" />
-                <button className="small ghost" onClick={() => setEditing(null)}>Cancel edit</button>
-              </div>
-            )}
-          </div>
-        )}
+          )}
+        </div>
         <div className="themerow">
           {s.customThemes.map((t) => (
             <div key={t.id} className={`themecard${s.theme === t.id ? ' selected' : ''}`}>
@@ -149,14 +147,6 @@ export default function AppearanceScreen() {
         <div className="toggle">
           <div><div className="tl" id="set-motion">Reduced motion</div><div className="ts">Disable transitions and animations</div></div>
           <Switch labelledBy="set-motion" on={s.motion} onClick={s.setMotion} />
-        </div>
-        <div className="toggle">
-          <div><div className="tl" id="set-grids">Wide result grids</div><div className="ts">Allow horizontal scroll instead of wrapping cells</div></div>
-          <Switch labelledBy="set-grids" on={true} onClick={() => s.toast('Result grids already scroll horizontally.')} />
-        </div>
-        <div className="toggle">
-          <div><div className="tl" id="set-override">Confirm before accepting an override</div><div className="ts">Ask before recording an accepted-by-you answer</div></div>
-          <Switch labelledBy="set-override" on={true} onClick={() => s.toast('Override confirmation would be a product setting.')} />
         </div>
       </div>
 

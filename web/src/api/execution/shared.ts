@@ -1,5 +1,6 @@
 import { Context, Effect } from 'effect';
 import { GatewayError } from '../errors';
+import { datasetVersion } from '../dataset';
 import type { AiServiceShape } from '../ai';
 import type { ExplainRequest, PlanBundle } from '../planContract';
 import type {
@@ -30,8 +31,9 @@ import type {
 /* The seam that every transport shares.
 
    `ExecutionService` is the Effect service key. `ExecutionServiceShape` is the
-   contract each layer satisfies. The bearer token store lives here because the
-   gateway layer attaches the token and both layers clear it on logout. */
+   contract each layer satisfies. The bearer token store is re-exported from
+   `../authStorage` because that is the name callers already import; the offline
+   draft answers both layers share live here. */
 
 /* The typed failure every adapter can raise now lives in ./errors so the AI
    seam can raise and inspect it without importing the browser engine. It is
@@ -106,63 +108,35 @@ export type NoteFn = (method: string, path: string, status: number, ms: number) 
 
 export const nowMs = (): number => (typeof performance !== 'undefined' && performance.now ? performance.now() : Date.now());
 
-/* ---------- bearer token storage ----------
+/* The bearer token store lives in `../authStorage`, free of any engine or
+   dataset import, so the AI seam can read the account without pulling the
+   browser engine into its bundle. Re-exported here because this is the name the
+   gateway layer and the app already import them by. */
+export {
+  AUTH_TOKEN_KEY,
+  AUTH_USER_KEY,
+  clearAuthToken,
+  readAuthToken,
+  readAuthUser,
+  writeAuthToken,
+  writeAuthUser,
+} from '../authStorage';
 
-   The gateway's auth surface issues one bearer token; it is the only
-   credential the client ever sends. It lives under a single localStorage key so
-   `httpLayer` can attach it and `me`/`logout` can clear it. Every access is
-   guarded: prerender/SSR (no `window`) and disabled storage both degrade to "no
-   token", never a crash. */
+/* ---------- offline draft answers ----------
 
-export const AUTH_TOKEN_KEY = 'querycraft.token';
-/* The signed-in account id, kept beside the token. It is what a patch approval
-   echoes as `approved_by`; the gateway still attributes the approval to the
-   bearer token, so this is a convenience, never an authority. */
-export const AUTH_USER_KEY = 'querycraft.user';
-
-export function readAuthToken(): string | null {
-  try {
-    if (typeof window === 'undefined' || !window.localStorage) return null;
-    return window.localStorage.getItem(AUTH_TOKEN_KEY);
-  } catch {
-    return null;
-  }
-}
-
-export function writeAuthToken(token: string): void {
-  try {
-    if (typeof window === 'undefined' || !window.localStorage) return;
-    window.localStorage.setItem(AUTH_TOKEN_KEY, token);
-  } catch {
-    /* storage disabled: the session lives for this page only */
-  }
-}
-
-export function readAuthUser(): string | null {
-  try {
-    if (typeof window === 'undefined' || !window.localStorage) return null;
-    return window.localStorage.getItem(AUTH_USER_KEY);
-  } catch {
-    return null;
-  }
-}
-
-export function writeAuthUser(userId: string): void {
-  try {
-    if (typeof window === 'undefined' || !window.localStorage) return;
-    window.localStorage.setItem(AUTH_USER_KEY, userId);
-  } catch {
-    /* storage disabled: the session lives for this page only */
-  }
-}
-
-export function clearAuthToken(): void {
-  try {
-    if (typeof window === 'undefined' || !window.localStorage) return;
-    window.localStorage.removeItem(AUTH_TOKEN_KEY);
-    window.localStorage.removeItem(AUTH_USER_KEY);
-  } catch {
-    /* storage disabled */
-  }
+   A draft is a client-side authoring record, not a server operation: the AI
+   seam's `generateCourse`/`generateChallenge` are what reach the gateway. Both
+   transports answer a draft here, so the shape and the dataset version it
+   records are stated once. The layer keeps its own request note around this. */
+export function offlineDraft(req: GenerationRequest): { course: CourseGeneration; challenge: { ok: true } } {
+  return {
+    course: {
+      title: req.title,
+      chapters: (req.steps ?? []).length,
+      exercises: req.exercises,
+      datasetVersion,
+    },
+    challenge: { ok: true },
+  };
 }
 

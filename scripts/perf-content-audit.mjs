@@ -40,10 +40,10 @@ import { jsRows, literal, sameRows } from './lib/rowtruth.mjs';
 const webRequire = createRequire(path.join(repoRoot, 'web', 'package.json'));
 const { PGlite } = webRequire('@electric-sql/pglite');
 const require = createRequire('/tmp/');
-assertFreshBundle('/tmp/curriculum.cjs', 'audit-perf-content', ['web/src/data/curriculum.ts']);
-assertFreshBundle('/tmp/plan-contract.cjs', 'audit-perf-content', ['web/src/api/planContract.ts']);
-const curriculum = require('/tmp/curriculum.cjs');
-const { gradePlan } = require('/tmp/plan-contract.cjs');
+assertFreshBundle('/tmp/curriculum-for-perf-content.cjs', 'audit-perf-content', ['web/src/data/curriculum.ts']);
+assertFreshBundle('/tmp/plan-contract-for-perf-content.cjs', 'audit-perf-content', ['web/src/api/planContract.ts']);
+const curriculum = require('/tmp/curriculum-for-perf-content.cjs');
+const { gradePlan } = require('/tmp/plan-contract-for-perf-content.cjs');
 
 const capture = process.argv.includes('--capture');
 const report = new Reporter('perf-content-audit');

@@ -8,32 +8,36 @@ import (
 	"github.com/querycraft/sqlquery/backend/internal/schema"
 )
 
-/* M7 — course generation.
+/* M7: course generation.
  *
  * A challenge (M4) is one exercise. A course is a plan: chapters, each with
  * authored markdown sections and exercises, generated from the learner's own
- * goal. The two share everything that decides correctness — the same policy
- * gate (validateArtifact), the same SQL stages (reference, cross-check,
- * adversarial fixtures), the same evaluator, the same dataset brief — because a
- * course exercise is not a different kind of thing. What the course adds is
- * grouping and prose, and one rule the single-challenge path does not have to
- * state: every exercise in the plan is executed and cross-checked, in order,
- * before any of it is shown.
+ * goal. The two share everything that decides correctness: the same policy gate
+ * (validateArtifact), the same SQL stages (reference, cross-check, adversarial
+ * fixtures), the same evaluator, and the same dataset brief. A course exercise
+ * is not a different kind of thing. What the course adds is grouping and prose,
+ * plus one rule the single-challenge path need not state: every exercise in the
+ * plan is executed and cross-checked, in order, before any of it is shown.
  *
- * Two consequences of plan-level verification are worth naming, because they
- * are choices rather than accidents:
+ * Two consequences of plan-level verification are choices rather than
+ * accidents:
  *
  *   - Setup is a property of the course, not of an exercise. Every exercise
  *     runs against one environment, so an exercise that inserted its own rows
  *     would silently change the expected result of every exercise after it.
  *     The plan therefore carries one setup plan, applied once, and exercises
- *     carry none. (This is the same rule the challenge path follows over the
- *     sealed dataset: `setup.statements` is empty, and the dataset is checked.)
+ *     carry none. The challenge path follows the same rule over the sealed
+ *     dataset: `setup.statements` is empty, and the dataset is checked.
  *
  *   - `expected` is filled by the pipeline from the reference run, never read
  *     from the provider. The rows a learner is graded against are the rows the
- *     engine actually returned during verification, so the grader and the
- *     verifier cannot disagree about the answer.
+ *     engine returned during verification, so the grader and the verifier
+ *     cannot disagree about the answer.
+ *
+ * This file holds the plan's derived shapes and validation. course_pipeline.go
+ * runs the stages, course_agent.go drives the chapter conversation, and the
+ * Service, Runner, evaluator and Depot are the same ones the challenge path
+ * uses.
  */
 
 /* ---------- bounds ---------- */
@@ -83,73 +87,7 @@ func exerciseArtifact(c *schema.CoursePlan, ch schema.CourseChapter, ex schema.C
 	}
 }
 
-// exerciseCount is the number of exercises across every chapter.
-func exerciseCount(c *schema.CoursePlan) int {
-	n := 0
-	for _, ch := range c.Chapters {
-		n += len(ch.Exercises)
-	}
-	return n
-}
-
-// sectionCount is the number of authored sections across every chapter.
-func sectionCount(c *schema.CoursePlan) int {
-	n := 0
-	for _, ch := range c.Chapters {
-		n += len(ch.Sections)
-	}
-	return n
-}
-
 /* ---------- validation ---------- */
-
-// validateCoursePlan is the gate a course passes before anything runs. It
-// bounds the plan's own shape and then hands each exercise to validateArtifact,
-// so a rule added to the exercise gate is a rule the course gate has too.
-func validateCoursePlan(c *schema.CoursePlan, l Limits) *schema.Error {
-	if c == nil {
-		return coursePlanError("plan", "no plan")
-	}
-	if strings.TrimSpace(c.Title) == "" {
-		return coursePlanError("title", "required and must be non-empty")
-	}
-	if strings.TrimSpace(c.Subtitle) == "" {
-		return coursePlanError("subtitle", "required and must be non-empty")
-	}
-	if strings.TrimSpace(c.Level) == "" {
-		return coursePlanError("level", "required and must be non-empty")
-	}
-	if len(c.Objectives) == 0 {
-		return coursePlanError("objectives", "at least one objective is required")
-	}
-	if c.Dialect != "" && c.Dialect != "postgresql" {
-		return coursePlanError("dialect", fmt.Sprintf("unknown dialect %q", c.Dialect))
-	}
-	if len(c.Chapters) == 0 {
-		return coursePlanError("chapters", "at least one chapter is required")
-	}
-	if len(c.Chapters) > maxCourseChapters {
-		return coursePlanError("chapters", fmt.Sprintf("%d chapters exceeds the limit of %d", len(c.Chapters), maxCourseChapters))
-	}
-	if err := validateCourseSetup(c.Setup, l); err != nil {
-		return err
-	}
-
-	total := 0
-	seen := make(map[string]int, maxCourseExerciseTotal)
-	for ci := range c.Chapters {
-		if err := validateCourseChapter(c, ci, seen, &total, l); err != nil {
-			return err
-		}
-	}
-	if total == 0 {
-		return coursePlanError("chapters", "the course has no exercises")
-	}
-	if total > maxCourseExerciseTotal {
-		return coursePlanError("chapters", fmt.Sprintf("%d exercises exceeds the limit of %d per course", total, maxCourseExerciseTotal))
-	}
-	return nil
-}
 
 // validateCourseChapter applies the chapter and exercise rules to one chapter.
 // It is a separate function because a chapter now arrives on its own: the
@@ -192,6 +130,9 @@ func validateCourseChapter(plan *schema.CoursePlan, ci int, seen map[string]int,
 		if len(sec.Body) > maxSectionBytes {
 			return coursePlanError(sf+".body", fmt.Sprintf("%d bytes exceeds the limit of %d", len(sec.Body), maxSectionBytes))
 		}
+	}
+	if len(ch.Exercises) == 0 {
+		return coursePlanError(field+".exercises", "at least one exercise is required")
 	}
 	if len(ch.Exercises) > maxCourseExercises {
 		return coursePlanError(field+".exercises", fmt.Sprintf("%d exercises exceeds the limit of %d per chapter", len(ch.Exercises), maxCourseExercises))
@@ -248,13 +189,12 @@ func nestArtifactError(ch schema.CourseChapter, ci, ei int, err *schema.Error) *
 	return coursePlanError(fmt.Sprintf("chapters[%d].exercises[%d].%s", ci, ei, field), detail)
 }
 
-// splitFieldDetail splits "field: detail" at its first colon. A detail with no
-// colon is a field-less failure.
+// splitFieldDetail splits "field: detail" at its first colon. Every detail it
+// receives is built by artifactError as field + ": " + detail, so the colon is
+// always there.
 func splitFieldDetail(detail string) (string, string) {
-	if i := strings.Index(detail, ": "); i > 0 {
-		return detail[:i], detail[i+2:]
-	}
-	return detail, "failed"
+	field, rest, _ := strings.Cut(detail, ": ")
+	return field, rest
 }
 
 func coursePlanError(field, detail string) *schema.Error {
@@ -266,23 +206,23 @@ func coursePlanError(field, detail string) *schema.Error {
 
 // coursePromptMarker opens every course prompt, including a repair of one. It
 // is a constant because the built-in provider recognizes a course request by
-// the prompt it is given — the same thing a model does — and a marker that is
-// written twice would eventually be written differently twice.
+// the prompt it is given, the same thing a model does. A marker written twice
+// would eventually be written differently twice.
 const coursePromptMarker = "Design one complete course"
 
 // courseExerciseBudget is the number of exercises a course asks for: the
 // learner's exercise_count under the course's own floor and ceiling. It is one
 // function because the prompt that tells the model the budget and the outline
-// gate that explains an outline planned outside it must name the same number —
-// a rule stated in one place and applied in another is a rule that drifts.
+// gate that explains an outline planned outside it must name the same number.
+// A rule stated in one place and applied in another is a rule that drifts.
 //
 // The floor is 2, not "the chapter count", and that is not an oversight. The
 // number of chapters is the model's choice, made in the outline call, so it is
 // not known when a request is normalized: a request-time floor could only be a
 // guess, and a guess that raised exercise_count to a course's real chapter count
 // would rewrite the learner's ask. The mismatch between the budget and the
-// chapter count is therefore settled where both are known — the outline gate
-// (validateCourseOutline) — and the floor here only keeps the ask at a number a
+// chapter count is settled where both are known, in the outline gate
+// (validateCourseOutline), and the floor here only keeps the ask at a number a
 // course can be a course at.
 func courseExerciseBudget(req schema.GenerationRequest) int {
 	return clampInt(req.ExerciseCount, 2, maxCourseExerciseTotal)
@@ -314,15 +254,16 @@ func coursePrompt(req schema.GenerationRequest) string {
 }
 
 // courseChapterSchema is the JSON Schema of one chapter. It is the arguments
-// schema of the save_chapter function the course agent advertises, and the
-// chapter half of the whole-plan schema. One source, because a rule stated one
-// place and applied another is a rule that will differ.
+// schema of the save_chapter function the course agent advertises. One source,
+// because a rule stated one place and applied another is a rule that will
+// differ.
 //
-// Like challengeSchema it is a hint rather than the gate — validateCourseChapter
-// decides — but the bounds are part of the hint: a schema that cannot describe a
+// Like challengeSchema it is a hint rather than the gate; validateCourseChapter
+// decides. The bounds are part of the hint: a schema that cannot describe a
 // one-line section removes the repair round trip that would otherwise be spent
-// explaining why it is not teaching.
-const courseChapterSchema = `{
+// explaining why it is not teaching. The three bounds below are rendered from
+// the same constants the gate reads, so the hint and the gate cannot drift.
+const courseChapterSchemaFormat = `{
   "$schema": "https://json-schema.org/draft/2020-12/schema",
   "title": "courseChapter",
   "type": "object",
@@ -336,25 +277,25 @@ const courseChapterSchema = `{
     "minutes": {"type": "integer"},
     "objectives": {"type": "array", "minItems": 1, "items": {"type": "string", "minLength": 1}},
     "sections": {
-      "type": "array", "minItems": 1, "maxItems": 6,
+      "type": "array", "minItems": 1, "maxItems": %d,
       "items": {
         "type": "object",
         "required": ["title", "body"],
         "properties": {
           "title": {"type": "string", "minLength": 1},
-          "body": {"type": "string", "minLength": 40}
+          "body": {"type": "string", "minLength": %d}
         }
       }
     },
     "exercises": {
-      "type": "array", "maxItems": 4,
+      "type": "array", "minItems": 1, "maxItems": %d,
       "items": {
         "type": "object",
         "required": ["id", "title", "prompt", "difficulty", "objectives", "hints", "reference_solution", "cross_check_solution", "result_contract"],
         "properties": {
           "id": {"type": "string", "minLength": 1},
           "title": {"type": "string", "minLength": 1},
-          "prompt": {"type": "string", "minLength": 1},
+          "prompt": {"type": "string", "minLength": 1, "description": "The learner-facing task. It must name every result column the reference returns, using the same names: the grader compares column names exactly."},
           "difficulty": {"enum": ["beginner", "intermediate", "advanced"]},
           "type": {"enum": ["complete", "write", "modify", "predict", "fix", "combine", "solve"]},
           "objectives": {"type": "array", "minItems": 1, "items": {"type": "string", "minLength": 1}},
@@ -377,6 +318,8 @@ const courseChapterSchema = `{
     }
   }
 }`
+
+var courseChapterSchema = fmt.Sprintf(courseChapterSchemaFormat, maxCourseSections, minSectionChars, maxCourseExercises)
 
 // finishCourseSchema is the arguments schema of finish_course. It carries
 // nothing the gateway needs, which is the point: closing a course must not be a

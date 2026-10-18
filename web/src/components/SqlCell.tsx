@@ -31,7 +31,6 @@ interface FeedbackCtx {
   keep: (sql: string) => void;
   nextChapter: () => void;
   explain: () => void;
-  reportProblem: () => void;
 }
 
 /* One inline SQL cell. Holds its own draft + result + feedback state; execution
@@ -256,9 +255,6 @@ export default function SqlCell({ block, module: mod, course }: { block: Block; 
       setTutorBusy(false);
     }
   }
-  function reportProblem() {
-    s.toast('This would open the on-demand critique flow: critic → verifier → fixer, with your approval before anything applies.');
-  }
   function reset() {
     setCode(starter);
     s.api.saveDraft(id, starter);
@@ -309,6 +305,7 @@ export default function SqlCell({ block, module: mod, course }: { block: Block; 
         <span>{isExercise && block.contract ? `contract · ${block.contract.columns.length} columns` : ''}</span>
       </div>
       <div className="cellbody">
+        {isExercise && block.prompt ? <p className="cellprompt">{block.prompt}</p> : null}
         <div className="visually-hidden" role="status" aria-live="polite">{liveStatus()}</div>
         <div className="editorwrap">
           <div className="gutter" aria-hidden="true">{gutter}</div>
@@ -423,7 +420,7 @@ export default function SqlCell({ block, module: mod, course }: { block: Block; 
             <ResultGrid qr={qr} />
           )}
         </div>
-        <div className="cellfeedback">{renderFeedback(fb, { block, hint, solution, accept, run, keep, nextChapter, explain, reportProblem })}</div>
+        <div className="cellfeedback">{renderFeedback(fb, { block, hint, solution, accept, run, keep, nextChapter, explain })}</div>
         {block.note ? <div className="cellnote">{block.note}</div> : null}
       </div>
     </div>
@@ -448,7 +445,7 @@ function CheckList({ checks }: { checks: CheckResult[] }) {
 
 function renderFeedback(fb: Feedback | null, ctx: FeedbackCtx) {
   if (!fb) return null;
-  const { block, hint, solution, accept, run, keep, nextChapter, explain, reportProblem } = ctx;
+  const { block, hint, solution, accept, run, keep, nextChapter, explain } = ctx;
   if (fb.kind === 'pending') {
     return <div className="fb pending"><span className="spin"></span> &nbsp;POST /answers/evaluate — checking the result contract…</div>;
   }
@@ -561,9 +558,6 @@ function renderFeedback(fb: Feedback | null, ctx: FeedbackCtx) {
           <button className="small" onClick={hint}>Show hint</button>
           <button className="small ghost" onClick={solution}>Show solution</button>
           <button className="small ghost" onClick={accept}>Accept my answer</button>
-          <button className="small ghost" onClick={reportProblem}>
-            <Icon name="sparkles" />Report a problem
-          </button>
         </div>
       </div>
     );

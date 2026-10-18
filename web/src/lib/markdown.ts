@@ -12,15 +12,13 @@ const HTML_ESCAPES: Record<string, string> = {
   "'": '&#39;',
 };
 
-function escapeHtmlAttribute(value: string): string {
+export function escapeHtmlAttribute(value: string): string {
   return value.replace(/[&<>"']/g, (ch) => HTML_ESCAPES[ch] ?? ch);
 }
 
 function isMermaidFence(lang: string | undefined): boolean {
   return (lang ?? '').trim().toLowerCase() === MERMAID_LANG;
 }
-
-const MERMAID_FENCE_RE = /(?:^|\n)[ \t]{0,3}(?:`{3,}|~{3,})[ \t]*mermaid[ \t]*(?:\r?\n|$)/;
 
 const marked = new Marked({ gfm: true, async: false });
 
@@ -48,8 +46,4 @@ export function renderMarkdown(md: string): string {
     return html;
   }
   return DOMPurify.sanitize(html, SANITIZE_CONFIG);
-}
-
-export function hasMermaid(md: string): boolean {
-  return MERMAID_FENCE_RE.test(md);
 }

@@ -366,6 +366,7 @@ button.small .ico{width:14px;height:14px}
 .celltop .kindtag{display:inline-flex;align-items:center;gap:6px;color:var(--text-2)}
 .celltop .kindtag .ico{width:13px;height:13px;color:var(--accent-ink)}
 .cellbody{padding:0}
+.cellprompt{margin:0;padding:12px 14px 0;color:var(--text-2);font-size:13px;line-height:1.6}
 .editorwrap{position:relative;background:var(--code-bg)}
 /* The editor suppresses its own outline (it is a borderless code surface), so
    the focus ring has to come from the wrapper — and it has to be an inset ring,

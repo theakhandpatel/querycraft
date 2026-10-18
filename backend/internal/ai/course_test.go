@@ -2,7 +2,6 @@ package ai
 
 import (
 	"context"
-	"encoding/json"
 	"fmt"
 	"strings"
 	"testing"
@@ -70,15 +69,6 @@ func chapterFixture(id string, n int, t fakeTopic) schema.CourseChapter {
 			Checks: []schema.Check{},
 		}},
 	}
-}
-
-func planJSON(t *testing.T, plan schema.CoursePlan) string {
-	t.Helper()
-	raw, err := json.Marshal(plan)
-	if err != nil {
-		t.Fatalf("encode plan: %v", err)
-	}
-	return string(raw)
 }
 
 // TestCoursePipelineActivatesAVerifiedCourse is the exit gate: a course that
@@ -207,52 +197,67 @@ func TestCourseGradingUsesTheMeasuredRows(t *testing.T) {
 
 	pass := eval.Evaluate(ctx, ex, eval.Request{
 		SQL:      first.ReferenceSolution,
-		Exercise: eval.Exercise{Prompt: first.Prompt, Contract: contract, Result: &expected},
+		Exercise: eval.Exercise{Contract: contract, Result: &expected},
 	})
 	if !pass.Passed {
 		t.Fatalf("the course's own reference did not pass its own expected result: %+v", pass)
 	}
 	wrong := eval.Evaluate(ctx, ex, eval.Request{
 		SQL:      "SELECT 1 AS " + quoteIdent(first.ResultContract.Columns[0]),
-		Exercise: eval.Exercise{Prompt: first.Prompt, Contract: contract, Result: &expected},
+		Exercise: eval.Exercise{Contract: contract, Result: &expected},
 	})
 	if wrong.Passed {
 		t.Fatal("a constant answer passed the course's expected result")
 	}
 }
 
-// TestCourseGateRefusesPlanShapes pins the bounds. Each case names the field a
-// repair would have to fix, because the message is what the next attempt reads.
-func TestCourseGateRefusesPlanShapes(t *testing.T) {
-	tooLong := strings.Repeat("x", minSectionChars-1)
+// courseOutlineFixture is the outline of coursePlanFixture: the same course
+// before any chapter content exists, which is what validateCourseOutline
+// bounds.
+func courseOutlineFixture() CourseOutline {
+	plan := coursePlanFixture()
+	outline := CourseOutline{
+		Title:      plan.Title,
+		Subtitle:   plan.Subtitle,
+		Level:      plan.Level,
+		Objectives: plan.Objectives,
+		Setup:      plan.Setup,
+	}
+	for i, ch := range plan.Chapters {
+		outline.Chapters = append(outline.Chapters, OutlineChapter{
+			ID:         ch.ID,
+			N:          i + 1,
+			Title:      ch.Title,
+			Summary:    ch.Summary,
+			Kind:       ch.Kind,
+			Minutes:    ch.Minutes,
+			Objectives: ch.Objectives,
+			Exercises:  len(ch.Exercises),
+		})
+	}
+	return outline
+}
+
+// TestCourseGateRefusesOutlineShapes pins the whole-outline bounds. Each case
+// names the field a repair would have to fix, because the message is what the
+// next attempt reads.
+func TestCourseGateRefusesOutlineShapes(t *testing.T) {
 	cases := []struct {
 		name   string
-		break_ func(*schema.CoursePlan)
+		break_ func(*CourseOutline)
 		field  string
 	}{
-		{"stub section", func(p *schema.CoursePlan) { p.Chapters[0].Sections[0].Body = tooLong }, "chapters[0].sections[0].body"},
-		{"no chapters", func(p *schema.CoursePlan) { p.Chapters = nil }, "chapters"},
-		{"no exercises at all", func(p *schema.CoursePlan) {
-			for ci := range p.Chapters {
-				p.Chapters[ci].Exercises = nil
-			}
-		}, "chapters"},
-		{"duplicate exercise id", func(p *schema.CoursePlan) { p.Chapters[1].Exercises[0].ID = p.Chapters[0].Exercises[0].ID }, "chapters[1].exercises[0].id"},
-		{"drop in setup", func(p *schema.CoursePlan) { p.Setup.Statements = []string{"DROP TABLE dataset.orders"} }, "setup.statements"},
-		{"two statements in one reference", func(p *schema.CoursePlan) {
-			p.Chapters[0].Exercises[0].ReferenceSolution = "SELECT 1 AS \"customer_name\", 1 AS \"order_count\"; SELECT 2"
-		}, "chapters[0].exercises[0].reference_solution"},
-		{"empty expected columns", func(p *schema.CoursePlan) { p.Chapters[0].Exercises[0].ResultContract.Columns = nil }, "chapters[0].exercises[0].result_contract.columns"},
-		{"setup dataset missing", func(p *schema.CoursePlan) { p.Setup.Dataset = " " }, "setup.dataset"},
-		{"unknown dialect", func(p *schema.CoursePlan) { p.Dialect = "mysql" }, "dialect"},
+		{"no chapters", func(o *CourseOutline) { o.Chapters = nil }, "chapters"},
+		{"drop in setup", func(o *CourseOutline) { o.Setup.Statements = []string{"DROP TABLE dataset.orders"} }, "setup.statements"},
+		{"setup dataset missing", func(o *CourseOutline) { o.Setup.Dataset = " " }, "setup.dataset"},
 	}
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {
-			plan := coursePlanFixture()
-			tc.break_(&plan)
-			verr := validateCoursePlan(&plan, DefaultLimits())
+			outline := courseOutlineFixture()
+			tc.break_(&outline)
+			verr := validateCourseOutline(&outline, maxCourseExerciseTotal, DefaultLimits())
 			if verr == nil {
-				t.Fatalf("the plan was accepted; %s must be refused", tc.name)
+				t.Fatalf("the outline was accepted; %s must be refused", tc.name)
 			}
 			if verr.Code != CodeInvalidArtifact {
 				t.Errorf("code = %q, want %q", verr.Code, CodeInvalidArtifact)
@@ -264,22 +269,49 @@ func TestCourseGateRefusesPlanShapes(t *testing.T) {
 	}
 }
 
-// TestCourseGateAcceptsTheBuiltInPlan keeps the gate and the built-in provider
-// from drifting: the plan the fake emits must pass the real gate.
-func TestCourseGateAcceptsTheBuiltInPlan(t *testing.T) {
-	raw, err := NewFakeProvider().courseBundle(coursePrompt(schema.GenerationRequest{Title: "analytics", Difficulty: schema.Intermediate}))
-	if err != nil {
-		t.Fatalf("courseBundle: %v", err)
+// TestCourseGateRefusesChapterShapes pins the per-chapter bounds at the gate
+// that runs when a chapter is saved. It is the same gate the outline's chapters
+// pass, so a rule added here is a rule every chapter has.
+func TestCourseGateRefusesChapterShapes(t *testing.T) {
+	tooLong := strings.Repeat("x", minSectionChars-1)
+	cases := []struct {
+		name    string
+		chapter int
+		break_  func(*schema.CoursePlan)
+		field   string
+	}{
+		{"stub section", 0, func(p *schema.CoursePlan) { p.Chapters[0].Sections[0].Body = tooLong }, "chapters[0].sections[0].body"},
+		{"no exercises", 0, func(p *schema.CoursePlan) { p.Chapters[0].Exercises = nil }, "chapters[0].exercises"},
+		{"duplicate exercise id", 1, func(p *schema.CoursePlan) { p.Chapters[1].Exercises[0].ID = p.Chapters[0].Exercises[0].ID }, "chapters[1].exercises[0].id"},
+		{"two statements in one reference", 0, func(p *schema.CoursePlan) {
+			p.Chapters[0].Exercises[0].ReferenceSolution = "SELECT 1 AS \"customer_name\", 1 AS \"order_count\"; SELECT 2"
+		}, "chapters[0].exercises[0].reference_solution"},
+		{"empty expected columns", 0, func(p *schema.CoursePlan) { p.Chapters[0].Exercises[0].ResultContract.Columns = nil }, "chapters[0].exercises[0].result_contract.columns"},
 	}
-	var plan schema.CoursePlan
-	if err := decodeJSON(raw, &plan); err != nil {
-		t.Fatalf("decode: %v", err)
-	}
-	if verr := validateCoursePlan(&plan, DefaultLimits()); verr != nil {
-		t.Fatalf("the built-in course was refused by the gate: %s: %s", verr.Message, verr.Detail)
-	}
-	if len(plan.Chapters) == 0 {
-		t.Fatal("the built-in course has no chapters")
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			plan := coursePlanFixture()
+			tc.break_(&plan)
+			// The plan-wide facts (seen ids, the exercise budget) are carried
+			// across chapters, so every chapter before the one under test is
+			// validated first, exactly as save_chapter does.
+			seen, total := map[string]int{}, 0
+			for ci := 0; ci < tc.chapter; ci++ {
+				if verr := validateCourseChapter(&plan, ci, seen, &total, DefaultLimits()); verr != nil {
+					t.Fatalf("chapter %d did not pass before the case: %v", ci, verr)
+				}
+			}
+			verr := validateCourseChapter(&plan, tc.chapter, seen, &total, DefaultLimits())
+			if verr == nil {
+				t.Fatalf("the chapter was accepted; %s must be refused", tc.name)
+			}
+			if verr.Code != CodeInvalidArtifact {
+				t.Errorf("code = %q, want %q", verr.Code, CodeInvalidArtifact)
+			}
+			if !strings.HasPrefix(verr.Detail, tc.field+": ") {
+				t.Errorf("detail = %q, want it to start with %q", verr.Detail, tc.field+": ")
+			}
+		})
 	}
 }
 

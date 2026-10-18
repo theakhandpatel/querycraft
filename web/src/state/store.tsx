@@ -16,17 +16,17 @@
  *   5. catalog mutation (notes, bookmarks, saved queries, workbook)
  *   6. theme + motion
  */
-import React, { createContext, useCallback, useContext, useEffect, useLayoutEffect, useMemo, useRef, useState } from 'react';import { createApi, readAuthToken, readAuthUser } from '../api/index';
+import React, { createContext, useCallback, useContext, useEffect, useLayoutEffect, useMemo, useRef, useState } from 'react';
+import { createApi } from '../api/index';
+import { readAuthToken, readAuthUser } from '../api/execution/shared';
 import { COURSES, MODULES } from '../data/curriculum';
 import {
   activeModules as activeModulesOf,
   courseById,
-  courseShort,
   currentCourse as currentCourseOf,
   eventTitle,
   findExercise,
   lessonPercent as lessonPercentOf,
-  moduleExerciseBlocks,
   nextChapterIndex as nextChapterIndexOf,
 } from '../lib/model';
 import { buildExportBundle, collectDrafts, downloadExport } from '../lib/exportBundle';
@@ -137,8 +137,7 @@ function blurbFromGoal(goal: string): string {
 
 /** Clone the reference curriculum into a draft course's own modules, giving
     every module and exercise a course-scoped id so progress and attempts never
-    leak between the draft and the built-in course. Each block is copied
-    shallowly, so `checks[].test` functions survive by reference. */
+    leak between the draft and the built-in course. */
 function draftModulesFor(suffix: string): CourseModule[] {
   return MODULES.map((m) => ({
     ...m,
@@ -151,7 +150,6 @@ function draftModulesFor(suffix: string): CourseModule[] {
 /** Everything screens receive from useStore(). */
 export interface StoreValue {
   COURSES: Course[];
-  MODULES: CourseModule[];
   progress: Progress;
   uiState: UiState;
   course: Course;
@@ -191,8 +189,6 @@ export interface StoreValue {
   showScreen: (id: Screen) => void;
   /** The challenge the lab is showing, when a link (`#/lab/:id`) named one. */
   challengeId: string | null;
-  /** Open the challenge lab, optionally on one registered challenge. */
-  openChallenge: (id?: string | null) => void;
   reviewTab: string;
   setReviewTab: React.Dispatch<React.SetStateAction<string>>;
   tablesOpen: boolean;
@@ -213,26 +209,21 @@ export interface StoreValue {
   closePrompt: () => void;
 
   theme: ThemePreference;
-  effectiveTheme: ThemePreference;
   customThemes: UserTheme[];
   saveCustomTheme: (t: UserTheme) => void;
   deleteCustomTheme: (id: string) => void;
   setTheme: (m: ThemePreference) => void;
-  cycleTheme: () => void;
   motion: boolean;
   setMotion: () => void;
 
   openLessonIn: (courseId: string, index?: number) => void;
-  openLesson: (i?: number) => void;
   selectCourse: (id: string) => void;
   enrollCourse: (id: string) => void;
   resumeCourse: () => void;
   startLearning: () => void;
   stepLesson: (d: number) => void;
   markLessonDone: () => void;
-  courseShort: (c: Course | null | undefined) => string;
 
-  saveProgress: (next?: Progress) => void;
   recordEvent: (id: string, kind: EventKind, label?: string) => void;
   addNote: (text: string) => void;
   /** Design §10: keep a query (a result or a revealed solution) in the workbook. */
@@ -262,24 +253,20 @@ export interface StoreValue {
       the whole document first; a refusal changes nothing. */
   importData: (text: string) => ImportOutcome;
 
-  catalogVersion: number;
   /** Chapter reading content, keyed by module id, read from the database. */
   content: Record<string, ContentSection[]>;
   moveLesson: (i: number, dir: number) => void;
-  saveCourseEdits: (edits: { title?: string; goal?: string; context?: string; dialect?: string }) => void;
+  saveCourseEdits: (edits: { title?: string }) => void;
   saveLessonEdits: (edits: { title?: string; summary?: string }) => void;
   applyExtension: (kind: string, prompt?: string) => void;
-  addLesson: (args: { title: string; goal?: string; position?: string }) => void;
+  addLesson: (args: { title: string; goal?: string }) => void;
   addSection: (title: string) => void;
 
   goalInput: string;
-  setGoalInput: React.Dispatch<React.SetStateAction<string>>;
   reviewGoal: string;
   setReviewGoal: React.Dispatch<React.SetStateAction<string>>;
   courseSubtitle: string;
-  setCourseSubtitle: React.Dispatch<React.SetStateAction<string>>;
   contextState: string;
-  setContextState: React.Dispatch<React.SetStateAction<string>>;
   /** Returns the draft title, or undefined when the caller may not author. */
   /** Records the ask. The course itself is produced by the build that follows:
       `adoptGeneratedCourse` when a provider is configured, `useAuthoredDraft`
@@ -299,11 +286,6 @@ export interface StoreValue {
   draftReport: DraftReport | null;
   setDraftReport: React.Dispatch<React.SetStateAction<DraftReport | null>>;
 
-  /* M8. The gateway owns the learner's generated courses, so the app reads them
-     rather than remembering them in a tab. `storedCourses` is that list; the
-     same courses are mirrored into `COURSES` so the router, the lesson page and
-     the search index can resolve a course id the way they always have. */
-  storedCourses: Course[];
   /** True while a course the fragment named is being fetched from the gateway,
       so the shell can wait for it instead of painting the wrong course. */
   courseResolving: boolean;
@@ -324,7 +306,16 @@ export interface StoreValue {
   /** Forget a run once it has finished, been refused, or gone missing. */
   runSettled: (jobId: string) => void;
 
-  moduleExerciseBlocks: (m: CourseModule) => Block[];
+  /* A stored course the library asked to resume: a build the gateway stopped
+     writing (`interrupted`) or one still waiting for approval. The screen that
+     watches a run continues it, so this is just the handoff. `null` when the
+     learner is not resuming anything. */
+  resumeBuild: { courseId: string; goal: string } | null;
+  /** Hand a stored course to the build screen, which continues it. */
+  resumeStoredCourse: (courseId: string, goal: string) => void;
+  /** The resume is done or gone; the handoff is cleared. */
+  buildSettled: () => void;
+
 }
 
 const StoreContext = createContext<StoreValue | null>(null);
@@ -417,6 +408,9 @@ export function StoreProvider({ children }: { children: React.ReactNode }) {
   const [apiLog, setApiLog] = useState<ApiLogEntry[]>([]);
   const [apiCount, setApiCount] = useState(0);
   const [latency, setLatency] = useState(true);
+  /* The catalog mutations edit `COURSES`/`MODULES` in place, so they cannot
+     change an identity the memoized provider value can compare. This counter is
+     their re-render trigger and is read only in the value's dependencies. */
   const [catalogVersion, setCatalogVersion] = useState(0);
   const [content, setContent] = useState<Record<string, ContentSection[]>>({});
   const [goalInput, setGoalInput] = useState('');
@@ -431,16 +425,18 @@ export function StoreProvider({ children }: { children: React.ReactNode }) {
      instead of printing one of its own. */
   const [draftReport, setDraftReport] = useState<DraftReport | null>(null);
   const [buildContext, setBuildContext] = useState<{ level?: string; source?: string; requireApproval?: boolean }>({});
-  /* The learner's own generated courses, as the gateway stores them. Read on
-     sign-in and after a generation, never invented: the offline adapters keep
-     no such store, so the list stays empty there rather than claiming the
-     learner has no courses. */
-  const [storedCourses, setStoredCourses] = useState<Course[]>([]);
+  /* The learner's own generated courses, as the gateway stores them. A ref, not
+     state: the catalog is what every screen reads, so this is only the list a
+     later refresh compares against. Read on sign-in and after a generation,
+     never invented. */
   const storedRef = useRef<Course[]>([]);
   /* A background run this tab started and had not finished watching when the
      page went away. Read back on boot: the run itself never stopped, only the
      view of it did. */
   const [resumeRun, setResumeRun] = useState<{ jobId: string; goal: string } | null>(null);
+  /* A stored course the library asked to resume. The gateway owns the row, so
+     this is only which course the build screen should continue. */
+  const [resumeBuild, setResumeBuild] = useState<{ courseId: string; goal: string } | null>(null);
   /* A course id a fragment named that the catalog does not have. It may be a
      stored course the gateway owns, so it is fetched before the screen paints:
      a `#/course/{id}` link used to fall back to the first built-in course and
@@ -529,7 +525,10 @@ export function StoreProvider({ children }: { children: React.ReactNode }) {
     saveJSON('qc.customThemes', customThemes);
   }, [customThemes]);
 
-  const effectiveTheme = theme === 'system' ? (window.matchMedia && window.matchMedia('(prefers-color-scheme: dark)').matches ? 'dark' : 'light') : theme;
+  const effectiveTheme = useMemo<ThemePreference>(
+    () => (theme === 'system' ? (window.matchMedia && window.matchMedia('(prefers-color-scheme: dark)').matches ? 'dark' : 'light') : theme),
+    [theme]
+  );
   useEffect(() => {
     document.documentElement.setAttribute('data-theme', effectiveTheme);
   }, [effectiveTheme]);
@@ -770,6 +769,21 @@ export function StoreProvider({ children }: { children: React.ReactNode }) {
     },
     [api, reportPersistFailure]
   );
+  /* Every progress mutation takes the same three steps: put the snapshot in
+     React state, write it to this browser, and push it to the gateway. One
+     helper, so the three can never drift apart. Returns the snapshot so the
+     caller can keep using the value it passed.
+     The hydration path below does not use this: it restores a snapshot rather
+     than recording a change, so it must not mark the workspace dirty. */
+  const commitProgress = useCallback(
+    (next: Progress, courseId?: string): Progress => {
+      setProgress(next);
+      persistProgress(next);
+      syncProgress(next, courseId);
+      return next;
+    },
+    [persistProgress, syncProgress]
+  );
 
   /* Learner data lives on the server, so pull it once per owner.
    *
@@ -840,7 +854,7 @@ export function StoreProvider({ children }: { children: React.ReactNode }) {
     };
   }, [api, syncProgress, uiState.selectedCourseId, authReady, session]);
 
-  const course = currentCourseOf(uiState);
+  const course = useMemo(() => currentCourseOf(uiState), [uiState]);
   /* M5. The dataset the course runs on is part of the course, so the workspace
      it needs can be built while the learner is reading. Two effects follow from
      that: opening `plans` starts the 10 000-row fixture before the first Run
@@ -857,11 +871,11 @@ export function StoreProvider({ children }: { children: React.ReactNode }) {
     api.warmUp(courseDataset, courseDialect);
   }, [api, courseDataset, courseDialect]);
   const draftCourse = draftCourseId ? COURSES.find((c) => c.id === draftCourseId) ?? null : null;
-  const modules = activeModulesOf(course);
-  const pct = lessonPercentOf(course, progress);
+  const modules = useMemo(() => activeModulesOf(course), [course]);
+  const pct = useMemo(() => lessonPercentOf(course, progress), [course, progress]);
   /* The account's role, read once: the router gates the authoring screens with
      the same rule App renders behind. */
-  const role: UserRole = session?.user.role ?? 'learner';
+  const role = useMemo<UserRole>(() => session?.user.role ?? 'learner', [session]);
   /* M8. A fragment that names a course we have not resolved yet. The shell waits
      on the splash for it — but only for a learner the resolve can run for:
      signed out, the sign-in screen comes first and the link is picked up after
@@ -912,15 +926,6 @@ export function StoreProvider({ children }: { children: React.ReactNode }) {
     const ws = document.querySelector('.workspace');
     if (ws) ws.scrollTop = 0;
   }, []);
-  /* The lab can be opened on a specific registered challenge; the fragment
-     carries the id, so the same link reopens the same challenge. */
-  const openChallenge = useCallback(
-    (id: string | null = null) => {
-      setChallengeId(id);
-      showScreen('challenge-lab');
-    },
-    [showScreen]
-  );
   const openLessonIn = useCallback(
     (courseId: string, index?: number) => {
       const c = COURSES.find((x) => x.id === courseId);
@@ -935,7 +940,6 @@ export function StoreProvider({ children }: { children: React.ReactNode }) {
     },
     [uiState, progress]
   );
-  const openLesson = useCallback((i?: number) => openLessonIn(uiState.selectedCourseId, i), [openLessonIn, uiState.selectedCourseId]);
   const selectCourse = useCallback(
     (id: string) => {
       const c = COURSES.find((x) => x.id === id);
@@ -1066,17 +1070,6 @@ export function StoreProvider({ children }: { children: React.ReactNode }) {
   }, [authReady, applyHash]);
 
   /* ---------- progress mutations ---------- */
-  const saveProgress = useCallback(
-    (next?: Progress) => {
-      const p = next || progress;
-      p.attemptsByDay = p.attemptsByDay || [];
-      setProgress({ ...p });
-      persistProgress(p);
-      syncProgress(p, uiState.selectedCourseId);
-    },
-    [progress, persistProgress, syncProgress, uiState.selectedCourseId]
-  );
-
   const recordEvent = useCallback(
     (id: string, kind: EventKind, label?: string) => {
       const f = findExercise(id);
@@ -1094,12 +1087,10 @@ export function StoreProvider({ children }: { children: React.ReactNode }) {
       };
       const next = { ...progress, events: [...(progress.events || []), evt] };
       rebuildProgressFromEvents(next);
-      setProgress(next);
-      persistProgress(next);
+      commitProgress(next, evt.course);
       syncEvent(evt);
-      syncProgress(next, evt.course);
     },
-    [progress, activeLesson, uiState.selectedCourseId, persistProgress, syncEvent, syncProgress]
+    [progress, activeLesson, uiState.selectedCourseId, commitProgress, syncEvent]
   );
 
   /* Measured study time. The lesson screen accumulates visible time and hands
@@ -1112,11 +1103,9 @@ export function StoreProvider({ children }: { children: React.ReactNode }) {
       const total = (prev.timeMs?.[courseId] || 0) + ms;
       const next: Progress = { ...prev, timeMs: { ...(prev.timeMs || {}), [courseId]: total } };
       progressRef.current = next;
-      setProgress(next);
-      persistProgress(next);
-      syncProgress(next, courseId);
+      commitProgress(next, courseId);
     },
-    [persistProgress, syncProgress]
+    [commitProgress]
   );
 
   const markLessonDone = useCallback(() => {
@@ -1134,14 +1123,12 @@ export function StoreProvider({ children }: { children: React.ReactNode }) {
       manuallyDone: manual,
       done: { ...progress.done, [m.id]: nowDone },
     };
-    setProgress(next);
-    persistProgress(next);
     /* Chapter completion is progress like any other mutation, so it must reach
        the gateway too — otherwise the server snapshot disagrees with the UI and
        the signal is lost on a different browser or a cleared cache. */
-    syncProgress(next, uiState.selectedCourseId);
+    commitProgress(next, uiState.selectedCourseId);
     toast(nowDone ? 'Chapter marked complete.' : 'Chapter marked incomplete.');
-  }, [modules, activeLesson, progress, persistProgress, syncProgress, uiState.selectedCourseId, toast]);
+  }, [modules, activeLesson, progress, commitProgress, uiState.selectedCourseId, toast]);
 
   const stepLesson = useCallback(
     (d: number) => {
@@ -1164,12 +1151,10 @@ export function StoreProvider({ children }: { children: React.ReactNode }) {
         ...progress,
         notes: [...(progress.notes || []), { course: c.id, lesson: activeLesson + 1, kind: 'note', ts: Date.now(), text }],
       };
-      setProgress(next);
-      persistProgress(next);
-      syncProgress(next, c.id);
+      commitProgress(next, c.id);
       toast('Note saved to your workbook.');
     },
-    [course, progress, activeLesson, persistProgress, syncProgress, toast]
+    [course, progress, activeLesson, commitProgress, toast]
   );
 
   /* Design §10: a bookmark is a note that points at one section, plus a history
@@ -1186,9 +1171,7 @@ export function StoreProvider({ children }: { children: React.ReactNode }) {
           ...progress,
           notes: (progress.notes || []).filter((n) => n !== existing),
         };
-        setProgress(next);
-        persistProgress(next);
-        syncProgress(next, c.id);
+        commitProgress(next, c.id);
         toast('Bookmark removed.');
         return;
       }
@@ -1207,13 +1190,11 @@ export function StoreProvider({ children }: { children: React.ReactNode }) {
         notes: [...(progress.notes || []), { course: c.id, lesson, section, kind: 'bookmark', ts, text: title }],
         events: [...(progress.events || []), event],
       };
-      setProgress(next);
-      persistProgress(next);
+      commitProgress(next, c.id);
       syncEvent(event);
-      syncProgress(next, c.id);
       toast('Bookmarked for your workbook.');
     },
-    [course, progress, persistProgress, syncEvent, syncProgress, toast]
+    [course, progress, commitProgress, syncEvent, toast]
   );
 
   /* Design §10: a kept query stores the SQL plus the versions it was written
@@ -1258,12 +1239,10 @@ export function StoreProvider({ children }: { children: React.ReactNode }) {
           },
         ],
       };
-      setProgress(next);
-      persistProgress(next);
-      syncProgress(next, c.id);
+      commitProgress(next, c.id);
       toast('Query kept in your workbook.');
     },
-    [course, progress, activeLesson, persistProgress, syncProgress, toast]
+    [course, progress, activeLesson, commitProgress, toast]
   );
 
   const removeSaved = useCallback(
@@ -1273,12 +1252,10 @@ export function StoreProvider({ children }: { children: React.ReactNode }) {
         ...progress,
         saved: (progress.saved || []).filter((q) => !(q.course === c.id && q.ts === ts)),
       };
-      setProgress(next);
-      persistProgress(next);
-      syncProgress(next, c.id);
+      commitProgress(next, c.id);
       toast('Saved query removed.');
     },
-    [course, progress, persistProgress, syncProgress, toast]
+    [course, progress, commitProgress, toast]
   );
 
   const removeWorkbookItem = useCallback(
@@ -1288,12 +1265,10 @@ export function StoreProvider({ children }: { children: React.ReactNode }) {
         ...progress,
         notes: (progress.notes || []).filter((n) => !(n.course === c.id && n.ts === ts)),
       };
-      setProgress(next);
-      persistProgress(next);
-      syncProgress(next, c.id);
+      commitProgress(next, c.id);
       toast('Removed from your workbook.');
     },
-    [course, progress, persistProgress, syncProgress, toast]
+    [course, progress, commitProgress, toast]
   );
 
   const isBookmarked = useCallback(
@@ -1338,22 +1313,16 @@ export function StoreProvider({ children }: { children: React.ReactNode }) {
   );
 
   const clearProgress = useCallback(() => {
-    const p = emptyProgress();
-    setProgress(p);
-    persistProgress(p);
-    syncProgress(p, uiState.selectedCourseId);
+    commitProgress(emptyProgress(), uiState.selectedCourseId);
     toast('Your data was cleared on this account.');
-  }, [persistProgress, syncProgress, uiState.selectedCourseId, toast]);
+  }, [commitProgress, uiState.selectedCourseId, toast]);
 
   /* Sample data is a demo, not a default. It has to be asked for by name so the
      workspace never looks pre-populated with work nobody did. */
   const loadSampleProgress = useCallback(() => {
-    const p = seedProgress();
-    setProgress(p);
-    persistProgress(p);
-    syncProgress(p, uiState.selectedCourseId);
+    commitProgress(seedProgress(), uiState.selectedCourseId);
     toast('Sample data loaded. Clear it any time from Appearance.');
-  }, [persistProgress, syncProgress, uiState.selectedCourseId, toast]);
+  }, [commitProgress, uiState.selectedCourseId, toast]);
 
   /* The export is built from the same Progress the server holds, plus the
      local editor drafts, so it is complete and credential-free. */
@@ -1374,14 +1343,12 @@ export function StoreProvider({ children }: { children: React.ReactNode }) {
         return parsed;
       }
       const result = applyImport(progress, parsed.bundle, collectDrafts());
-      setProgress(result.progress);
-      persistProgress(result.progress);
-      syncProgress(result.progress, uiState.selectedCourseId);
+      commitProgress(result.progress, uiState.selectedCourseId);
       for (const [cellId, sql] of Object.entries(result.drafts)) api.saveDraft(cellId, sql);
       toast(describeImport(result));
       return result;
     },
-    [api, progress, persistProgress, syncProgress, uiState.selectedCourseId, toast],
+    [api, progress, commitProgress, uiState.selectedCourseId, toast],
   );
 
   /* ---------- course content mutations (bump catalogVersion to re-render) ---------- */
@@ -1413,7 +1380,6 @@ export function StoreProvider({ children }: { children: React.ReactNode }) {
         ...courseFromPlan(rec.plan, rec.plan.subtitle || rec.plan.title),
         gateway: true,
         recordStatus: rec.status,
-        createdAt: rec.created_at,
       }) as Course,
     []
   );
@@ -1435,7 +1401,6 @@ export function StoreProvider({ children }: { children: React.ReactNode }) {
         else COURSES.push(c);
       }
       storedRef.current = next;
-      setStoredCourses(next);
       bumpCatalog();
     },
     [bumpCatalog]
@@ -1514,6 +1479,15 @@ export function StoreProvider({ children }: { children: React.ReactNode }) {
   const runSettled = useCallback((jobId: string): void => {
     clearRun(jobId);
     setResumeRun((prev) => (prev && prev.jobId === jobId ? null : prev));
+  }, []);
+
+  const resumeStoredCourse = useCallback((courseId: string, goal: string): void => {
+    setResumeBuild({ courseId, goal });
+    setScreen('building');
+  }, []);
+
+  const buildSettled = useCallback((): void => {
+    setResumeBuild(null);
   }, []);
 
   /* A course the fragment named. The gateway may own an id this tab has never
@@ -1633,7 +1607,7 @@ export function StoreProvider({ children }: { children: React.ReactNode }) {
   );
 
   const saveCourseEdits = useCallback(
-    ({ title }: { title?: string; goal?: string; context?: string; dialect?: string }) => {
+    ({ title }: { title?: string }) => {
       if (!canAuthor()) return;
       if (title && title.trim()) COURSES[0].title = title.trim();
       bumpCatalog();
@@ -1686,7 +1660,6 @@ export function StoreProvider({ children }: { children: React.ReactNode }) {
             solution: "SELECT id FROM orders WHERE status = 'completed' LIMIT 10;",
             hints: ['Reuse the patterns from earlier chapters.'],
             contract: { columns: ['id'], column_order: 'exact', row_order: 'ignored' },
-            checks: [{ label: 'Selects from orders', code: 'JOIN_MISSING', test: (s) => /from\s+orders/i.test(s) }],
             result: { columns: ['id'], rows: [['1001'], ['1002'], ['1004'], ['1005'], ['1006']] },
           },
         ],
@@ -1699,7 +1672,7 @@ export function StoreProvider({ children }: { children: React.ReactNode }) {
   );
 
   const addLesson = useCallback(
-    ({ title, goal }: { title: string; goal?: string; position?: string }) => {
+    ({ title, goal }: { title: string; goal?: string }) => {
       if (!canAuthor()) return;
       if (!title || !title.trim()) return;
       const desc = (goal && goal.trim()) || 'New chapter generated from your request';
@@ -1722,7 +1695,6 @@ export function StoreProvider({ children }: { children: React.ReactNode }) {
             solution: "SELECT id FROM orders WHERE status = 'completed' LIMIT 10;",
             hints: ['Start from the tables you already know.'],
             contract: { columns: ['id'], column_order: 'exact', row_order: 'ignored' },
-            checks: [{ label: 'Selects from orders', code: 'JOIN_MISSING', test: (s) => /from\s+orders/i.test(s) }],
             result: { columns: ['id'], rows: [['1001'], ['1002'], ['1004']] },
           },
         ],
@@ -1748,7 +1720,6 @@ export function StoreProvider({ children }: { children: React.ReactNode }) {
         solution: "SELECT id FROM orders WHERE status = 'completed' LIMIT 10;",
         hints: ['Reuse the patterns from earlier sections.'],
         contract: { columns: ['id'], column_order: 'exact', row_order: 'ignored' },
-        checks: [{ label: 'Selects from orders', code: 'JOIN_MISSING', test: (s) => /from\s+orders/i.test(s) }],
         result: { columns: ['id'], rows: [['1001'], ['1002'], ['1004'], ['1005'], ['1006']] },
       });
       bumpCatalog();
@@ -1843,10 +1814,16 @@ export function StoreProvider({ children }: { children: React.ReactNode }) {
     [bumpCatalog]
   );
 
-  const value = {
+  /* The provider value, rebuilt only when something in it changed. Without
+     this, one query or one toast rebuilt the object and re-rendered every
+     `useStore()` consumer (34 call sites across 25 files). The five derived
+     values above are memoized on their real inputs so this list stays honest:
+     `catalogVersion` is the re-render trigger for the catalog mutations, which
+     edit `COURSES`/`MODULES` in place rather than replacing them. */
+  const value = useMemo(
+    () => ({
     // data
     COURSES,
-    MODULES,
     progress,
     uiState,
     course,
@@ -1880,7 +1857,6 @@ export function StoreProvider({ children }: { children: React.ReactNode }) {
     screen,
     showScreen,
     challengeId,
-    openChallenge,
     reviewTab,
     setReviewTab,
     tablesOpen,
@@ -1899,7 +1875,6 @@ export function StoreProvider({ children }: { children: React.ReactNode }) {
     closePrompt: () => setPromptRequest(null),
     // theme
     theme,
-    effectiveTheme,
     setTheme: (m: ThemePreference) => {
       setThemeState(m);
       saveJSON(THEME_KEY, m);
@@ -1930,11 +1905,6 @@ export function StoreProvider({ children }: { children: React.ReactNode }) {
         void api.savePreferences({ theme, customThemes: next }).catch(() => { /* device keeps it */ });
       }
     },
-    cycleTheme: () => {
-      const next = theme === 'light' ? 'dark' : 'light';
-      setThemeState(next);
-      saveJSON(THEME_KEY, next);
-    },
     motion,
     setMotion: () => {
       const next = !motion;
@@ -1943,16 +1913,13 @@ export function StoreProvider({ children }: { children: React.ReactNode }) {
     },
     // navigation
     openLessonIn,
-    openLesson,
     selectCourse,
     enrollCourse,
     resumeCourse,
     startLearning,
     stepLesson,
     markLessonDone,
-    courseShort,
     // progress
-    saveProgress,
     recordEvent,
     addNote,
     toggleBookmark,
@@ -1968,7 +1935,6 @@ export function StoreProvider({ children }: { children: React.ReactNode }) {
     exportData,
     importData,
     // content mutations
-    catalogVersion,
     content,
     moveLesson,
     saveCourseEdits,
@@ -1978,13 +1944,10 @@ export function StoreProvider({ children }: { children: React.ReactNode }) {
     addSection,
     // create/build/review draft
     goalInput,
-    setGoalInput,
     reviewGoal,
     setReviewGoal,
     courseSubtitle,
-    setCourseSubtitle,
     contextState,
-    setContextState,
     submitBuild,
     useAuthoredDraft,
     adoptGeneratedCourse,
@@ -1992,16 +1955,29 @@ export function StoreProvider({ children }: { children: React.ReactNode }) {
     setDraftReport,
     buildContext,
     // M8 stored courses
-    storedCourses,
     courseResolving,
     deleteCourse,
     adoptStoredCourse,
     resumeRun,
     runStarted,
     runSettled,
+    resumeBuild,
+    resumeStoredCourse,
+    buildSettled,
     // misc
-    moduleExerciseBlocks: moduleExerciseBlocks as (m: CourseModule) => Block[],
-  };
+    }),
+    [
+      activeLesson, addLesson, addNote, addSection, addStudyTime, adminPasswordEmpty, adoptGeneratedCourse, adoptStoredCourse,
+      aiAvailability, api, apiCount, apiLog, applyExtension, authNotice, authReady, buildContext, buildSettled, catalogVersion,
+      challengeId, chaptersOpen, clearProgress, content, contextState, course, courseResolving, courseSubtitle, customThemes,
+      deleteCourse, draftCourse, draftReport, effectiveTheme, engineCaps, enrollCourse, exportData, goalInput, importData,
+      isBookmarked, latency, loadSampleProgress, login, logout, markLessonDone, modal, modules, motion, moveLesson, navOpen,
+      openBookmark, openLessonIn, openSearchHit, pct, progress, promptRequest, recordEvent, removeSaved, removeWorkbookItem,
+      resumeBuild, resumeCourse, resumeRun, resumeStoredCourse, reviewGoal, reviewTab, role, runSettled, runStarted,
+      saveCourseEdits, saveLessonEdits, saveQuery, screen, selectCourse, session, setDraftReport, setReviewGoal, showScreen,
+      signup, startLearning, stepLesson, submitBuild, tablesOpen, theme, toast, toastMsg, toggleBookmark, uiState, useAuthoredDraft,
+    ]
+  );
 
   return <StoreContext.Provider value={value}>{children}</StoreContext.Provider>;
 }

@@ -7,9 +7,9 @@ import type { AuthSession, Evaluation, QueryResult, User } from '../types';
    malformed gateway response fails decoding instead of silently corrupting the
    UI. */
 
-export const ColumnSchema = Schema.Struct({ name: Schema.String, type: Schema.String });
+const ColumnSchema = Schema.Struct({ name: Schema.String, type: Schema.String });
 
-export const QueryErrorSchema = Schema.Struct({
+const QueryErrorSchema = Schema.Struct({
   /* Literals, not String: the gateway's code must be one the contract names,
      or the response fails decoding instead of reaching the UI unvalidated. */
   code: Schema.Literals(QUERY_ERROR_CODES),
@@ -17,7 +17,7 @@ export const QueryErrorSchema = Schema.Struct({
   detail: Schema.optional(Schema.NullOr(Schema.String)),
 });
 
-export const QueryResultSchema = Schema.Struct({
+const QueryResultSchema = Schema.Struct({
   status: Schema.Literals(['succeeded', 'failed']),
   columns: Schema.Array(ColumnSchema),
   rows: Schema.Array(Schema.Array(Schema.Unknown)),
@@ -30,13 +30,13 @@ export const QueryResultSchema = Schema.Struct({
   dialect: Schema.Literals(['postgresql', 'sqlite']),
 });
 
-export const CheckResultSchema = Schema.Struct({
+const CheckResultSchema = Schema.Struct({
   label: Schema.String,
   code: Schema.String,
   ok: Schema.Boolean,
 });
 
-export const EvaluationSchema = Schema.Struct({
+const EvaluationSchema = Schema.Struct({
   qr: QueryResultSchema,
   checks: Schema.Array(CheckResultSchema),
   passed: Schema.Boolean,
@@ -56,7 +56,7 @@ export const decodeEvaluation = (u: unknown): Effect.Effect<Evaluation, Schema.S
    returns the account alone. The token is the only credential the client sends;
    progress and events are owner-scoped server-side, so no user id ever travels. */
 
-export const UserSchema = Schema.Struct({
+const UserSchema = Schema.Struct({
   id: Schema.String,
   email: Schema.String,
   name: Schema.String,
@@ -64,14 +64,14 @@ export const UserSchema = Schema.Struct({
   createdAt: Schema.String,
 });
 
-export const AuthSessionSchema = Schema.Struct({
+const AuthSessionSchema = Schema.Struct({
   ok: Schema.Boolean,
   user: UserSchema,
   token: Schema.String,
   expiresAt: Schema.String,
 });
 
-export const AuthUserSchema = Schema.Struct({
+const AuthUserSchema = Schema.Struct({
   ok: Schema.Boolean,
   user: UserSchema,
 });

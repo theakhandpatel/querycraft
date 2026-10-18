@@ -20,7 +20,7 @@ function Backdrop({ id, children }: { id: string; children: React.ReactNode }) {
   );
 }
 
-function Head({ eyebrow, title, sub }: { eyebrow: string; title: string; sub: string; id?: string }) {
+function Head({ eyebrow, title, sub }: { eyebrow: string; title: string; sub: string }) {
   const s = useStore();
   return (
     <div className="modalhead">
@@ -37,10 +37,9 @@ function Head({ eyebrow, title, sub }: { eyebrow: string; title: string; sub: st
 function EditCourseModal() {
   const s = useStore();
   const [title, setTitle] = useState(s.course.title);
+  /* The learning goal is the one field the store reads back (`setReviewGoal`),
+     so it keeps its state; the rest of the form only wrote to itself. */
   const [goal, setGoal] = useState(s.reviewGoal);
-  const [level, setLevel] = useState('Comfortable with SELECT, filtering, joins, and basic GROUP BY');
-  const [context, setContext] = useState('Commerce data. Revenue excludes cancelled orders and accounts for returned quantities. Use PostgreSQL syntax. Keep examples realistic and progressively harder.');
-  const [dialect, setDialect] = useState('PostgreSQL');
 
   useEffect(() => {
     if (s.modal === ('editCourse')) {
@@ -55,18 +54,9 @@ function EditCourseModal() {
       <Head eyebrow="Course settings" title="Edit course context" sub="Change the course without losing the existing draft." />
       <Field label="Course title">{(id) => <input id={id} value={title} onChange={(e) => setTitle(e.target.value)} />}</Field>
       <Field label="Learning goal">{(id) => <textarea id={id} value={goal} onChange={(e) => setGoal(e.target.value)} />}</Field>
-      <Field label="Assumed starting point">{(id) => <input id={id} value={level} onChange={(e) => setLevel(e.target.value)} />}</Field>
-      <Field label="Context / business rules">{(id) => <textarea id={id} value={context} onChange={(e) => setContext(e.target.value)} />}</Field>
-      <Field label="Dialect">
-        {(id) => (
-          <select id={id} value={dialect} onChange={(e) => setDialect(e.target.value)}>
-            <option>PostgreSQL</option><option>SQLite</option><option>MySQL</option><option>SQL Server</option>
-          </select>
-        )}
-      </Field>
       <div className="modalfoot">
         <button onClick={() => s.closeModal()}>Cancel</button>
-        <button className="primary" onClick={() => { s.setReviewGoal(goal); s.saveCourseEdits({ title, goal, context, dialect }); s.closeModal(); }}>Save changes</button>
+        <button className="primary" onClick={() => { s.setReviewGoal(goal); s.saveCourseEdits({ title }); s.closeModal(); }}>Save changes</button>
       </div>
     </Backdrop>
   );
@@ -77,13 +67,11 @@ function EditLessonModal() {
   const m = activeModules(s.course)[s.activeLesson] || MODULES[0];
   const [title, setTitle] = useState(m && m.title);
   const [body, setBody] = useState(m && m.summary);
-  const [prompt, setPrompt] = useState('');
 
   useEffect(() => {
     if (s.modal === ('editLesson') && m) {
       setTitle(m.title);
       setBody(m.summary);
-      setPrompt((m.blocks || []).filter((b) => b.type === 'exercise').map((b) => b.prompt).join('\n'));
     }
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [s.modal]);
@@ -93,7 +81,6 @@ function EditLessonModal() {
       <Head eyebrow="Chapter editor" title="Edit this chapter" sub="Edit this chapter independently from the rest of the course." />
       <Field label="Chapter title">{(id) => <input id={id} value={title || ''} onChange={(e) => setTitle(e.target.value)} />}</Field>
       <Field label="Chapter page / explanation">{(id) => <textarea id={id} value={body || ''} onChange={(e) => setBody(e.target.value)} />}</Field>
-      <Field label="Exercise prompt">{(id) => <textarea id={id} value={prompt} onChange={(e) => setPrompt(e.target.value)} />}</Field>
       <div className="modalfoot">
         <button onClick={() => s.closeModal()}>Cancel</button>
         <button className="primary" onClick={() => { s.saveLessonEdits({ title, summary: body }); s.closeModal(); }}>Save chapter</button>
@@ -140,24 +127,14 @@ function AddLessonModal() {
   const s = useStore();
   const [title, setTitle] = useState('');
   const [goal, setGoal] = useState('');
-  const [position, setPosition] = useState('end');
   return (
     <Backdrop id="addLesson">
       <Head eyebrow="Chapter editor" title="Add a chapter" sub="Describe a topic or choose a useful next step." />
       <Field label="Chapter title">{(id) => <input id={id} value={title} onChange={(e) => setTitle(e.target.value)} placeholder="e.g. Debugging row multiplication in multi-join queries" />}</Field>
       <Field label="What should the learner be able to do?">{(id) => <textarea id={id} value={goal} onChange={(e) => setGoal(e.target.value)} placeholder="Describe the skill, challenge, or concept this chapter should cover." />}</Field>
-      <Field label="Placement">
-        {(id) => (
-          <select id={id} value={position} onChange={(e) => setPosition(e.target.value)}>
-            <option value="end">At the end of the course</option>
-            <option value="before">Before the final challenge</option>
-            <option value="after">After the current chapter</option>
-          </select>
-        )}
-      </Field>
       <div className="modalfoot">
         <button onClick={() => s.closeModal()}>Cancel</button>
-        <button className="primary" onClick={() => { s.addLesson({ title, goal, position }); setTitle(''); setGoal(''); s.closeModal(); }}>Add to draft</button>
+        <button className="primary" onClick={() => { s.addLesson({ title, goal }); setTitle(''); setGoal(''); s.closeModal(); }}>Add to draft</button>
       </div>
     </Backdrop>
   );

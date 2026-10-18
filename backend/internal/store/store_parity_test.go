@@ -13,15 +13,31 @@ import (
 	"time"
 
 	"github.com/querycraft/sqlquery/backend/internal/pgtest"
+	"github.com/querycraft/sqlquery/backend/internal/schema"
 )
 
-// storeMethods are the 14 methods of Store. The parity test checks that the
-// script below ran every one of them against both backends.
-var storeMethods = []string{
-	"SaveProgress", "LoadProgress", "SaveEvent",
-	"CreateUser", "UserByEmail", "UserByID", "CountUsers", "SetPasswordHash", "UserIDs",
-	"CreateSession", "SessionUser", "DeleteSession",
-	"Kind", "Close",
+// storeMethodsRequired derives the Store methods the parity script below must
+// run: every method of the interface, minus the ones it intentionally leaves
+// uncovered. The settings methods have no parity cases yet, and the
+// schema.Depot methods have their own (sqlite_test.go), so only the account,
+// progress and session statements run here.
+func storeMethodsRequired() []string {
+	st := reflect.TypeOf((*Store)(nil)).Elem()
+	uncovered := map[string]bool{
+		"UserSetting": true, "SaveUserSetting": true,
+		"Setting": true, "SaveSetting": true,
+	}
+	depot := reflect.TypeOf((*schema.Depot)(nil)).Elem()
+	for i := 0; i < depot.NumMethod(); i++ {
+		uncovered[depot.Method(i).Name] = true
+	}
+	out := make([]string, 0, st.NumMethod())
+	for i := 0; i < st.NumMethod(); i++ {
+		if name := st.Method(i).Name; !uncovered[name] {
+			out = append(out, name)
+		}
+	}
+	return out
 }
 
 // TestStoreMethodsMatchAcrossBackends runs the same account, progress and
@@ -116,21 +132,6 @@ func runStoreScript(t *testing.T, st Store, kind string) []storeAnswer {
 	user, hash, ok, err = st.UserByEmail(ctx, "nobody@example.test")
 	must("UserByEmail missing", err)
 	record("UserByEmail missing", []any{user.ID, hash, ok})
-
-	user, ok, err = st.UserByID(ctx, learner.ID)
-	must("UserByID", err)
-	record("UserByID", []any{
-		user.ID, user.Email, user.Name, user.Role, user.IsAdmin(), ok,
-		writtenNow(t, "UserByID", user.CreatedAt, started),
-	})
-
-	user, ok, err = st.UserByID(ctx, "u_missing")
-	must("UserByID missing", err)
-	record("UserByID missing", []any{user.ID, ok})
-
-	count, err := st.CountUsers(ctx)
-	must("CountUsers", err)
-	record("CountUsers", count)
 
 	must("SetPasswordHash", st.SetPasswordHash(ctx, learner.ID, "hash-changed"))
 	_, hash, ok, err = st.UserByEmail(ctx, "learner@example.test")
@@ -249,13 +250,8 @@ func canonical(t *testing.T, step string, raw json.RawMessage) string {
 // storedEventPayload reads back what SaveEvent wrote. It goes through the same
 // shim the store uses rather than spelling one query per dialect.
 func storedEventPayload(ctx context.Context, st Store, userID, id string) (string, error) {
-	var shared *sqlStore
-	switch backend := st.(type) {
-	case *Postgres:
-		shared = &backend.sqlStore
-	case *SQLite:
-		shared = &backend.sqlStore
-	default:
+	shared := sharedStore(st)
+	if shared == nil {
 		return "", fmt.Errorf("no shared statements for %T", st)
 	}
 	var raw []byte
@@ -267,7 +263,8 @@ func storedEventPayload(ctx context.Context, st Store, userID, id string) (strin
 }
 
 // compareStoreAnswers compares one step at a time, so a mismatch names the
-// operation that disagreed, and checks the script covered all 14 methods.
+// operation that disagreed, and checks the script ran every method it is
+// required to cover.
 func compareStoreAnswers(t *testing.T, postgres, sqlite []storeAnswer) {
 	t.Helper()
 	if len(postgres) != len(sqlite) {
@@ -282,7 +279,7 @@ func compareStoreAnswers(t *testing.T, postgres, sqlite []storeAnswer) {
 				postgres[i].step, postgres[i].value, sqlite[i].value)
 		}
 	}
-	for _, method := range storeMethods {
+	for _, method := range storeMethodsRequired() {
 		ran := slices.ContainsFunc(postgres, func(answer storeAnswer) bool {
 			return answer.step == method || strings.HasPrefix(answer.step, method+" ")
 		})

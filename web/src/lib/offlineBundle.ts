@@ -24,16 +24,16 @@ import {
 import { attemptKey } from './progress';
 import type { EventKind, Progress, ProgressEvent } from '../types';
 
-export interface OfflineRow {
+interface OfflineRow {
   store: string;
   key: string;
   value: unknown;
 }
 
 /** The single `meta` record: what the workspace was written against. */
-export const META_KEY = 'workspace';
+const META_KEY = 'workspace';
 
-export interface WorkspaceMeta {
+interface WorkspaceMeta {
   dataset_version: number;
   export_format_version: number;
   updated_at: string;
@@ -49,7 +49,7 @@ export interface WorkspaceMeta {
 /** Attempts already carry the outcome; these are the ones grading produced. */
 const GRADED_KINDS: ReadonlySet<EventKind> = new Set<EventKind>(['passed', 'failed', 'accepted', 'error']);
 
-export interface AttemptRecord {
+interface AttemptRecord {
   id: string;
   course: string;
   lesson: number | null;
@@ -60,7 +60,7 @@ export interface AttemptRecord {
   exercise_version?: number;
 }
 
-export interface EvaluationRecord {
+interface EvaluationRecord {
   /** The attempt this evaluates (attempt id), so the two stores line up. */
   attempt_id: string;
   exercise_id: string;
@@ -73,7 +73,7 @@ export interface EvaluationRecord {
   exercise_version?: number;
 }
 
-export interface WorkbookRecord {
+interface WorkbookRecord {
   course: string;
   lesson: number;
   ts: number;
@@ -83,7 +83,7 @@ export interface WorkbookRecord {
   index: number;
 }
 
-export interface SavedQueryRecord {
+interface SavedQueryRecord {
   course: string;
   lesson: number;
   name: string;

@@ -5,7 +5,6 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
-	"slices"
 	"strings"
 	"time"
 
@@ -42,14 +41,13 @@ type ExplainOptions struct {
 	Limits      engine.Limits
 	Dataset     string
 	ScaleFactor int
-	NodeCap     int
 }
 
 // Environment SQL. Every value is read over the learner's own connection, in
 // the same transaction settings the plan ran under (sessionSettings applies
 // work_mem and search_path to each statement), so the reported settings are the
-// ones that produced the plan — current_setting reflects the transaction value,
-// while pg_settings would report the session default.
+// ones that produced the plan. current_setting reflects the transaction value,
+// while pg_settings reports the session default.
 const (
 	sqlPlanRowCounts = `SELECT c.relname, c.reltuples::float8
 FROM pg_class c
@@ -57,7 +55,7 @@ JOIN pg_namespace n ON n.oid = c.relnamespace
 WHERE n.nspname = current_schema() AND c.relkind IN ('r', 'p', 'm') AND c.relname <> 'dataset_meta'
 ORDER BY c.relname`
 
-	sqlPlanIndexes = `SELECT tablename, indexname, indexdef
+	sqlPlanIndexes = `SELECT tablename, indexname
 FROM pg_indexes
 WHERE schemaname = current_schema()
 ORDER BY tablename, indexname`
@@ -90,16 +88,16 @@ var planSettings = []string{
 // It uses the engine.Executor seam, not the concrete pgx pool, so the same code
 // runs against the real engine and against a test fake.
 //
-// The returned error is always nil today: an engine failure is reported inside
-// the bundle's error envelope, exactly as engine.Execute reports it inside a
-// QueryResult, so one taxonomy serves both surfaces. It exists because a future
-// planner-only engine may fail before a bundle can be built at all.
-func Explain(ctx context.Context, ex engine.Executor, statement string, opts ExplainOptions) (*PlanBundle, error) {
-	/* Fill, not Merge: the caller (the HTTP handler) has already resolved
-	   request-vs-server with Merge, where the server's configured caps are the
-	   ceiling. Re-merging the compiled DefaultLimits() here clamped DOWN, so a
-	   gateway configured above the default (QC_MAX_ROWS=2000) silently planned
-	   at the default 500. */
+// An engine failure is reported inside the bundle's error envelope, exactly as
+// engine.Execute reports it inside a QueryResult, so one taxonomy serves both
+// surfaces. There is no error return: a plan capture always produces a bundle,
+// and a refusal is a failed bundle rather than a Go error.
+func Explain(ctx context.Context, ex engine.Executor, statement string, opts ExplainOptions) *PlanBundle {
+	/* Fill, not Merge: the HTTP handler already resolved request-versus-server
+	   with Merge, where the server's configured caps are the ceiling. Merging
+	   the compiled DefaultLimits() again here would clamp down, so a gateway
+	   configured above the default (QC_MAX_ROWS=2000) would silently plan at
+	   the default 500. */
 	limits := opts.Limits.Fill(engine.DefaultLimits())
 	start := time.Now()
 	requestID := engine.RequestIDFromContext(ctx)
@@ -111,12 +109,12 @@ func Explain(ctx context.Context, ex engine.Executor, statement string, opts Exp
 
 	// failed builds an honest refusal that still carries correlation ids: the
 	// numbers are absent, but the request is not anonymous in the logs.
-	failed := func(code, message, detail string) (*PlanBundle, error) {
+	failed := func(code, message, detail string) *PlanBundle {
 		bundle := FailedBundle(EnginePostgres, code, message, detail)
 		bundle.DurationMS = engine.RoundMS(time.Since(start))
 		bundle.Statement = planStringPtr(statement)
 		bundle.RequestID = requestID
-		return bundle, nil
+		return bundle
 	}
 
 	if engine.IsBlankSQL(statement) {
@@ -157,16 +155,12 @@ func Explain(ctx context.Context, ex engine.Executor, statement string, opts Exp
 		return failed(engine.CodeRuntime, "The engine's plan could not be read.", perr.Error())
 	}
 
-	nodeCap := opts.NodeCap
-	if nodeCap <= 0 {
-		nodeCap = DefaultPlanNodeCap
-	}
-	summary, capped := summarizePlan(root, nodeCap)
+	summary, capped := summarizePlan(root, DefaultPlanNodeCap)
 	warnings := deriveWarnings(summary, precision)
 	if capped {
 		warnings = append(warnings, PlanWarning{
 			Code:    WarnNodeCapReached,
-			Message: fmt.Sprintf("The plan has more than %d nodes; the flat walk is reported up to the cap.", nodeCap),
+			Message: fmt.Sprintf("The plan has more than %d nodes; the flat walk is reported up to the cap.", DefaultPlanNodeCap),
 		})
 	}
 
@@ -184,7 +178,7 @@ func Explain(ctx context.Context, ex engine.Executor, statement string, opts Exp
 		RequestID:       requestID,
 		Error:           nil,
 	}
-	return bundle, nil
+	return bundle
 }
 
 // explainRow runs the EXPLAIN and returns the first row's single column as the
@@ -245,6 +239,9 @@ func parsePlanRoot(raw []byte) (PlanRoot, error) {
 	return planRootOf(doc), nil
 }
 
+// planRootOf unwraps the root node from whatever the driver decoded. It
+// accepts the standard `[{"Plan": {...}}]` document, a bare `{"Plan": {...}}`,
+// and a node map that already carries "Node Type". Anything else is nil.
 func planRootOf(doc any) PlanRoot {
 	if arr, ok := doc.([]any); ok {
 		if len(arr) == 0 {
@@ -442,173 +439,11 @@ func readEnvironment(ctx context.Context, ex engine.Executor, opts ExplainOption
 
 	if rows, err := planRows(ctx, ex, sqlPlanIndexes); err == nil {
 		for _, row := range rows {
-			idx := PlanIndex{
+			env.Indexes = append(env.Indexes, PlanIndex{
 				Relation: planValueString(row, 0),
 				Name:     planValueString(row, 1),
-			}
-			if def := planValueString(row, 2); def != "" {
-				idx.Definition = &def
-			}
-			env.Indexes = append(env.Indexes, idx)
+			})
 		}
 	}
 	return env
-}
-
-/* ---------- JSON plan helpers ---------- */
-
-func planString(node map[string]any, key string) string {
-	if s, ok := node[key].(string); ok {
-		return s
-	}
-	return ""
-}
-
-func planStringRef(node map[string]any, key string) *string {
-	if s, ok := node[key].(string); ok {
-		return &s
-	}
-	return nil
-}
-
-func planNumber(node map[string]any, key string) float64 {
-	if f, ok := node[key].(float64); ok {
-		return f
-	}
-	return 0
-}
-
-func planNumberRef(node map[string]any, key string) *float64 {
-	if f, ok := node[key].(float64); ok {
-		return &f
-	}
-	return nil
-}
-
-func planStringSlice(node map[string]any, key string) []string {
-	list, ok := node[key].([]any)
-	if !ok {
-		return nil
-	}
-	out := make([]string, 0, len(list))
-	for _, v := range list {
-		out = append(out, fmt.Sprint(v))
-	}
-	return out
-}
-
-// planBlockReads sums the blocks the node read from disk (as opposed to those
-// it found in shared buffers), which is the reproducible half of the I/O a plan
-// costs.
-func planBlockReads(node map[string]any) *float64 {
-	read, ok := planBlockRead(node, "Shared Read Blocks", "Read Blocks", "Local Read Blocks", "Temp Read Blocks")
-	if !ok {
-		return nil
-	}
-	shared, _ := planBlockRead(node, "Shared Read Blocks", "Read Blocks")
-	local, _ := planBlockRead(node, "Local Read Blocks")
-	temp, _ := planBlockRead(node, "Temp Read Blocks")
-	total := shared + local + temp
-	if total <= 0 {
-		return &read
-	}
-	return &total
-}
-
-func planBlockRead(node map[string]any, keys ...string) (float64, bool) {
-	for _, key := range keys {
-		if f, ok := node[key].(float64); ok {
-			return f, true
-		}
-	}
-	return 0, false
-}
-
-func planHasWarning(warnings []string, code string) bool {
-	return slices.Contains(warnings, code)
-}
-
-func appendUnique(list []string, value string) []string {
-	if slices.Contains(list, value) {
-		return list
-	}
-	return append(list, value)
-}
-
-/* ---------- environment row helpers ---------- */
-
-func planFirstRow(ctx context.Context, ex engine.Executor, sql string, args ...any) ([]any, error) {
-	rows, err := planRows(ctx, ex, sql, args...)
-	if err != nil {
-		return nil, err
-	}
-	if len(rows) == 0 {
-		return nil, errors.New("no rows")
-	}
-	return rows[0], nil
-}
-
-func planRows(ctx context.Context, ex engine.Executor, sql string, args ...any) ([][]any, error) {
-	rows, err := ex.Query(ctx, sql, args...)
-	if err != nil {
-		return nil, err
-	}
-	if rows == nil {
-		return nil, nil
-	}
-	defer rows.Close()
-	var out [][]any
-	for rows.Next() {
-		vals, verr := rows.Values()
-		if verr != nil {
-			return out, verr
-		}
-		out = append(out, vals)
-	}
-	return out, rows.Err()
-}
-
-func planValueString(vals []any, i int) string {
-	if i >= len(vals) || vals[i] == nil {
-		return ""
-	}
-	switch v := vals[i].(type) {
-	case string:
-		return v
-	case []byte:
-		return string(v)
-	default:
-		return fmt.Sprint(v)
-	}
-}
-
-func planValueFloat(vals []any, i int) float64 {
-	if i >= len(vals) {
-		return 0
-	}
-	switch v := vals[i].(type) {
-	case float64:
-		return v
-	case float32:
-		return float64(v)
-	case int64:
-		return float64(v)
-	case int:
-		return float64(v)
-	case string:
-		var f float64
-		if _, err := fmt.Sscanf(v, "%g", &f); err == nil {
-			return f
-		}
-	}
-	return 0
-}
-
-func planStringPtr(s string) *string { return &s }
-
-func planDetail(e *engine.QueryError) string {
-	if e == nil || e.Detail == nil {
-		return ""
-	}
-	return *e.Detail
 }

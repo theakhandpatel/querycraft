@@ -10,6 +10,7 @@ import (
 	"github.com/jackc/pgx/v5"
 
 	"github.com/querycraft/sqlquery/backend/internal/dataset"
+	"github.com/querycraft/sqlquery/backend/internal/envdb"
 	"github.com/querycraft/sqlquery/backend/internal/localdb"
 )
 
@@ -61,21 +62,21 @@ func TestWritableTemplateGrantsLearnerDDLAndDML(t *testing.T) {
 	/* ---- the writable template a challenge environment is copied from ---- */
 
 	writableTemplate := dataset.TemplateDatabaseName
-	if err := dataset.CreateDatabase(ctx, admin, writableTemplate); err != nil {
+	if err := envdb.CreateDatabase(ctx, admin, writableTemplate); err != nil {
 		t.Fatalf("create the writable template: %v", err)
 	}
 	if err := dataset.LoadWritableIntoTemplate(ctx, admin, writableTemplate, clusterPassword); err != nil {
 		t.Fatalf("load the writable template: %v", err)
 	}
-	if err := dataset.SealTemplate(ctx, admin, writableTemplate); err != nil {
+	if err := envdb.SealTemplate(ctx, admin, writableTemplate); err != nil {
 		t.Fatalf("seal the writable template: %v", err)
 	}
 
 	writableEnv := dataset.EnvironmentDatabaseName("writable_probe")
-	if err := dataset.CreateDatabaseFromTemplate(ctx, admin, writableEnv, writableTemplate); err != nil {
+	if err := envdb.CreateDatabaseFromTemplate(ctx, admin, writableEnv, writableTemplate); err != nil {
 		t.Fatalf("copy the writable environment: %v", err)
 	}
-	learner, err := dataset.ConnectAsLearner(ctx, admin, writableEnv, clusterPassword)
+	learner, err := connectAsLearner(ctx, admin, writableEnv, clusterPassword)
 	if err != nil {
 		t.Fatalf("connect to the writable environment as the learner role: %v", err)
 	}
@@ -149,21 +150,21 @@ func TestWritableTemplateGrantsLearnerDDLAndDML(t *testing.T) {
 	/* ---- the read-only template the gateway's own database uses ---- */
 
 	readOnlyTemplate := "qc_ro_template"
-	if err := dataset.CreateDatabase(ctx, admin, readOnlyTemplate); err != nil {
+	if err := envdb.CreateDatabase(ctx, admin, readOnlyTemplate); err != nil {
 		t.Fatalf("create the read-only template: %v", err)
 	}
-	if err := dataset.LoadIntoTemplate(ctx, admin, readOnlyTemplate, clusterPassword); err != nil {
+	if err := loadReadOnlyIntoTemplate(ctx, admin, readOnlyTemplate, clusterPassword); err != nil {
 		t.Fatalf("load the read-only template: %v", err)
 	}
-	if err := dataset.SealTemplate(ctx, admin, readOnlyTemplate); err != nil {
+	if err := envdb.SealTemplate(ctx, admin, readOnlyTemplate); err != nil {
 		t.Fatalf("seal the read-only template: %v", err)
 	}
 
 	readOnlyEnv := dataset.EnvironmentDatabaseName("readonly_probe")
-	if err := dataset.CreateDatabaseFromTemplate(ctx, admin, readOnlyEnv, readOnlyTemplate); err != nil {
+	if err := envdb.CreateDatabaseFromTemplate(ctx, admin, readOnlyEnv, readOnlyTemplate); err != nil {
 		t.Fatalf("copy the read-only environment: %v", err)
 	}
-	reader, err := dataset.ConnectAsLearner(ctx, admin, readOnlyEnv, clusterPassword)
+	reader, err := connectAsLearner(ctx, admin, readOnlyEnv, clusterPassword)
 	if err != nil {
 		t.Fatalf("connect to the read-only environment as the learner role: %v", err)
 	}

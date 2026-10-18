@@ -1,3 +1,8 @@
+// The restricted login role every learner statement runs as, and the grants its
+// database gives it. EnsureLearnerRole creates or repairs the role and grants it
+// SELECT alone, which is what the gateway's own database needs. A copied
+// challenge environment widens those grants through LoadWritableIntoTemplate
+// (template.go), and the two grant sets are deliberately different.
 package dataset
 
 import (
@@ -29,7 +34,7 @@ const LearnerRole = "querycraft_learner"
 // different database with a different grant set (LoadWritableIntoTemplate), so
 // the two must not be collapsed into one "make the learner role useful" helper.
 func EnsureLearnerRole(ctx context.Context, conn *pgx.Conn, password string) error {
-	role := quoteIdent(LearnerRole)
+	role := QuoteIdent(LearnerRole)
 
 	var exists bool
 	if err := conn.QueryRow(ctx, "SELECT EXISTS (SELECT 1 FROM pg_roles WHERE rolname = $1)", LearnerRole).Scan(&exists); err != nil {
@@ -59,18 +64,18 @@ func EnsureLearnerRole(ctx context.Context, conn *pgx.Conn, password string) err
 		// `public` is deliberately absent: it is PostgreSQL's default creation
 		// schema, so anything an operator or extension later creates there would
 		// otherwise become silently reachable from a learner statement.
-		"ALTER ROLE " + role + " SET search_path = " + quoteIdent(SchemaName),
+		"ALTER ROLE " + role + " SET search_path = " + QuoteIdent(SchemaName),
 	}
 	// Create the dataset schema if this call precedes the schema script. GRANT
 	// fails hard with "schema dataset does not exist" on a brand-new cluster,
 	// which would abort startup before schema.sql ever runs.
 	grants := []string{
-		"CREATE SCHEMA IF NOT EXISTS " + quoteIdent(SchemaName),
-		"GRANT USAGE ON SCHEMA " + quoteIdent(SchemaName) + " TO " + role,
-		"GRANT SELECT ON ALL TABLES IN SCHEMA " + quoteIdent(SchemaName) + " TO " + role,
+		"CREATE SCHEMA IF NOT EXISTS " + QuoteIdent(SchemaName),
+		"GRANT USAGE ON SCHEMA " + QuoteIdent(SchemaName) + " TO " + role,
+		"GRANT SELECT ON ALL TABLES IN SCHEMA " + QuoteIdent(SchemaName) + " TO " + role,
 		// Tables the dataset generator adds later must be readable too, without
 		// a second grant pass.
-		"ALTER DEFAULT PRIVILEGES IN SCHEMA " + quoteIdent(SchemaName) + " GRANT SELECT ON TABLES TO " + role,
+		"ALTER DEFAULT PRIVILEGES IN SCHEMA " + QuoteIdent(SchemaName) + " GRANT SELECT ON TABLES TO " + role,
 	}
 	for _, stmt := range append(defaults, grants...) {
 		if _, err := conn.Exec(ctx, stmt); err != nil {

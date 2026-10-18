@@ -104,7 +104,7 @@ func (c sqlCursor) Close() { _ = c.Rows.Close() }
 /* ---------- the shared implementation ---------- */
 
 // sqlStore holds one backend's query surface and its dialect. Postgres and
-// SQLite embed it, so the twelve methods it declares arrive on both types.
+// SQLite embed it, so the methods it declares arrive on both types.
 type sqlStore struct {
 	querier
 	dialect sqlDialect
@@ -148,7 +148,7 @@ var (
 // in. SQLite's tables are unqualified.
 func (d sqlDialect) table(name string) string {
 	if d.postgres {
-		return AppSchema + "." + name
+		return appSchema + "." + name
 	}
 	return name
 }
@@ -218,6 +218,8 @@ type timeColumn struct {
 	dst *time.Time
 }
 
+// Scan implements sql.Scanner. The pgx pool hands a time.Time and the
+// database/sql SQLite driver hands the stored text, so both arrive here.
 func (c timeColumn) Scan(src any) error {
 	switch raw := src.(type) {
 	case time.Time:
@@ -260,10 +262,6 @@ const (
 
 	userByEmailSQL = `SELECT id, email, name, role, password_hash, created_at
 		 FROM %s WHERE lower(email) = lower(?)`
-
-	userByIDSQL = `SELECT id, email, name, role, created_at FROM %s WHERE id = ?`
-
-	countUsersSQL = `SELECT count(*) FROM %s`
 
 	userIDsSQL = `SELECT id FROM %s`
 
@@ -322,8 +320,6 @@ func (s *sqlStore) LoadProgress(ctx context.Context, userID, course string) (jso
 	}
 	return json.RawMessage(raw), true, nil
 }
-
-// SaveEvent implements Store.
 
 /* ---------- settings ---------- */
 
@@ -431,29 +427,6 @@ func (s *sqlStore) UserByEmail(ctx context.Context, email string) (User, string,
 		return User{}, "", false, err
 	}
 	return u, hash, true, nil
-}
-
-// UserByID implements Store.
-func (s *sqlStore) UserByID(ctx context.Context, id string) (User, bool, error) {
-	var u User
-	err := s.queryRow(ctx, s.stmt(userByIDSQL, "users"), id).
-		Scan(&u.ID, &u.Email, &u.Name, &u.Role, timeColumn{&u.CreatedAt})
-	if s.dialect.noRows(err) {
-		return User{}, false, nil
-	}
-	if err != nil {
-		return User{}, false, err
-	}
-	return u, true, nil
-}
-
-// CountUsers implements Store.
-func (s *sqlStore) CountUsers(ctx context.Context) (int, error) {
-	var n int
-	if err := s.queryRow(ctx, s.stmt(countUsersSQL, "users")).Scan(&n); err != nil {
-		return 0, err
-	}
-	return n, nil
 }
 
 // UserIDs implements Store: every account id, for the environment reaper.

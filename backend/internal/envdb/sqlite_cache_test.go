@@ -44,6 +44,15 @@ func isCached(s *SQLiteEnvironments, accountID string) bool {
 	return ok
 }
 
+// cachedAccounts reports how many per-account executors are cached. The value is
+// a snapshot, not a lease, and only the cache tests read it, so it lives with
+// them rather than on the store's production surface.
+func (s *SQLiteEnvironments) cachedAccounts() int {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	return len(s.byAccount)
+}
+
 // scalarOn runs a single-cell count through an executor, the way a learner's
 // statement does, so the assertions read the engine's answer and not a cache.
 func scalarOn(t *testing.T, ex *engine.SQLiteExecutor, sql string) int64 {

@@ -81,7 +81,7 @@ func TestMemoryRunsAreNewestFirst(t *testing.T) {
 			t.Fatalf("save %s: %v", id, err)
 		}
 	}
-	list, err := m.Runs(ctx)
+	list, err := m.RunsFor(ctx, "")
 	if err != nil {
 		t.Fatalf("list: %v", err)
 	}
@@ -96,7 +96,9 @@ func TestMemoryRunsAreNewestFirst(t *testing.T) {
 func TestMemoryRunSaveIsAnUpsert(t *testing.T) {
 	m := NewMemory()
 	ctx := context.Background()
-	start := time.Now().UTC().Add(-time.Minute)
+	// Metadata timestamps are microsecond-precision (Postgres timestamptz and
+	// SQLite's text form both are), so the fixture is truncated the same way.
+	start := time.Now().UTC().Add(-time.Minute).Truncate(time.Microsecond)
 
 	first := sampleRun("run_upsert", "u_alice", schema.StatusActive, start)
 	if err := m.SaveRun(ctx, first); err != nil {
@@ -115,7 +117,7 @@ func TestMemoryRunSaveIsAnUpsert(t *testing.T) {
 	if !got.StartedAt.Equal(start) {
 		t.Fatalf("started_at = %v, want the original %v", got.StartedAt, start)
 	}
-	if list, _ := m.Runs(ctx); len(list) != 1 {
+	if list, _ := m.RunsFor(ctx, ""); len(list) != 1 {
 		t.Fatalf("upsert produced %d rows", len(list))
 	}
 }
@@ -132,7 +134,7 @@ func TestMemoryRunCarriesItsOwner(t *testing.T) {
 	if !ok || rec.OwnerID != "u_bob" {
 		t.Fatalf("owner = %q, want u_bob; owner scoping is the caller's to apply", rec.OwnerID)
 	}
-	list, _ := m.Runs(ctx)
+	list, _ := m.RunsFor(ctx, "")
 	for _, sm := range list {
 		if sm.ID == "run_b" && sm.OwnerID != "u_bob" {
 			t.Fatalf("the summary lost its owner: %+v", sm)
@@ -184,7 +186,7 @@ func TestPostgresRunsSurviveARestart(t *testing.T) {
 		t.Fatalf("error = %+v, want the stored failure", got.Error)
 	}
 
-	list, err := second.Runs(ctx)
+	list, err := second.RunsFor(ctx, "")
 	if err != nil {
 		t.Fatalf("list: %v", err)
 	}
@@ -219,7 +221,7 @@ func TestPostgresRunSaveIsAnUpsert(t *testing.T) {
 	if !got.StartedAt.Equal(start.Truncate(time.Microsecond)) {
 		t.Fatalf("started_at = %v, want the original %v", got.StartedAt, start)
 	}
-	if list, _ := st.Runs(ctx); len(list) != 1 {
+	if list, _ := st.RunsFor(ctx, ""); len(list) != 1 {
 		t.Fatalf("upsert produced %d rows", len(list))
 	}
 }
@@ -246,7 +248,7 @@ func TestPostgresRunsCarryTheirOwner(t *testing.T) {
 	if !ok || rec.OwnerID != "u_alice" {
 		t.Fatalf("owner = %q, want u_alice", rec.OwnerID)
 	}
-	list, _ := st.Runs(ctx)
+	list, _ := st.RunsFor(ctx, "")
 	owners := map[string]string{}
 	for _, sm := range list {
 		owners[sm.ID] = sm.OwnerID

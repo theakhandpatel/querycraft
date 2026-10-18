@@ -3,6 +3,24 @@
 // ids, JSON, limits) and delegates execution to engine and grading to eval.
 // Endpoints and payloads mirror contracts/*.schema.json and the client's
 // src/api/httpApi.js.
+//
+// One request walks a fixed middleware chain, built in Handler:
+//
+//	withCORS -> withRequest -> withObservability -> withAuth -> withRouteAuth -> mux
+//
+// routes.go declares the routing table, the single source for a route's method,
+// path, handler, auth requirement, log operation and body vocabulary. Handler
+// builds the mux from that table and builds the chain around it. withAuth
+// resolves a bearer token through the store into an account. withRouteAuth
+// enforces the table's requirement and attaches the matched entry to the
+// context, so a handler and its body decoder read the same declaration the
+// middleware enforced. withObservability measures and logs the request once.
+//
+// Handlers reach three collaborators. The engine.Executor runs statements and
+// the store holds accounts and learner data. envdb serves a signed-in learner's
+// writable workspace (environment.go). The ai configuration and its jobs
+// registry serve generation (ai.go, admin_ai.go). apidocs serves the OpenAPI
+// document and webui serves the embedded SPA.
 package httpapi
 
 import (
@@ -13,7 +31,6 @@ import (
 	"math/rand/v2"
 	"net/http"
 	"slices"
-	"strings"
 	"sync"
 
 	"github.com/querycraft/sqlquery/backend/internal/ai"
@@ -60,8 +77,8 @@ type Server struct {
 	sem chan struct{}
 
 	// envs is the per-account writable-workspace manager (ADR 0003). It is nil
-	// when the gateway has no database — or no administrative DSN to copy the
-	// sealed template — in which case a signed-in learner is refused with
+	// when the gateway has no database, or no administrative DSN to copy the
+	// sealed template, in which case a signed-in learner is refused with
 	// ENVIRONMENT_UNAVAILABLE rather than handed an invented workspace. It is
 	// set once, before the handler is served, with UseEnvironments.
 	envs *envdb.Manager
@@ -72,9 +89,9 @@ type Server struct {
 	// with UseAI.
 	aiCfg *ai.Config
 	// aiMu guards aiCfg: the administrator can swap the AI configuration while
-	// the gateway runs (see SetAIConfig), and every reader — the availability
-	// probe, the per-request service, the per-job service — goes through
-	// currentAI() instead of the field.
+	// the gateway runs (see SetAIConfig), and every reader goes through
+	// currentAI() instead of the field. Those readers are the availability
+	// probe, the per-request service and the per-job service.
 	aiMu sync.RWMutex
 
 	// jobs is the asynchronous-generation registry. It lives on the server
@@ -85,7 +102,7 @@ type Server struct {
 
 	// dialects is the list of dialects this gateway can route a statement to.
 	// It is PostgreSQL alone until an adapter registers another one with
-	// UseDialect: a client must never assume SQLite is served just because the
+	// UseSQLite: a client must never assume SQLite is served just because the
 	// gateway speaks the dialect contract, and a chapter on a dialect this
 	// gateway cannot run has to be refused with DIALECT_MISMATCH rather than
 	// silently executed on the default engine.
@@ -98,8 +115,8 @@ type Server struct {
 	sqlite *envdb.SQLiteEnvironments
 
 	// adminPasswordEmpty reports that the install's default administrator has no
-	// password, so an empty password can sign it in. It is a boolean — never
-	// the password or its hash — and it is advertised on /health so the sign-in
+	// password, so an empty password can sign it in. It is a boolean, never
+	// the password or its hash, and it is advertised on /health so the sign-in
 	// screen shows the local-admin hint only when it is actually true. It is
 	// set once, before the handler is served, with UseAdminPasswordEmpty.
 	adminPasswordEmpty bool
@@ -141,18 +158,6 @@ func New(exec engine.Executor, st store.Store, cfg Config, log *slog.Logger) *Se
 	return srv
 }
 
-// UseDialect records that the gateway can serve another dialect, once and
-// before the handler is served. It is idempotent and keeps the list in a stable
-// order, so /capabilities does not flap between requests.
-func (s *Server) UseDialect(name string) {
-	name = strings.TrimSpace(name)
-	if name == "" || slices.Contains(s.dialects, name) {
-		return
-	}
-	s.dialects = append(s.dialects, name)
-	slices.Sort(s.dialects)
-}
-
 // Dialects reports what this gateway can serve, in stable order.
 func (s *Server) Dialects() []string {
 	return slices.Clone(s.dialects)
@@ -162,7 +167,7 @@ func (s *Server) Dialects() []string {
 // It must be called before Handler() serves requests.
 //
 // The dialect is registered here, next to the store that serves it, and not by
-// a separate UseDialect call: a gateway that advertises SQLite in
+// a separate registration call: a gateway that advertises SQLite in
 // /capabilities but cannot open a file for it is exactly the dishonesty this
 // seam exists to prevent.
 func (s *Server) UseSQLite(env *envdb.SQLiteEnvironments) {
@@ -170,7 +175,11 @@ func (s *Server) UseSQLite(env *envdb.SQLiteEnvironments) {
 		return
 	}
 	s.sqlite = env
-	s.UseDialect(engine.DialectSQLite)
+	if slices.Contains(s.dialects, engine.DialectSQLite) {
+		return
+	}
+	s.dialects = append(s.dialects, engine.DialectSQLite)
+	slices.Sort(s.dialects)
 }
 
 // Registry exposes the instrumentation so a test can read a counter directly
@@ -201,7 +210,11 @@ func (s *Server) Handler() http.Handler {
 	// the route from the mux rather than the handler chain so that requests
 	// answered before routing carry a route label from a bounded set instead of
 	// an attacker-chosen path.
-	return withCORS(s.withRequest(s.withObservability(s.withAuth(withRouteAuth(mux, routes)), routeOfMux(mux))))
+	operations := make(map[string]string, len(routes))
+	for _, rt := range routes {
+		operations[trimPattern(rt.pattern())] = rt.operation
+	}
+	return withCORS(s.withRequest(s.withObservability(s.withAuth(withRouteAuth(mux, routes)), routeOfMux(mux), operations)))
 }
 
 /* ---------- middleware ---------- */
@@ -252,22 +265,27 @@ func (s *Server) limits(l engine.Limits) engine.Limits {
 
 const maxBodyBytes = 8 << 20 // 8 MiB request cap
 
-// requestErrorCode returns the code a route answers for an unreadable body.
-// A statement route's body IS a statement, so it keeps the query vocabulary
-// (EMPTY_QUERY / QUERY_SYNTAX_ERROR). Every other route has no statement, and
-// answering e.g. /tutor with EMPTY_QUERY put a query code on a route whose
-// client branches on the AI error enum. The codes chosen already exist in the
+// requestErrorCode returns the code a route answers for an unreadable body,
+// from the vocabulary its routing-table entry declares. A statement route's
+// body IS a statement, so it keeps the query vocabulary (EMPTY_QUERY /
+// QUERY_SYNTAX_ERROR). An AI route's client branches on the AI error enum, so
+// it answers AI_INVALID_REQUEST, and an auth route answers AUTH_INVALID_INPUT.
+// The zero vocabulary answers INVALID_REQUEST. Every code is already in the
 // gateway's closed set, so no new code is invented.
 func requestErrorCode(r *http.Request, empty bool) string {
-	switch {
-	case isStatementRoute(r):
+	vocab := vocabRequest
+	if rt, ok := routeFrom(r.Context()); ok {
+		vocab = rt.vocab
+	}
+	switch vocab {
+	case vocabStatement:
 		if empty {
 			return "EMPTY_QUERY"
 		}
 		return "QUERY_SYNTAX_ERROR"
-	case strings.HasPrefix(r.URL.Path, "/courses/"), strings.HasPrefix(r.URL.Path, "/challenges/"), r.URL.Path == "/tutor":
+	case vocabAI:
 		return "AI_INVALID_REQUEST"
-	case strings.HasPrefix(r.URL.Path, "/auth/"):
+	case vocabAuth:
 		return "AUTH_INVALID_INPUT"
 	default:
 		return "INVALID_REQUEST"
@@ -288,22 +306,10 @@ func readJSON(w http.ResponseWriter, r *http.Request, dst any) bool {
 	return true
 }
 
-// isStatementRoute reports whether the request's route is one whose body is
-// itself a SQL statement, and therefore one whose unreadable-body refusal should
-// keep the query error vocabulary.
-func isStatementRoute(r *http.Request) bool {
-	switch r.URL.Path {
-	case "/query", "/answers/evaluate", "/explain":
-		return true
-	}
-	return false
-}
-
-// writeJSON writes a JSON body, and — when the body carries a stable error code
-// — records that code for the access log. Doing it here rather than in each
-// handler means a new endpoint cannot quietly ship without an error_code.
+// writeJSON writes a JSON body. It deliberately does not try to find an error
+// code inside the value: every writer that knows a stable code names it through
+// noteError, so a new body shape cannot silently log no code at all.
 func writeJSON(w http.ResponseWriter, status int, v any) {
-	noteError(w, errorCode(v))
 	w.Header().Set("Content-Type", "application/json; charset=utf-8")
 	w.WriteHeader(status)
 	enc := json.NewEncoder(w)
@@ -312,8 +318,8 @@ func writeJSON(w http.ResponseWriter, status int, v any) {
 }
 
 func notFound(w http.ResponseWriter, message string) {
-	// ok:false like every other error envelope on this gateway. It used to omit
-	// the field, so a client that consistently reads `ok` saw undefined here.
+	// ok:false like every other error envelope on this gateway, so a client
+	// that reads `ok` finds it on every refusal.
 	errorEnvelope(w, http.StatusNotFound, "NOT_FOUND", message)
 }
 

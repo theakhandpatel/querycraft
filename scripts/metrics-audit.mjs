@@ -180,14 +180,14 @@ async function auditHermetic(base, live, token) {
   r.section('progress version matches the frontend');
   try {
     const require = createRequire('/tmp/');
-    const progress = require('/tmp/progress.cjs');
+    const progress = require('/tmp/progress-for-metrics.cjs');
     r.check(
       `/diagnostics reports the frontend's PROGRESS_VERSION (${progress.PROGRESS_VERSION})`,
       d.progress?.version === progress.PROGRESS_VERSION,
       d.progress?.version,
     );
   } catch {
-    r.skip('progress version matches the frontend', 'bundle /tmp/progress.cjs not found (run `make audit-progress` first)');
+    r.skip('progress version matches the frontend', 'bundle /tmp/progress-for-metrics.cjs not found (run `make audit-progress` first)');
   }
 }
 

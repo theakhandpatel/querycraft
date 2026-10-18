@@ -86,44 +86,45 @@ func rfc3339(t time.Time) string {
 	return t.UTC().Format(time.RFC3339)
 }
 
-// errorEnvelope writes the {ok:false,error} shape the workspace routes use, for
-// a refusal that is the route's own rather than a statement's. It exists so a
+// errorObject is the one error object the gateway's refusals carry: a stable
+// code, a learner-facing message, and optional redacted detail.
+func errorObject(code, message, detail string) map[string]any {
+	obj := map[string]any{"code": code, "message": message}
+	if detail != "" {
+		obj["detail"] = detail
+	}
+	return obj
+}
+
+// writeErrorEnvelope writes the {ok:false,error} shape the workspace routes use,
+// for a refusal that is the route's own rather than a statement's. It exists so a
 // non-statement route does not answer a 400 with a bare QueryResult, which is a
 // different contract shape (and the OpenAPI documents these as ErrorEnvelope).
-func errorEnvelope(w http.ResponseWriter, status int, code, message string) {
+func writeErrorEnvelope(w http.ResponseWriter, status int, code, message, detail string) {
+	noteError(w, code)
 	writeJSON(w, status, map[string]any{
-		"ok": false,
-		"error": map[string]string{
-			"code":    code,
-			"message": message,
-		},
+		"ok":    false,
+		"error": errorObject(code, message, detail),
 	})
+}
+
+// errorEnvelope writes the same shape without the machine detail.
+func errorEnvelope(w http.ResponseWriter, status int, code, message string) {
+	writeErrorEnvelope(w, status, code, message, "")
 }
 
 // courseSetupFailed reports a reset whose course setup did not apply. It carries
 // the redacted machine detail the plain errorEnvelope has no room for.
 func courseSetupFailed(w http.ResponseWriter, err error) {
-	writeJSON(w, http.StatusInternalServerError, map[string]any{
-		"ok": false,
-		"error": map[string]string{
-			"code":    engine.CodeEnvironmentUnavailable,
-			"message": "The course setup could not be applied to the learner workspace.",
-			"detail":  engine.RedactSecrets(err.Error()),
-		},
-	})
+	writeErrorEnvelope(w, http.StatusInternalServerError, engine.CodeEnvironmentUnavailable,
+		"The course setup could not be applied to the learner workspace.", engine.RedactSecrets(err.Error()))
 }
 
 // environmentUnavailable reports that no workspace can be provided. It uses the
 // contract's closed error enum, so the code is never invented.
 func environmentUnavailable(w http.ResponseWriter, err error) {
-	writeJSON(w, http.StatusServiceUnavailable, map[string]any{
-		"ok": false,
-		"error": map[string]string{
-			"code":    engine.CodeEnvironmentUnavailable,
-			"message": "The learner workspace is unavailable.",
-			"detail":  engine.RedactSecrets(err.Error()),
-		},
-	})
+	writeErrorEnvelope(w, http.StatusServiceUnavailable, engine.CodeEnvironmentUnavailable,
+		"The learner workspace is unavailable.", engine.RedactSecrets(err.Error()))
 }
 
 // workspaceRefusal is the one shape a statement route answers with when no
@@ -140,7 +141,7 @@ func workspaceRefusal(ctx context.Context, message string, err error) engine.Que
 //
 // A signed-in learner's environment is created lazily here on first use, so the
 // answer is the truth about a database that now exists. An anonymous caller has
-// no workspace and is told so — exists=false, writable=false — rather than being
+// no workspace and is told so (exists=false, writable=false) rather than being
 // shown the shared dataset as if it were theirs.
 func (s *Server) handleEnvironment(w http.ResponseWriter, r *http.Request) {
 	u, ok := userFrom(r.Context())
@@ -172,8 +173,8 @@ func (s *Server) handleEnvironment(w http.ResponseWriter, r *http.Request) {
 
 // handleEnvironmentReset drops the caller's environment and copies the sealed
 // template again, reporting the measured duration. Reset is destructive to the
-// caller's own workspace only. Anonymous callers have nothing to reset and are
-// refused with AUTH_REQUIRED; the refusal says writes require an account.
+// caller's own workspace only. Anonymous callers have nothing to reset, and the
+// routing table refuses them with AUTH_REQUIRED before this handler runs.
 //
 // A course may be named (?course=<id>): its setup is what the exercises were
 // verified against, so the learner's environment would not be the verified one
@@ -198,10 +199,10 @@ func (s *Server) handleEnvironmentReset(w http.ResponseWriter, r *http.Request) 
 	}
 	if dialect != engine.DialectPostgres {
 		// The reset route answers in the {ok,error} envelope, not a QueryResult:
-		// a reset is not a statement, so a refusal is the route's own shape. The
-		// 400 used to carry a bare QueryResult (dialect+engine+request_id), which
-		// is the shape this route never returns elsewhere — and put
-		// DIALECT_MISMATCH in a body the OpenAPI documents as ErrorEnvelope.
+		// a reset is not a statement, so a refusal is the route's own shape. A
+		// bare QueryResult (dialect+engine+request_id) is the shape this route
+		// never returns elsewhere, and DIALECT_MISMATCH belongs in the body the
+		// OpenAPI documents as ErrorEnvelope.
 		errorEnvelope(w, http.StatusBadRequest, engine.CodeDialectMismatch,
 			fmt.Sprintf("This gateway cannot reset a %s workspace; it serves %s here.", dialect, engine.DialectPostgres))
 		return
@@ -221,24 +222,14 @@ func (s *Server) handleEnvironmentReset(w http.ResponseWriter, r *http.Request) 
 	// course this caller does not own is refused without destroying the data
 	// they asked to restore.
 	courseID := strings.TrimSpace(r.URL.Query().Get("course"))
-	var setup schema.SetupPlan
-	if courseID != "" {
-		if perf {
-			errorEnvelope(w, http.StatusBadRequest, engine.CodeEnvironmentUnavailable,
-				"A course runs in its own workspace, so it cannot be combined with the "+dataset.PerfDatasetID+" dataset.")
-			return
-		}
-		found, err := s.courseSetup(r.Context(), u.ID, courseID, &setup)
-		if err != nil {
-			environmentUnavailable(w, err)
-			return
-		}
-		// 404, never 403: a learner must not be able to confirm that another
-		// learner's course exists.
-		if !found {
-			notFound(w, "unknown course: "+courseID)
-			return
-		}
+	if courseID != "" && perf {
+		errorEnvelope(w, http.StatusBadRequest, engine.CodeEnvironmentUnavailable,
+			"A course runs in its own workspace, so it cannot be combined with the "+dataset.PerfDatasetID+" dataset.")
+		return
+	}
+	setup, ok := s.resolveCourseSetup(w, r, u.ID, courseID)
+	if !ok {
+		return
 	}
 	var took time.Duration
 	var err error
@@ -282,7 +273,7 @@ func (s *Server) handleEnvironmentReset(w http.ResponseWriter, r *http.Request) 
 		}
 	}
 	// The manager discards its record on Reset, so the fresh copy has no reset
-	// time of its own; the moment we reset it is the honest value.
+	// time of its own; the reset time is the moment of this call.
 	body.ResetAt = rfc3339(time.Now())
 	writeJSON(w, http.StatusOK, map[string]any{
 		"ok":               true,
@@ -302,26 +293,16 @@ func (s *Server) handleEnvironmentReset(w http.ResponseWriter, r *http.Request) 
 // setup statements were verified against the course's own dialect, and a
 // SQLite chapter's course carries SQLite setup. Applying a statement the engine
 // cannot parse would report a reset that did not take, so a failing statement
-// surfaces rather than being swallowed — identical to the PostgreSQL path.
+// surfaces rather than being swallowed, identical to the PostgreSQL path.
 func (s *Server) resetSQLiteEnvironment(w http.ResponseWriter, r *http.Request, ownerID string) {
 	if s.sqlite == nil {
 		environmentUnavailable(w, fmt.Errorf("%w: no SQLite workspace store is configured", engine.ErrEnvironmentUnavailable))
 		return
 	}
 	courseID := strings.TrimSpace(r.URL.Query().Get("course"))
-	var setup schema.SetupPlan
-	if courseID != "" {
-		found, err := s.courseSetup(r.Context(), ownerID, courseID, &setup)
-		if err != nil {
-			environmentUnavailable(w, err)
-			return
-		}
-		// 404, never 403: a learner must not be able to confirm that another
-		// learner's course exists.
-		if !found {
-			notFound(w, "unknown course: "+courseID)
-			return
-		}
+	setup, ok := s.resolveCourseSetup(w, r, ownerID, courseID)
+	if !ok {
+		return
 	}
 	ex, took, err := s.sqlite.Reset(r.Context(), ownerID)
 	if err != nil {
@@ -347,6 +328,29 @@ func (s *Server) resetSQLiteEnvironment(w http.ResponseWriter, r *http.Request, 
 			ResetAt:  rfc3339(time.Now()),
 		},
 	})
+}
+
+// resolveCourseSetup resolves the named course owner-scoped and returns its
+// setup plan. A request that names no course applies no setup. It writes the
+// refusal and reports false when the course is unknown or belongs to another
+// account, the same rule GET /courses/{id} applies.
+func (s *Server) resolveCourseSetup(w http.ResponseWriter, r *http.Request, ownerID, courseID string) (schema.SetupPlan, bool) {
+	if courseID == "" {
+		return schema.SetupPlan{}, true
+	}
+	var setup schema.SetupPlan
+	found, err := s.courseSetup(r.Context(), ownerID, courseID, &setup)
+	if err != nil {
+		environmentUnavailable(w, err)
+		return schema.SetupPlan{}, false
+	}
+	// 404, never 403: a learner must not be able to confirm that another
+	// learner's course exists.
+	if !found {
+		notFound(w, "unknown course: "+courseID)
+		return schema.SetupPlan{}, false
+	}
+	return setup, true
 }
 
 // courseSetup resolves the named course owner-scoped and copies its setup plan

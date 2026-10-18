@@ -25,12 +25,9 @@ const (
 // Warning codes. They are exactly the enum in contracts/plan.schema.json: a new
 // warning is a schema change, not a new string at a call site.
 const (
-	WarnSeqScanLargeTable  = "PLAN_SEQ_SCAN_LARGE_TABLE"
-	WarnEstimateOff        = "PLAN_ESTIMATE_OFF_BY_ORDERS_OF_MAGNITUDE"
-	WarnNodeCapReached     = "PLAN_NODE_CAP_REACHED"
-	WarnRowCapReached      = "PLAN_ROW_CAP_REACHED"
-	WarnSettingsNonDefault = "PLAN_SETTINGS_NON_DEFAULT"
-	WarnAnalyzeSkipped     = "PLAN_ANALYZE_SKIPPED_NO_ENVIRONMENT"
+	WarnSeqScanLargeTable = "PLAN_SEQ_SCAN_LARGE_TABLE"
+	WarnEstimateOff       = "PLAN_ESTIMATE_OFF_BY_ORDERS_OF_MAGNITUDE"
+	WarnNodeCapReached    = "PLAN_NODE_CAP_REACHED"
 )
 
 // PlanRoot is the root plan node exactly as the engine emitted it, verbatim and
@@ -93,9 +90,8 @@ type PlanSummary struct {
 
 // PlanIndex is one index the plan was produced against.
 type PlanIndex struct {
-	Relation   string  `json:"relation"`
-	Name       string  `json:"name"`
-	Definition *string `json:"definition"`
+	Relation string `json:"relation"`
+	Name     string `json:"name"`
 }
 
 // PlanEnvironment is what the plan was produced against, so a number is never
@@ -143,9 +139,9 @@ type PlanBundle struct {
 	Error           *PlanError    `json:"error"`
 }
 
-// EmptySummary is the summary of a plan that was never captured: zero nodes and
-// empty arrays rather than nulls (the M4 lesson: a nil slice violates
-// "type":"array").
+// EmptySummary is the summary of a plan that was never captured. Every list is
+// an empty slice rather than nil, because a nil slice marshals as JSON null and
+// violates the contract's "type":"array".
 func EmptySummary() PlanSummary {
 	return PlanSummary{
 		NodeTypes:   []string{},

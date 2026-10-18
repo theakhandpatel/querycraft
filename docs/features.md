@@ -1,7 +1,7 @@
 # Features
 
 This page tells you what Querycraft does. Each entry points to the code that
-proves it. The status is `v0.8.0`.
+proves it. The status is `v0.9.0`.
 
 The app ships 8 courses, 52 chapters, 53 examples, and 53 exercises. It runs two
 SQL dialects: PostgreSQL and SQLite.
@@ -94,6 +94,7 @@ Code: `backend/internal/store/`,
 | Verify before store | The gateway runs every reference query and every fixture in a new chapter. A chapter that fails is repaired with the error from the engine, or dropped. |
 | No proof, no store | If no chapter passes the checks, the run stores nothing. |
 | Add to a course | You can add a chapter to an existing course and edit the exercises. |
+| Resume a stopped run | A run that dies mid-build leaves an `interrupted` course with the chapters that verified. The library offers Resume, and the next build continues from those chapters. |
 
 Code: `backend/internal/ai/`, `web/src/components/screens/CreateScreen.tsx`,
 `docs/outline-approval-design.md`, `docs/adr/0002`, `docs/adr/0005`.

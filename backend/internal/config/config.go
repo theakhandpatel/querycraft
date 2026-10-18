@@ -1,7 +1,8 @@
 // Package config resolves the gateway's settings. Every setting starts from a
-// shipped default, then the config file may override it, then a command-line
-// flag. Each layer overrides the previous one, and a layer that says nothing
-// about a key leaves the earlier value standing.
+// shipped default, then the config file may override it. cmd/api applies the
+// one command-line layer, --addr, on top. Each layer overrides the previous
+// one, and a layer that says nothing about a key leaves the earlier value
+// standing.
 //
 // The config file is JSON, named querycraft.json. It is looked up in this
 // order: the --config flag, then ./querycraft.json in the working directory.
@@ -28,9 +29,9 @@ import (
 const DefaultFileName = "querycraft.json"
 
 // Settings is the gateway's whole configuration surface. Field comments name
-// the environment variable and the JSON key that set each one. Empty strings
-// and zero durations mean "not set", which at use time derives from another
-// setting or keeps the consuming package's own default.
+// the JSON key that sets each one. Empty strings and zero durations mean "not
+// set", which at use time derives from another setting or keeps the consuming
+// package's own default.
 type Settings struct {
 	// Server.
 	Addr             string // "addr": listen address. Loopback by default, which is what allows the seeded administrator to keep an empty password.
@@ -66,9 +67,8 @@ type Settings struct {
 	AdminPassword string // "admin_password": empty means a blank-password admin, which is refused on a non-loopback Addr
 	AdminName     string // "admin_name"
 
-	// Learner challenge environments (ADR 0003/0006). These were read by
-	// nobody before the config layer existed; the PostgreSQL manager now takes
-	// them the way the SQLite store always took its own.
+	// Learner challenge environments (ADR 0003/0006). The PostgreSQL manager
+	// reads these the same way the SQLite store reads its own bounds.
 	MaxEnvironments int           // "max_environments": 0 keeps envdb's default (8)
 	IdleTTL         time.Duration // "idle_ttl": 0 keeps envdb's default (15m)
 
@@ -95,9 +95,9 @@ func Defaults() Settings {
 		LoginMaxFailures: httpapi.DefaultLoginMaxFailures,
 		LoginWindowMS:    httpapi.DefaultLoginWindowMS,
 		LoginMaxTracked:  httpapi.DefaultLoginMaxTracked,
-		PGDataDir:        localdb.DefaultDataDir("") + "/data",
-		PGRuntimeDir:     localdb.DefaultDataDir("") + "/runtime",
-		PGBinariesDir:    localdb.BinariesDir(""),
+		PGDataDir:        localdb.DefaultDataDir() + "/data",
+		PGRuntimeDir:     localdb.DefaultDataDir() + "/runtime",
+		PGBinariesDir:    localdb.BinariesDir(),
 		PGPort:           54329,
 		PGUser:           "querycraft",
 		PGPassword:       "querycraft",
@@ -114,10 +114,9 @@ func Defaults() Settings {
 	}
 }
 
-// Load resolves the settings: defaults, then the config file, then the
-// environment. The command-line flag layer is applied by the caller (see
-// applyAddrFlag in cmd/api), because the flags a subcommand accepts are the
-// CLI's business, not this package's.
+// Load resolves the settings: defaults, then the config file. The command-line
+// flag layer is applied by the caller (see applyAddrFlag in cmd/api), because
+// the flags a subcommand accepts are the CLI's business, not this package's.
 func Load(explicitPath string) (Settings, error) {
 	s := Defaults()
 	path, err := ResolveFile(explicitPath)
@@ -251,6 +250,9 @@ func (s *Settings) applyKey(key string, value json.RawMessage) error {
 	}
 }
 
+// unmarshalInto decodes one JSON value into target. It does not name the key in
+// the error because applyKey already wraps the result with the file path, and
+// the JSON error itself carries the type mismatch.
 func unmarshalInto(value json.RawMessage, target any) error {
 	if err := json.Unmarshal(value, target); err != nil {
 		return fmt.Errorf("%s", err)

@@ -34,14 +34,6 @@ export interface ResultSet {
   rows: RowValue[][];
 }
 
-export interface ExerciseCheck {
-  label: string;
-  code: string;
-  /** Authored text check over the learner's SQL text. Adapters grade by
-      comparing results, so nothing runs this field at run time. */
-  test: (sql: string) => boolean;
-}
-
 export interface ResultContract {
   columns: string[];
   column_order?: 'exact' | 'ignored';
@@ -72,7 +64,6 @@ export interface Block {
   /** M5: a structural plan contract. When present the exercise is graded on the
       plan its query produces, alongside the result contract above. */
   perf?: PerfContract;
-  checks?: ExerciseCheck[];
   /** Design §7.3: bump when the prompt, contract or reference solution changes,
       so an earlier pass reads as "solved on an earlier version". Defaults to 1. */
   version?: number;
@@ -115,7 +106,6 @@ export interface Course {
   title: string;
   subtitle?: string;
   level?: string;
-  tracks?: string[];
   built?: boolean;
   enrolled?: boolean;
   modules?: CourseModule[] | null;
@@ -134,19 +124,23 @@ export interface Course {
       `building` for one the pipeline is still writing a chapter at a time. Only
       present on a gateway course. */
   recordStatus?: string;
-  /** M8. When the gateway stored the record. Only present on a gateway course. */
-  createdAt?: string;
   /** M9. The stored record's setup plan, kept so "restore my data" can rebuild
       the workspace the exercises were verified in. A built-in course has none:
       its workspace is the sealed dataset. */
   setup?: AiSetupPlan;
-  [key: string]: unknown;
-}
-
-export interface TableColumnDef {
-  name: string;
-  type: string;
-  note: string;
+  /** Where the course came from: a shipped library course, a draft opened from
+      the reference curriculum, or one the gateway generated. The library's
+      "Created by you" filter reads it. */
+  source?: string;
+  /** A one-line summary shown on the course cards. */
+  blurb?: string;
+  /** The subject area, shown beside the estimated time. */
+  domain?: string;
+  /** The whole course's estimated reading and practice minutes. */
+  minutes?: number;
+  /** True when the reference curriculum was opened as a draft rather than
+      generated, so no screen presents it as a model-built course. */
+  authored?: boolean;
 }
 
 export interface TableDef {
@@ -255,6 +249,30 @@ export type QueryErrorCode = (typeof QUERY_ERROR_CODES)[number];
     pass as one. */
 export function isQueryErrorCode(code: string): code is QueryErrorCode {
   return QUERY_ERROR_CODES.some((known) => known === code);
+}
+
+/** The closed AI error-code set, in contract order, from
+    contracts/ai.schema.json. These are not QueryResult codes: the AI envelope
+    has its own vocabulary. The type derives from these values and the runtime
+    check reads them, so the set is stated once. */
+export const AI_ERROR_CODES = [
+  'AI_UNAVAILABLE',
+  'AI_INVALID_REQUEST',
+  'AI_INVALID_ARTIFACT',
+  'AI_REFERENCE_FAILED',
+  'AI_CROSS_CHECK_FAILED',
+  'AI_REPAIR_EXHAUSTED',
+  'AI_NOT_FOUND',
+  'AI_PATCH_UNVERIFIED',
+  'AI_PATCH_UNAPPROVED',
+  'ENVIRONMENT_UNAVAILABLE',
+] as const;
+
+export type AiErrorCode = (typeof AI_ERROR_CODES)[number];
+
+/** Narrows an AI code that arrived as data to the closed set. */
+export function isAiErrorCode(code: string): code is AiErrorCode {
+  return AI_ERROR_CODES.some((known) => known === code);
 }
 
 /** The dialects the app can run, in contract order (contracts/query-result.schema.json). */

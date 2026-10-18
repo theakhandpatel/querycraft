@@ -9,20 +9,14 @@
  * pretending.
  */
 
+import type { AiErrorCode } from '../types';
+
 export type AiDifficulty = 'beginner' | 'intermediate' | 'advanced';
 
-/** AI-envelope codes. These are not QueryResult codes (that enum is closed). */
-export type AiErrorCode =
-  | 'AI_UNAVAILABLE'
-  | 'AI_INVALID_REQUEST'
-  | 'AI_INVALID_ARTIFACT'
-  | 'AI_REFERENCE_FAILED'
-  | 'AI_CROSS_CHECK_FAILED'
-  | 'AI_REPAIR_EXHAUSTED'
-  | 'AI_NOT_FOUND'
-  | 'AI_PATCH_UNVERIFIED'
-  | 'AI_PATCH_UNAPPROVED'
-  | 'ENVIRONMENT_UNAVAILABLE';
+/* AI-envelope codes. These are not QueryResult codes (that enum is closed).
+   `AiErrorCode` derives from the one tuple in ../types, beside the query codes;
+   this re-export keeps the name importable from the contract module. */
+export type { AiErrorCode };
 
 export interface AiError {
   code: AiErrorCode;
@@ -83,20 +77,10 @@ export interface AiArtifact {
   provenance: AiProvenance;
 }
 
-/** The §11.1 stage names, in pipeline order. */
-export type AiStageName =
-  | 'validate_request'
-  | 'request_bundle'
-  | 'validate_artifact'
-  | 'scratch_environment'
-  | 'reference_contract'
-  | 'cross_check'
-  | 'adversarial_fixtures'
-  | 'repair'
-  | 'activate';
-
 export interface AiStage {
-  name: AiStageName | string;
+  /** The §11.1 stage name, in pipeline order. A plain string because the
+      gateway may report a stage this build has not heard of. */
+  name: string;
   state: 'done' | 'failed' | 'skipped';
   detail?: string;
   ms?: number;
@@ -227,7 +211,7 @@ export interface AiCoursePlan {
   provenance: AiProvenance;
 }
 
-export type AiExerciseStatus = 'verified' | 'failed';
+type AiExerciseStatus = 'verified' | 'failed';
 
 /** What verification measured for one exercise. Reported for a rejection too:
     "which exercise failed, and what did the engine say" is the useful part. */
@@ -276,7 +260,6 @@ export interface AiGenerationRequest {
   scenario?: string;
   constraints?: string[];
   exercise_count?: number;
-  steps?: string[];
   /** Course only. Ask the run to stop after the outline is validated and
       stored, so the learner can approve the index before the chapters are
       written. The response status is then `awaiting_approval` and
@@ -339,7 +322,7 @@ export interface AiDefectReport {
   observed?: string;
 }
 
-export interface AiPatchProposal {
+interface AiPatchProposal {
   id: string;
   challenge_id: string;
   summary: string;

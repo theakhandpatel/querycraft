@@ -6,6 +6,7 @@ import (
 	"io"
 	"log/slog"
 	"net/http"
+	"reflect"
 	"strings"
 	"testing"
 	"time"
@@ -251,10 +252,13 @@ func TestPreferencesArePerAccountAndOwnerScoped(t *testing.T) {
 		t.Fatalf("put status = %d body = %s", w.Code, w.Body.String())
 	}
 
-	// The learner reads their own document back, whole.
+	// The learner reads their own document back, whole. The document is
+	// compared as JSON: every backend stores it in a JSON column that
+	// normalizes key order and whitespace, so the value is what must survive,
+	// not its original bytes.
 	w = doAs(t, s, learnerToken, http.MethodGet, "/preferences", "")
 	mustDecode(t, w, &empty)
-	if string(empty.Preferences) != body {
+	if !sameJSONDocument(t, empty.Preferences, []byte(body)) {
 		t.Fatalf("read-back = %s, want the saved document", empty.Preferences)
 	}
 
@@ -298,4 +302,19 @@ func TestPreferencesReplaceWholesaleAndRejectMalformed(t *testing.T) {
 	if string(got.Preferences) != `{"theme":"ember"}` {
 		t.Fatalf("document after malformed put = %s, want it untouched", got.Preferences)
 	}
+}
+
+// sameJSONDocument compares two JSON documents by value. A stored preference
+// document comes back from a JSON column, which normalizes key order and
+// whitespace on every backend, so tests assert on the document, not its bytes.
+func sameJSONDocument(t *testing.T, got, want []byte) bool {
+	t.Helper()
+	var gv, wv any
+	if err := json.Unmarshal(got, &gv); err != nil {
+		t.Fatalf("decode stored document %s: %v", got, err)
+	}
+	if err := json.Unmarshal(want, &wv); err != nil {
+		t.Fatalf("decode expected document %s: %v", want, err)
+	}
+	return reflect.DeepEqual(gv, wv)
 }

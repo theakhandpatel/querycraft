@@ -47,7 +47,6 @@ const contractsDir = "../../../contracts"
 // reads them from disk, because a symbol list declared in the test would not see
 // a constant added to the file.
 const (
-	engineCodesSource  = "../engine/engine.go"
 	dialectCodesSource = "../dialect/dialect.go"
 	typesCodesSource   = "../../../web/src/types.ts"
 )
@@ -594,17 +593,6 @@ var progressSchema = schemaObject(
 var eventSchema = schemaObject(
 	[]string{"ok", "id"},
 	map[string]any{"ok": schemaBoolean(), "id": schemaString()},
-)
-
-// courseGenerateSchema mirrors components.schemas.CourseGenerateResponse.
-var courseGenerateSchema = schemaObject(
-	[]string{"title", "chapters", "exercises", "datasetVersion"},
-	map[string]any{
-		"title":          schemaString(),
-		"chapters":       schemaInteger(),
-		"exercises":      schemaInteger(),
-		"datasetVersion": schemaInteger(),
-	},
 )
 
 // aiOutcomeSchema mirrors components.schemas.AIOutcome. `active` is the only
@@ -1158,20 +1146,10 @@ func TestTheQueryErrorEnumIsOneSetEverywhere(t *testing.T) {
 		t.Errorf("dialect.schema.json queryResultErrorCode drifted:\n got %v\n want %v", got, canonical)
 	}
 
-	// engine/engine.go: the Code* constants. PERSISTENCE_FAILED is the one
-	// deliberate absence: nothing in the engine package emits it (the gateway
-	// writes that literal itself, httpapi/server.go:353), so the constant had
-	// no caller and was deleted. The exception stays explicit, like the plan
-	// schema's below, so adding the constant back fails here.
-	engineCodes := goCodeConstants(t, engineCodesSource)
-	wantEngine := removeString(canonical, "PERSISTENCE_FAILED")
-	if strings.Join(engineCodes, ",") != strings.Join(wantEngine, ",") {
-		t.Errorf("engine/engine.go Code* constants drifted from query-result.schema.json (minus PERSISTENCE_FAILED):\n got %v\n want %v", engineCodes, wantEngine)
-	}
-
-	// dialect/dialect.go re-declares the set so the dialect package can be read
-	// on its own. It keeps PERSISTENCE_FAILED, so it must equal the canonical
-	// set exactly.
+	// dialect/dialect.go is the one Go declaration of the set; engine/engine.go
+	// aliases it (engine imports dialect, so the reverse would be a cycle) and
+	// PERSISTENCE_FAILED stays here because the gateway writes that literal
+	// itself. The package's constants must equal the canonical set exactly.
 	dialectCodes := goCodeConstants(t, dialectCodesSource)
 	if strings.Join(dialectCodes, ",") != canonicalSet {
 		t.Errorf("dialect/dialect.go Code* constants drifted from query-result.schema.json:\n got %v\n want %v", dialectCodes, canonical)
@@ -1405,16 +1383,5 @@ func typescriptQueryErrorCodes(t *testing.T, path string) []string {
 		t.Fatalf("%s: %q lists no codes", path, marker)
 	}
 	sort.Strings(out)
-	return out
-}
-
-// removeString returns list without every occurrence of drop.
-func removeString(list []string, drop string) []string {
-	out := make([]string, 0, len(list))
-	for _, s := range list {
-		if s != drop {
-			out = append(out, s)
-		}
-	}
 	return out
 }

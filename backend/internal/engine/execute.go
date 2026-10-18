@@ -1,3 +1,9 @@
+// Execution is the one code path every statement takes, whatever executor runs
+// it. Execute enforces the row, byte and time caps, maps an engine failure to
+// the contract's error codes and marks a capped result truncated. The classifier
+// here is shared with the browser adapter (web/src/api/pglite.ts), so one
+// mistake reads the same over both. Per-engine rules live on the Executor
+// (engine.go) and in the dialect profiles; result encoding lives in normalize.go.
 package engine
 
 import (
@@ -21,20 +27,20 @@ import (
 // still returned alongside the error.
 func Execute(ctx context.Context, ex Executor, sql string, limits Limits) QueryResult {
 	/* Fill, not Merge: the caller has already resolved request-vs-server with
-	   Merge (where the server's configured caps are the ceiling). Re-merging the
-	   compiled DefaultLimits() here clamped DOWN, so a gateway configured above
-	   the default (QC_MAX_ROWS=2000) silently ran at the default 500. */
+	   Merge, where the server's configured caps are the ceiling. Merging in the
+	   compiled DefaultLimits() again would clamp a gateway configured above the
+	   default (QC_MAX_ROWS=2000) down to the default 500. */
 	limits = limits.Fill(DefaultLimits())
 	requestID := RequestIDFromContext(ctx)
 	if IsBlankSQL(sql) {
 		res := Failing(CodeEmptyQuery, "Blank SQL. Write a statement, then Run.", "", requestID)
-		/* Both the dialect AND the engine are properties of the engine that
-		   would have run the statement, so even a refusal names them: the UI and
-		   the contract must never show a PostgreSQL result on a SQLite chapter.
-		   Dialect alone was fixed before; the engine field was left hardcoded to
-		   "postgresql" by Failing, so the pair disagreed in the JSON. */
-		res.Dialect = DialectOf(ex)
-		res.Engine = EngineLabelOf(ex)
+		/* Both the dialect AND the engine belong to the engine that would have
+		   run the statement, so even a refusal names both: the UI and the
+		   contract must never show a PostgreSQL result on a SQLite chapter.
+		   Failing hardcodes EngineName and DialectPostgres, so a caller that set
+		   only one would leave the JSON pair disagreeing. */
+		res.Dialect = ex.Dialect()
+		res.Engine = ex.EngineLabel()
 		return res
 	}
 
@@ -46,9 +52,9 @@ func Execute(ctx context.Context, ex Executor, sql string, limits Limits) QueryR
 		Status:    "succeeded",
 		Columns:   []Column{},
 		Rows:      [][]any{},
-		Engine:    EngineLabelOf(ex),
+		Engine:    ex.EngineLabel(),
 		RequestID: requestID,
-		Dialect:   DialectOf(ex),
+		Dialect:   ex.Dialect(),
 	}
 
 	rows, err := ex.Query(qctx, sql)
@@ -126,10 +132,10 @@ func Execute(ctx context.Context, ex Executor, sql string, limits Limits) QueryR
 
 // IsBlankSQL reports whether the statement is empty once whitespace and SQL
 // comments are removed. Comment-only submissions are EMPTY_QUERY, matching the
-// browsers' stripComments (web/src/api/pglite.ts), which strips BOTH line and
-// block comments. This used to strip only `--`, so `/* nothing */` was
-// EMPTY_QUERY in the browser and a syntax error over HTTP — an adapter-parity
-// break in the one place the repo relies on the two agreeing.
+// browsers' stripComments (web/src/api/pglite.ts), which strips both line and
+// block comments. Stripping only `--` would call `/* nothing */` a syntax error
+// over HTTP while the browser calls it EMPTY_QUERY, and adapter parity is what
+// the two answers have to keep.
 //
 // It is exported because the plan capture in the perf package asks the same
 // question before it runs an EXPLAIN, and one answer must serve both surfaces.
@@ -207,7 +213,7 @@ func classify(ctx context.Context, err error) *QueryError {
 	if err == nil {
 		return nil
 	}
-	if errors.Is(err, ErrPoolTimeout) {
+	if errors.Is(err, errPoolTimeout) {
 		return NewError(CodeTimeout, "The gateway was busy; no execution connection became available within the time limit.", "")
 	}
 	if errors.Is(err, context.DeadlineExceeded) || errors.Is(err, context.Canceled) {
@@ -215,9 +221,8 @@ func classify(ctx context.Context, err error) *QueryError {
 	}
 	// The context's own state is consulted too: the deadline this process
 	// imposed is the fact, and a driver may return its own error shape rather
-	// than wrapping context.DeadlineExceeded. Without this the parameter was
-	// accepted and ignored — a deadline miss that arrived in another dialect
-	// was reported as a runtime error.
+	// than wrap context.DeadlineExceeded. Without this branch a deadline miss
+	// that arrived in another shape would read as a runtime error.
 	if ctx != nil && ctx.Err() != nil {
 		return NewError(CodeTimeout, "Query exceeded the time limit and was stopped.", "")
 	}
@@ -245,7 +250,7 @@ func ClassifyFor(ctx context.Context, ex Executor, err error) *QueryError {
 	if err == nil {
 		return nil
 	}
-	if errors.Is(err, ErrPoolTimeout) || errors.Is(err, context.DeadlineExceeded) ||
+	if errors.Is(err, errPoolTimeout) || errors.Is(err, context.DeadlineExceeded) ||
 		errors.Is(err, context.Canceled) || errors.Is(err, ErrEnvironmentUnavailable) {
 		return classify(ctx, err)
 	}

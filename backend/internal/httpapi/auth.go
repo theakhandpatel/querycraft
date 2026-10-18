@@ -17,8 +17,14 @@ import (
  * Transport is an opaque bearer token. The browser stores it and sends
  * `Authorization: Bearer <token>`; the server resolves it to an account on
  * every request. Nothing is trusted from the request body except the
- * credentials themselves -- in particular a caller can never name the user
- * whose progress it is reading or writing. */
+ * credentials themselves. In particular, a caller can never name the user
+ * whose progress it is reading or writing.
+ *
+ * withAuth resolves the token through the store and attaches the account;
+ * withRouteAuth then enforces the requirement routes.go declares for the
+ * matched pattern. A handler that needs an owner calls requireUser, and the
+ * admin surface calls requireAdmin, so ownership is decided once, from the
+ * session, at the point of use. */
 
 type authCtxKey struct{}
 
@@ -57,7 +63,9 @@ func (s *Server) withAuth(next http.Handler) http.Handler {
 	})
 }
 
-// withRouteAuth enforces the routing table's requirement for the request.
+// withRouteAuth enforces the routing table's requirement for the request, and
+// attaches the table's own entry to the context so handlers and body decoding
+// read the same declaration the middleware enforced.
 //
 // It sits inside withAuth, so a valid token is already resolved into an
 // account. A required route without one answers 401 AUTH_REQUIRED and never
@@ -65,15 +73,21 @@ func (s *Server) withAuth(next http.Handler) http.Handler {
 // route added to the mux without a table entry cannot serve an anonymous
 // caller.
 func withRouteAuth(mux *http.ServeMux, routes []route) http.Handler {
-	declared := make(map[string]authMode, len(routes))
+	declared := make(map[string]route, len(routes))
 	for _, rt := range routes {
-		declared[rt.pattern()] = rt.auth
+		declared[rt.pattern()] = rt
 	}
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		if _, pattern := mux.Handler(r); pattern != "" && declared[pattern] != authPublic {
-			if _, ok := userFrom(r.Context()); !ok {
-				errorEnvelope(w, http.StatusUnauthorized, "AUTH_REQUIRED", "Sign in to continue.")
-				return
+		if _, pattern := mux.Handler(r); pattern != "" {
+			rt, ok := declared[pattern]
+			if !ok || rt.auth != authPublic {
+				if _, authed := userFrom(r.Context()); !authed {
+					writeAuthRequired(w)
+					return
+				}
+			}
+			if ok {
+				r = r.WithContext(withRoute(r.Context(), rt))
 			}
 		}
 		// An unmatched pattern carries no route; the mux answers 404 as before.
@@ -81,12 +95,18 @@ func withRouteAuth(mux *http.ServeMux, routes []route) http.Handler {
 	})
 }
 
+// writeAuthRequired writes the 401 every session-gated route answers with: one
+// sentence and one code, so the routing middleware and a handler cannot drift.
+func writeAuthRequired(w http.ResponseWriter) {
+	errorEnvelope(w, http.StatusUnauthorized, "AUTH_REQUIRED", "Sign in to continue.")
+}
+
 // requireUser resolves the caller or writes 401 and returns false.
 func (s *Server) requireUser(w http.ResponseWriter, r *http.Request) (store.User, bool) {
 	if u, ok := userFrom(r.Context()); ok {
 		return u, true
 	}
-	errorEnvelope(w, http.StatusUnauthorized, "AUTH_REQUIRED", "Sign in to continue.")
+	writeAuthRequired(w)
 	return store.User{}, false
 }
 

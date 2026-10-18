@@ -8,6 +8,7 @@ import (
 	"github.com/jackc/pgx/v5"
 
 	"github.com/querycraft/sqlquery/backend/internal/dataset"
+	"github.com/querycraft/sqlquery/backend/internal/envdb"
 	"github.com/querycraft/sqlquery/backend/internal/pgtest"
 )
 
@@ -40,12 +41,12 @@ func TestScaleFactorMatchesTheSeed(t *testing.T) {
 		}, dataset.CommerceScaleFactor, dataset.FactRowCount("")},
 		{"perf", dataset.PerfDatasetID, func(ctx context.Context, admin *pgx.Conn, name string) error {
 			return dataset.LoadPerfIntoTemplate(ctx, admin, name, pgtest.Password)
-		}, dataset.PerfScaleFactor, dataset.FactRowCount(dataset.PerfDatasetID)},
+		}, dataset.PerfScaleFactorOrders, dataset.FactRowCount(dataset.PerfDatasetID)},
 	}
 
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {
-			if err := dataset.CreateDatabase(ctx, admin, "qc_scale_"+tc.name); err != nil {
+			if err := envdb.CreateDatabase(ctx, admin, "qc_scale_"+tc.name); err != nil {
 				t.Fatalf("create: %v", err)
 			}
 			if err := tc.load(ctx, admin, "qc_scale_"+tc.name); err != nil {

@@ -2,9 +2,7 @@ package envdb
 
 import (
 	"context"
-	"crypto/sha256"
 	"database/sql"
-	"encoding/hex"
 	"errors"
 	"fmt"
 	"io"
@@ -52,8 +50,8 @@ const sharedSQLiteFile = "commerce.db"
 const sqlitePoolConns = 4
 
 // defaultMaxAccounts and defaultSQLiteIdleTTL mirror envdb's
-// defaultMaxEnvironments and defaultIdleTTL (ADR 0006's "what step 5 still
-// owes" item 4): a file per account is a bounded promise, not an unbounded map.
+// defaultMaxEnvironments and defaultIdleTTL: a file per account is a bounded
+// promise, not an unbounded map (ADR 0006).
 // The cap is a budget on cached pools, not on files — an evicted account's file
 // stays on disk and re-opens cheaply — so it can be smaller than the number of
 // accounts the deployment serves.
@@ -63,8 +61,8 @@ const (
 )
 
 // SQLiteOptions configures a SQLiteEnvironments store. The zero value keeps the
-// shipped defaults, so NewSQLiteEnvironments and the existing tests need no
-// change; the gateway fills MaxAccounts and IdleTTL from the environment.
+// shipped defaults, so a caller that configures nothing gets the shipped cap and
+// window; the gateway fills MaxAccounts and IdleTTL from the environment.
 type SQLiteOptions struct {
 	// MaxAccounts bounds the number of cached per-account executors. When the
 	// bound is reached the least-recently-used executor is closed and evicted;
@@ -126,18 +124,12 @@ type SQLiteEnvironments struct {
 	closed    bool
 }
 
-// NewSQLiteEnvironments prepares the data root and returns the store with the
-// default options. It fails rather than deferring the problem to the first
-// request, because a root the process cannot write is a configuration fault the
-// operator should read in the log at boot.
-func NewSQLiteEnvironments(root string) (*SQLiteEnvironments, error) {
-	return NewSQLiteEnvironmentsWithOptions(root, SQLiteOptions{})
-}
-
-// NewSQLiteEnvironmentsWithOptions is NewSQLiteEnvironments with an explicit
-// bound and idle timeout. The gateway uses it to read the cap and the reaper
-// window from the environment; tests use it to exercise the bound without
-// creating hundreds of files.
+// NewSQLiteEnvironmentsWithOptions prepares the data root and returns the store
+// with an explicit bound and idle timeout. It fails rather than deferring the
+// problem to the first request, because a root the process cannot write is a
+// configuration fault the operator should read in the log at boot. The gateway
+// reads the cap and the reaper window from the environment; tests use it to
+// exercise the bound without creating hundreds of files.
 func NewSQLiteEnvironmentsWithOptions(root string, opts SQLiteOptions) (*SQLiteEnvironments, error) {
 	root = strings.TrimSpace(root)
 	if root == "" {
@@ -165,14 +157,6 @@ func (s *SQLiteEnvironments) MaxAccounts() int { return s.opts.MaxAccounts }
 
 // IdleTTL reports the idle-eviction window (see SQLiteOptions.IdleTTL).
 func (s *SQLiteEnvironments) IdleTTL() time.Duration { return s.opts.IdleTTL }
-
-// cachedAccounts reports how many per-account executors are cached. It exists
-// for tests and diagnostics; the value is a snapshot, not a lease.
-func (s *SQLiteEnvironments) cachedAccounts() int {
-	s.mu.Lock()
-	defer s.mu.Unlock()
-	return len(s.byAccount)
-}
 
 // Shared returns the anonymous learner's executor: the committed fixture, read
 // only. ReadOnly adds SQLite's own mode=ro and query_only(1) together, so a
@@ -235,7 +219,7 @@ func (s *SQLiteEnvironments) ForAccount(ctx context.Context, accountID string) (
 	// Make room before the new pool is opened, so the map is never larger than
 	// the cap even for the instant between open and insert.
 	s.evictToMakeRoomLocked()
-	path := filepath.Join(s.accounts, accountFileStem(id)+".db")
+	path := filepath.Join(s.accounts, digest(id)[:32]+".db")
 	// The writable path shares the read-only pragma set on purpose: the pragmas
 	// that matter (foreign_keys, busy_timeout) are not about access, and only
 	// SQLiteConfig.ReadOnly adds query_only. Keeping one set means the two paths
@@ -273,7 +257,7 @@ func (s *SQLiteEnvironments) Reset(ctx context.Context, accountID string) (*engi
 	if s.closed {
 		return nil, 0, fmt.Errorf("%w: the SQLite store is closed", engine.ErrEnvironmentUnavailable)
 	}
-	path := filepath.Join(s.accounts, accountFileStem(id)+".db")
+	path := filepath.Join(s.accounts, digest(id)[:32]+".db")
 	if a := s.byAccount[id]; a != nil {
 		if err := a.exec.Close(); err != nil {
 			return nil, 0, fmt.Errorf("close the SQLite workspace before reset: %w", err)
@@ -463,15 +447,4 @@ func sqliteSeedDSN(path string) string {
 	}
 	u := url.URL{Scheme: "file", Path: path, OmitHost: true, RawQuery: q.Encode()}
 	return u.String()
-}
-
-// accountFileStem is a stable, filesystem-safe file name for an account.
-//
-// A hash rather than the account id keeps a learner's email address out of the
-// data directory's file names, while still giving two accounts two files. Sixteen
-// bytes of SHA-256 is far more than enough to keep a single deployment's
-// accounts apart.
-func accountFileStem(accountID string) string {
-	sum := sha256.Sum256([]byte(accountID))
-	return hex.EncodeToString(sum[:16])
 }

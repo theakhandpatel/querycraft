@@ -55,7 +55,7 @@ export function dialectSupported(dialect: Dialect, served: readonly Dialect[] | 
  * the seam is driven directly (an audit, a retake) as when a lesson runs. */
 
 /** What a caller knows about the engine a statement belongs to. */
-export interface DialectRef {
+interface DialectRef {
   dialect?: unknown;
   /** A block may name its own dialect in future; read here so a screen that
       passes it gets the documented precedence rather than a silent fallback. */
@@ -69,13 +69,13 @@ export interface DialectRef {
     an unset one, and only the first one is a mistake. */
 export type DialectReason = 'explicit' | 'block' | 'module' | 'course' | 'unknown-dialect' | 'default';
 
-export interface DialectChoice {
+interface DialectChoice {
   dialect: Dialect;
   reason: DialectReason;
 }
 
 /** The one dialect a statement runs on, with the reason it was chosen. */
-export function dialectChoice(ref?: DialectRef | null): DialectChoice {
+function dialectChoice(ref?: DialectRef | null): DialectChoice {
   const explicit = asDialect(ref?.dialect);
   if (explicit) return { dialect: explicit, reason: 'explicit' };
   const fromBlock = asDialect(ref?.block?.dialect);

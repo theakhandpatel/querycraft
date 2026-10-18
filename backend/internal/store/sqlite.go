@@ -17,6 +17,13 @@ import (
 	"modernc.org/sqlite"
 )
 
+/* SQLite is one of the two SQL metadata backends. It stores accounts, progress
+ * and audit events in one local file, or in memory. The statements live in
+ * metadata.go and the DDL comes from tables.go; this file owns opening and
+ * migrating the file, plus the SQLite-only helpers: the timestamp text format,
+ * JSON compaction, and duplicate-key detection.
+ */
+
 // SQLite stores app metadata in one local file. Learner SQL continues to run
 // through the separately configured execution engine. The account, progress and
 // session methods live in sqlStore, shared with the Postgres backend.
@@ -25,11 +32,13 @@ type SQLite struct {
 	sqlStore
 }
 
+// sqliteMemoryID names each in-memory database. The DSN uses shared cache, so
+// two Memory stores in one process must not collide on the same name.
 var sqliteMemoryID atomic.Uint64
 
-// SQLiteSchema is the metadata schema in the SQLite dialect. It renders from
+// sqliteSchema is the metadata schema in the SQLite dialect. It renders from
 // appTables, the one description both backends share.
-var SQLiteSchema = sqliteDDL(appTables)
+var sqliteSchema = sqliteDDL(appTables)
 
 // NewSQLite opens or creates path and applies the metadata schema. The path's
 // parent is created with private permissions; SQLite itself is pure Go through
@@ -76,7 +85,7 @@ func NewSQLite(ctx context.Context, path string) (*SQLite, error) {
 			return nil, fmt.Errorf("secure metadata sqlite file: %w", err)
 		}
 	}
-	if _, err := db.ExecContext(ctx, SQLiteSchema); err != nil {
+	if _, err := db.ExecContext(ctx, sqliteSchema); err != nil {
 		_ = db.Close()
 		return nil, fmt.Errorf("create metadata schema: %w", err)
 	}
@@ -87,6 +96,7 @@ func NewSQLite(ctx context.Context, path string) (*SQLite, error) {
 	return &SQLite{db: db, sqlStore: sqliteStore(db)}, nil
 }
 
+// Kind implements Store.
 func (s *SQLite) Kind() string { return "sqlite" }
 
 // migrateAdditiveColumns adds declared-but-missing columns to tables that
@@ -146,25 +156,25 @@ func migrateAdditiveColumns(ctx context.Context, db *sql.DB) error {
 	}
 	return nil
 }
+
+// Close implements Store.
 func (s *SQLite) Close() error { return s.db.Close() }
 
+// timestamp writes the canonical UTC text both dialects store: fixed-width
+// microseconds and a Z suffix, which is what sqliteNow produces in SQL and what
+// parseTimestamp reads back.
 func timestamp(t time.Time) string {
 	return t.UTC().Truncate(time.Microsecond).Format("2006-01-02T15:04:05.000000Z")
 }
 
+// parseTimestamp reads the text form timestamp writes. It accepts any RFC3339
+// precision, because the layout is the text's, not this package's.
 func parseTimestamp(raw string) (time.Time, error) {
 	t, err := time.Parse(time.RFC3339Nano, raw)
 	if err != nil {
 		return time.Time{}, fmt.Errorf("decode metadata timestamp: %w", err)
 	}
 	return t, nil
-}
-
-func decodeJSON(raw string, dst any, label string) error {
-	if err := json.Unmarshal([]byte(raw), dst); err != nil {
-		return fmt.Errorf("decode %s: %w", label, err)
-	}
-	return nil
 }
 
 // normalizeJSON matches PostgreSQL jsonb's validation and whitespace behavior.
@@ -197,10 +207,3 @@ func isSQLiteUniqueViolation(err error) bool {
 }
 
 var _ Store = (*SQLite)(nil)
-
-// jsonText serializes a Depot record for storage; text keeps the boundary
-// explicit and a nil optional value stays SQL NULL.
-func jsonText(v any) (string, error) {
-	b, err := json.Marshal(v)
-	return string(b), err
-}

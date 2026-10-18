@@ -130,8 +130,8 @@ func explainFake(planResult string, planErr error) *planFake {
 				{"order_items", float64(20000)}, {"products", float64(500)},
 			}), nil
 		case strings.Contains(sql, "pg_indexes"):
-			return newFakeRows(cols("tablename", "indexname", "indexdef"), [][]any{
-				{"orders", "orders_customer_id_idx", "CREATE INDEX orders_customer_id_idx ON dataset.orders USING btree (customer_id)"},
+			return newFakeRows(cols("tablename", "indexname"), [][]any{
+				{"orders", "orders_customer_id_idx"},
 			}), nil
 		case strings.Contains(sql, "current_setting"):
 			return newFakeRows(cols("setting"), [][]any{{
@@ -144,10 +144,7 @@ func explainFake(planResult string, planErr error) *planFake {
 
 func explainOnce(t *testing.T, fake *planFake, sql string, opts ExplainOptions) *PlanBundle {
 	t.Helper()
-	bundle, err := Explain(context.Background(), fake, sql, opts)
-	if err != nil {
-		t.Fatalf("Explain returned an error: %v", err)
-	}
+	bundle := Explain(context.Background(), fake, sql, opts)
 	if bundle == nil {
 		t.Fatal("Explain returned a nil bundle")
 	}
@@ -448,17 +445,12 @@ func TestExplainNodeCap(t *testing.T) {
 	for i := 0; i < 6; i++ {
 		node = map[string]any{"Node Type": "Result", "Plans": []any{node}}
 	}
-	raw, err := json.Marshal([]any{map[string]any{"Plan": node}})
-	if err != nil {
-		t.Fatalf("build plan: %v", err)
+	summary, capped := summarizePlan(PlanRoot(node), 3)
+	if summary.NodeCount != 3 {
+		t.Errorf("node_count = %d, want the cap of 3", summary.NodeCount)
 	}
-	fake := explainFake(string(raw), nil)
-	bundle := explainOnce(t, fake, "select 1", ExplainOptions{NodeCap: 3})
-	if bundle.Summary.NodeCount != 3 {
-		t.Errorf("node_count = %d, want the cap of 3", bundle.Summary.NodeCount)
-	}
-	if !planHasWarning(bundleWarningCodes(bundle), WarnNodeCapReached) {
-		t.Errorf("warnings = %+v, want %s", bundle.Warnings, WarnNodeCapReached)
+	if !capped {
+		t.Errorf("capped = false, want the walk to report the cap")
 	}
 }
 
@@ -493,7 +485,7 @@ func TestExplainRunsUnderTheRequestDeadline(t *testing.T) {
 		}
 		return nil, errors.New("stop after the first call")
 	}}
-	_, _ = Explain(context.Background(), fake, "select 1", ExplainOptions{
+	Explain(context.Background(), fake, "select 1", ExplainOptions{
 		Limits: engine.Limits{TimeoutMS: 1234},
 	})
 	if !sawDeadline {

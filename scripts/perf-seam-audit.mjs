@@ -41,14 +41,14 @@ import { firstDifference, sameRows } from './lib/rowtruth.mjs';
 const webRequire = createRequire(path.join(repoRoot, 'web', 'package.json'));
 const require = createRequire('/tmp/');
 for (const [bundle, sources] of [
-  ['/tmp/curriculum.cjs', ['web/src/data/curriculum.ts']],
-  ['/tmp/plan-contract.cjs', ['web/src/api/planContract.ts']],
+  ['/tmp/curriculum-for-perf-seam.cjs', ['web/src/data/curriculum.ts']],
+  ['/tmp/plan-contract-for-perf-seam.cjs', ['web/src/api/planContract.ts']],
   ['/tmp/dataset-for-seam.cjs', ['web/src/lib/dataset.ts']],
 ]) {
   assertFreshBundle(bundle, 'audit-perf-seam', sources);
 }
-const curriculum = require('/tmp/curriculum.cjs');
-const { gradePlan } = require('/tmp/plan-contract.cjs');
+const curriculum = require('/tmp/curriculum-for-perf-seam.cjs');
+const { gradePlan } = require('/tmp/plan-contract-for-perf-seam.cjs');
 const datasetLib = require('/tmp/dataset-for-seam.cjs');
 
 const API_DIR = path.join(repoRoot, 'web', 'src', 'api');

@@ -37,6 +37,7 @@ import (
 	"github.com/jackc/pgx/v5"
 
 	"github.com/querycraft/sqlquery/backend/internal/dataset"
+	"github.com/querycraft/sqlquery/backend/internal/envdb"
 	"github.com/querycraft/sqlquery/backend/internal/localdb"
 )
 
@@ -104,21 +105,15 @@ func TestTemplateEnvironmentSpike(t *testing.T) {
 	if err := admin.QueryRow(ctx, "SHOW server_version").Scan(&version); err != nil {
 		t.Fatalf("read server_version: %v", err)
 	}
-	facts, err := dataset.ServerConnectionFacts(ctx, admin)
-	if err != nil {
-		t.Fatalf("read connection facts: %v", err)
-	}
 	line("server: PostgreSQL %s on :%d", version, port)
-	line("connection slots: max_connections=%d, superuser_reserved_connections=%d, usable by the learner role=%d",
-		facts.MaxConnections, facts.SuperuserReserved, facts.LearnableConnections)
 
 	// --- build the template ----------------------------------------------
 	template := dataset.TemplateDatabaseName
-	templateCreate, err := timeCall(func() error { return dataset.CreateDatabase(ctx, admin, template) })
+	templateCreate, err := timeCall(func() error { return envdb.CreateDatabase(ctx, admin, template) })
 	if err != nil {
 		t.Fatalf("create the template database: %v", err)
 	}
-	loadTime, err := timeCall(func() error { return dataset.LoadIntoTemplate(ctx, admin, template, spikePassword) })
+	loadTime, err := timeCall(func() error { return loadReadOnlyIntoTemplate(ctx, admin, template, spikePassword) })
 	if err != nil {
 		t.Fatalf("load the dataset into the template: %v", err)
 	}
@@ -131,17 +126,17 @@ func TestTemplateEnvironmentSpike(t *testing.T) {
 	if err != nil {
 		t.Fatalf("attach to the template: %v", err)
 	}
-	refusal := dataset.CreateDatabaseFromTemplate(ctx, admin, dataset.EnvironmentDatabaseName("spike_refused"), template)
+	refusal := envdb.CreateDatabaseFromTemplate(ctx, admin, dataset.EnvironmentDatabaseName("spike_refused"), template)
 	if refusal == nil {
 		t.Errorf("PostgreSQL copied a database with a session attached; the seal step would be unnecessary")
-		_ = dataset.DropDatabase(ctx, admin, dataset.EnvironmentDatabaseName("spike_refused"))
+		_ = envdb.DropDatabase(ctx, admin, dataset.EnvironmentDatabaseName("spike_refused"))
 	}
 	line("refusal with one session attached (allow_connections=true): %v", refusal)
 	if err := attached.Close(ctx); err != nil {
 		t.Fatalf("detach from the template: %v", err)
 	}
 
-	sealTime, err := timeCall(func() error { return dataset.SealTemplate(ctx, admin, template) })
+	sealTime, err := timeCall(func() error { return envdb.SealTemplate(ctx, admin, template) })
 	if err != nil {
 		t.Fatalf("seal the template: %v", err)
 	}
@@ -160,7 +155,7 @@ func TestTemplateEnvironmentSpike(t *testing.T) {
 	names := make([]string, 0, copyRuns+burstRuns)
 	for i := 0; i < copyRuns; i++ {
 		name := dataset.EnvironmentDatabaseName(fmt.Sprintf("spike_copy_%02d", i))
-		took, err := timeCall(func() error { return dataset.CreateDatabaseFromTemplate(ctx, admin, name, template) })
+		took, err := timeCall(func() error { return envdb.CreateDatabaseFromTemplate(ctx, admin, name, template) })
 		if err != nil {
 			t.Fatalf("copy the template (%d): %v", i, err)
 		}
@@ -175,25 +170,13 @@ func TestTemplateEnvironmentSpike(t *testing.T) {
 	burstStart := time.Now()
 	for i := 0; i < burstRuns; i++ {
 		name := dataset.EnvironmentDatabaseName(fmt.Sprintf("spike_burst_%02d", i))
-		if err := dataset.CreateDatabaseFromTemplate(ctx, admin, name, template); err != nil {
+		if err := envdb.CreateDatabaseFromTemplate(ctx, admin, name, template); err != nil {
 			t.Fatalf("burst copy (%d): %v", i, err)
 		}
 		names = append(names, name)
 	}
 	burst := time.Since(burstStart)
 	line("burst of %d copies: total=%s, mean=%s per environment", burstRuns, round(burst), round(burst/time.Duration(burstRuns)))
-
-	// --- disk cost --------------------------------------------------------
-	templateSize, err := dataset.EnvironmentDatabaseSize(ctx, admin, template)
-	if err != nil {
-		t.Fatalf("template size: %v", err)
-	}
-	envSize, err := dataset.EnvironmentDatabaseSize(ctx, admin, names[0])
-	if err != nil {
-		t.Fatalf("environment size: %v", err)
-	}
-	line("disk: template=%s, one environment=%s (%d environments = %s)",
-		humanBytes(templateSize), humanBytes(envSize), len(names), humanBytes(int64(len(names))*envSize))
 
 	// --- does the copy carry the data and the grants? ---------------------
 	templateCounts := tableCounts(t, ctx, admin, template)
@@ -203,7 +186,7 @@ func TestTemplateEnvironmentSpike(t *testing.T) {
 	}
 	line("row counts in a copy: %v (equal to the template: %v)", envCounts, true)
 
-	learner, err := dataset.ConnectAsLearner(ctx, admin, names[0], spikePassword)
+	learner, err := connectAsLearner(ctx, admin, names[0], spikePassword)
 	if err != nil {
 		t.Fatalf("the learner role cannot connect to a fresh environment: %v", err)
 	}
@@ -265,7 +248,7 @@ func TestTemplateEnvironmentSpike(t *testing.T) {
 	// metadata database. Measure it rather than assume either way: it is not a
 	// leak of another learner's rows (progress lives in `app`, which is denied)
 	// but it is a surface M4 should close explicitly.
-	metaConn, metaErr := dataset.ConnectAsLearner(ctx, admin, cfg.Database, spikePassword)
+	metaConn, metaErr := connectAsLearner(ctx, admin, cfg.Database, spikePassword)
 	if metaErr != nil {
 		line("learner session to the metadata database %q: refused (%s)", cfg.Database, firstLine(metaErr))
 	} else {
@@ -288,7 +271,7 @@ func TestTemplateEnvironmentSpike(t *testing.T) {
 	idleDrops := make([]time.Duration, 0, dropRuns)
 	for i := 0; i < dropRuns; i++ {
 		name := names[len(names)-1-i]
-		took, err := timeCall(func() error { return dataset.DropDatabase(ctx, admin, name) })
+		took, err := timeCall(func() error { return envdb.DropDatabase(ctx, admin, name) })
 		if err != nil {
 			t.Fatalf("drop an environment: %v", err)
 		}
@@ -300,21 +283,21 @@ func TestTemplateEnvironmentSpike(t *testing.T) {
 		len(idleDrops), round(dropLo), round(dropMid), round(dropHi), round(idleDrops[0]))
 
 	pinned := dataset.EnvironmentDatabaseName("spike_pinned")
-	if err := dataset.CreateDatabaseFromTemplate(ctx, admin, pinned, template); err != nil {
+	if err := envdb.CreateDatabaseFromTemplate(ctx, admin, pinned, template); err != nil {
 		t.Fatalf("create the pinned environment: %v", err)
 	}
-	pinnedLearner, err := dataset.ConnectAsLearner(ctx, admin, pinned, spikePassword)
+	pinnedLearner, err := connectAsLearner(ctx, admin, pinned, spikePassword)
 	if err != nil {
 		t.Fatalf("attach a learner session to the pinned environment: %v", err)
 	}
-	dropForced, err := timeCall(func() error { return dataset.DropDatabase(ctx, admin, pinned) })
+	dropForced, err := timeCall(func() error { return envdb.DropDatabase(ctx, admin, pinned) })
 	if err != nil {
 		t.Fatalf("drop with an open learner session (FORCE): %v", err)
 	}
 	_ = pinnedLearner.Close(context.WithoutCancel(ctx))
 	line("drop with an open learner session (FORCE terminates it, n=1)=%s", round(dropForced))
 
-	resetTime, err := timeCall(func() error { return dataset.ResetEnvironment(ctx, admin, names[0], template) })
+	resetTime, err := timeCall(func() error { return envdb.ResetEnvironment(ctx, admin, names[0], template) })
 	if err != nil {
 		t.Fatalf("reset an environment: %v", err)
 	}
@@ -322,31 +305,20 @@ func TestTemplateEnvironmentSpike(t *testing.T) {
 
 	// --- connection-slot ceiling -----------------------------------------
 	ceilingEnv := dataset.EnvironmentDatabaseName("spike_ceiling")
-	if err := dataset.CreateDatabaseFromTemplate(ctx, admin, ceilingEnv, template); err != nil {
+	if err := envdb.CreateDatabaseFromTemplate(ctx, admin, ceilingEnv, template); err != nil {
 		t.Fatalf("create the ceiling environment: %v", err)
 	}
 	measuredCeiling, _ := learnerCeiling(ctx, admin, ceilingEnv)
-	if measuredCeiling > 0 && measuredCeiling < facts.LearnableConnections {
-		line("learner sessions before the server refused: %d (lower than the %d the arithmetic predicts; recorded, not asserted)",
-			measuredCeiling, facts.LearnableConnections)
-	} else {
-		line("learner sessions before the server refused: %d (max_connections minus reserved = %d)",
-			measuredCeiling, facts.LearnableConnections)
-	}
-	pool := fmt.Sprintf("pgxpool MaxConns = max(4, NumCPU) = %d, MinConns = 1 (NumCPU here = %d)", maxInt(4, runtime.NumCPU()), runtime.NumCPU())
-	line("cost in connection slots: %s; at rest a template environment holds none, one per active environment while a pool is open", pool)
-	if facts.LearnableConnections > 0 {
-		line("concurrency bound with the gateway pool: about %d environments if every one holds its full pool, %d if every one is idle",
-			facts.LearnableConnections/maxInt(4, runtime.NumCPU()), facts.LearnableConnections)
-	}
+	line("learner sessions before the server refused: %d", measuredCeiling)
+	line("a template environment holds no connection slots at rest; an active environment holds one per open pool connection")
 
 	// --- reaper ----------------------------------------------------------
 	keep := []string{names[0], names[1], names[2]}
-	dropped, err := dataset.ReapEnvironmentDatabases(ctx, admin, keep)
+	dropped, err := envdb.ReapEnvironmentDatabases(ctx, admin, keep)
 	if err != nil {
 		t.Fatalf("reap: %v", err)
 	}
-	remaining, err := dataset.ListEnvironmentDatabases(ctx, admin)
+	remaining, err := envdb.ListEnvironmentDatabases(ctx, admin)
 	if err != nil {
 		t.Fatalf("list environments: %v", err)
 	}
@@ -374,23 +346,15 @@ func TestTemplateEnvironmentSpike(t *testing.T) {
 	}
 	defer func() { _ = admin2.Close(context.WithoutCancel(ctx)) }()
 
-	afterRestart, err := dataset.ListEnvironmentDatabases(ctx, admin2)
+	afterRestart, err := envdb.ListEnvironmentDatabases(ctx, admin2)
 	if err != nil {
 		t.Fatalf("list environments after the restart: %v", err)
-	}
-	sizeAfter := int64(0)
-	for _, name := range afterRestart {
-		size, err := dataset.EnvironmentDatabaseSize(ctx, admin2, name)
-		if err != nil {
-			t.Fatalf("size of %s after the restart: %v", name, err)
-		}
-		sizeAfter += size
 	}
 	if len(afterRestart) != len(remaining) {
 		t.Errorf("after a restart %d environments exist, want the %d that existed before; something reaped them, or they were lost", len(afterRestart), len(remaining))
 	}
-	line("restart: server back in %s; %d environment databases survived, holding %s; nothing reaps them on boot",
-		round(restartTook), len(afterRestart), humanBytes(sizeAfter))
+	line("restart: server back in %s; %d environment databases survived; nothing reaps them on boot",
+		round(restartTook), len(afterRestart))
 
 	// --- optional machine-readable copy ----------------------------------
 	if out := os.Getenv("QC_SPIKE_OUT"); out != "" {
@@ -398,9 +362,6 @@ func TestTemplateEnvironmentSpike(t *testing.T) {
 			"measured_at":                   time.Now().Format(time.RFC3339),
 			"postgres_version":              version,
 			"port":                          port,
-			"max_connections":               facts.MaxConnections,
-			"superuser_reserved":            facts.SuperuserReserved,
-			"learnable_connections":         facts.LearnableConnections,
 			"learner_sessions_measured":     measuredCeiling,
 			"template_create_ms":            templateCreate.Milliseconds(),
 			"template_load_ms":              loadTime.Milliseconds(),
@@ -412,8 +373,6 @@ func TestTemplateEnvironmentSpike(t *testing.T) {
 			"copy_max_ms":                   hi.Milliseconds(),
 			"burst_count":                   burstRuns,
 			"burst_total_ms":                burst.Milliseconds(),
-			"template_bytes":                templateSize,
-			"environment_bytes":             envSize,
 			"drop_idle_min_ms":              dropLo.Milliseconds(),
 			"drop_idle_median_ms":           dropMid.Milliseconds(),
 			"drop_idle_max_ms":              dropHi.Milliseconds(),
@@ -561,7 +520,7 @@ func learnerCeiling(ctx context.Context, admin *pgx.Conn, database string) (int,
 	}()
 	for i := 0; i < 256; i++ {
 		connectCtx, cancel := context.WithTimeout(ctx, 5*time.Second)
-		conn, err := dataset.ConnectAsLearner(connectCtx, admin, database, spikePassword)
+		conn, err := connectAsLearner(connectCtx, admin, database, spikePassword)
 		cancel()
 		if err != nil {
 			return len(conns), nil
@@ -582,21 +541,6 @@ func round(d time.Duration) string {
 	}
 }
 
-func humanBytes(n int64) string {
-	const unit = 1024
-	if n < unit {
-		return fmt.Sprintf("%d B", n)
-	}
-	value := float64(n)
-	for _, suffix := range []string{"KiB", "MiB", "GiB"} {
-		value /= unit
-		if value < unit {
-			return fmt.Sprintf("%.1f %s", value, suffix)
-		}
-	}
-	return fmt.Sprintf("%.1f TiB", value/unit)
-}
-
 func firstLine(err error) string {
 	if err == nil {
 		return ""
@@ -605,9 +549,56 @@ func firstLine(err error) string {
 	return line
 }
 
-func maxInt(a, b int) int {
-	if a > b {
-		return a
+// connectAsLearner opens an environment connection as the restricted role,
+// which is the only way learner SQL is ever executed. The spike builds its
+// grant probes through it so a probe reads what a learner would see.
+//
+// TEST-ONLY: no production path connects as the learner directly — the gateway
+// reaches learner connections through envdb.Manager. It stays here, in the test
+// package, because TestWritableTemplateGrantsLearnerDDLAndDML asserts the
+// withheld verbs (TRUNCATE, DROP, CREATE SCHEMA) and the read-only refusals over
+// exactly this connection.
+func connectAsLearner(ctx context.Context, admin *pgx.Conn, database, password string) (*pgx.Conn, error) {
+	cfg := admin.Config().Copy()
+	cfg.Database = database
+	cfg.User = dataset.LearnerRole
+	cfg.Password = password
+	conn, err := pgx.ConnectConfig(ctx, cfg)
+	if err != nil {
+		return nil, fmt.Errorf("connect to %q as %s: %w", database, dataset.LearnerRole, err)
 	}
-	return b
+	return conn, nil
+}
+
+// loadReadOnlyIntoTemplate builds the shared, read-only dataset into an empty
+// template: the schema, the seed, and EnsureLearnerRole's SELECT-only grants.
+// Grants are per-database objects, so they must exist *inside* the template for
+// a copy to carry them.
+//
+// TEST-ONLY: production templates are built by LoadWritableIntoTemplate
+// (challenge) and LoadPerfIntoTemplate (plan). This is the read-only grant set
+// the gateway's own database uses, and
+// TestWritableTemplateGrantsLearnerDDLAndDML builds a copy from it to assert
+// that copy refuses every write the writable one allows.
+func loadReadOnlyIntoTemplate(ctx context.Context, admin *pgx.Conn, template, learnerPassword string) error {
+	conn, err := dataset.ConnectToDatabase(ctx, admin, template)
+	if err != nil {
+		return err
+	}
+	defer func() { _ = conn.Close(context.WithoutCancel(ctx)) }()
+
+	// Schema and seed are multi-statement scripts with their own BEGIN/COMMIT,
+	// so they must run over the simple query protocol; the order is load-bearing.
+	for _, step := range []struct{ name, script string }{
+		{"schema", dataset.SchemaSQL()},
+		{"seed", dataset.SeedSQL()},
+	} {
+		if _, err := conn.PgConn().Exec(ctx, step.script).ReadAll(); err != nil {
+			return fmt.Errorf("apply dataset %s to %q: %w", step.name, template, err)
+		}
+	}
+	if err := dataset.EnsureLearnerRole(ctx, conn, learnerPassword); err != nil {
+		return fmt.Errorf("prepare learner role in %q: %w", template, err)
+	}
+	return nil
 }

@@ -3,9 +3,9 @@ package httpapi
 import (
 	"net/http"
 
-	"github.com/querycraft/sqlquery/backend/internal/ai"
 	"github.com/querycraft/sqlquery/backend/internal/ai/transcript"
 	"github.com/querycraft/sqlquery/backend/internal/schema"
+	"github.com/querycraft/sqlquery/backend/internal/store"
 )
 
 /* The agent-run audit trail, read over HTTP.
@@ -18,7 +18,7 @@ import (
  *   GET /runs/{id}  -> one run's whole transcript
  *
  * Both require a session, and both are owner-scoped. A run that belongs to
- * another account is reported as unknown — 404, never 403 — the same rule the
+ * another account is reported as unknown (404, never 403), the same rule the
  * stored challenge and course routes follow: an id must not be probeable for
  * existence. The list filters on the session's own id rather than trusting
  * anything in the request.
@@ -42,57 +42,36 @@ func runSummaryView(s schema.RunSummary) schema.RunSummary {
 	return s
 }
 
-// runsOff writes the honest "no transcript store" answer, which is the same
-// answer the other generation routes give when the lab is off.
-func runsOff(w http.ResponseWriter) {
-	writeJSON(w, http.StatusServiceUnavailable, map[string]any{
-		"ok":   false,
-		"runs": []schema.RunSummary{},
-		"error": map[string]string{
-			"code":    ai.CodeUnavailable,
-			"message": "Generation is off: no generation service is configured.",
+// handleListRuns implements GET /runs.
+func (s *Server) handleListRuns(w http.ResponseWriter, r *http.Request) {
+	list(w, r, listSpec[schema.RunSummary]{
+		require: s.requireUser,
+		key:     "runs",
+		view:    runSummaryView,
+		limit:   transcript.MaxRunList,
+		fetch: func(u store.User) ([]schema.RunSummary, bool) {
+			depot := s.aiCourseDepot()
+			if depot == nil {
+				aiOff(w, "runs", []schema.RunSummary{})
+				return nil, false
+			}
+			summaries, err := depot.RunsFor(r.Context(), u.ID)
+			if err != nil {
+				writeAIError(w, err)
+				return nil, false
+			}
+			/* The store filters by owner in SQL, so this list never loads another
+			   learner's runs only to discard them; the row bound is applied over
+			   this owner's rows. */
+			return summaries, true
 		},
 	})
 }
 
-// handleListRuns implements GET /runs.
-func (s *Server) handleListRuns(w http.ResponseWriter, r *http.Request) {
-	u, ok := s.requireUser(w, r)
-	if !ok {
-		return
-	}
-	depot := s.aiCourseDepot()
-	if depot == nil {
-		runsOff(w)
-		return
-	}
-	summaries, err := depot.RunsFor(r.Context(), u.ID)
-	if err != nil {
-		writeAIError(w, err)
-		return
-	}
-	/* The store filters by owner in SQL, so this list never loads another
-	   learner's runs only to discard them. `mine` is already only this owner's;
-	   the bound is still applied here. */
-	mine := make([]schema.RunSummary, 0, len(summaries))
-	for _, sm := range summaries {
-		mine = append(mine, runSummaryView(sm))
-		if len(mine) >= transcript.MaxRunList {
-			break
-		}
-	}
-	writeJSON(w, http.StatusOK, map[string]any{"ok": true, "runs": mine})
-}
-
 // handleGetRun implements GET /runs/{id}.
 func (s *Server) handleGetRun(w http.ResponseWriter, r *http.Request) {
-	u, ok := s.requireUser(w, r)
+	u, depot, ok := s.requireCourseDepot(w, r)
 	if !ok {
-		return
-	}
-	depot := s.aiCourseDepot()
-	if depot == nil {
-		writeAIError(w, &schema.Error{Code: ai.CodeUnavailable, Message: "Generation is off: no generation service is configured."})
 		return
 	}
 	rec, found, err := depot.Run(r.Context(), r.PathValue("id"))

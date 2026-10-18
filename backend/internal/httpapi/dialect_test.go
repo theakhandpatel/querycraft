@@ -1,6 +1,7 @@
 package httpapi
 
 import (
+	"context"
 	"encoding/json"
 	"net/http"
 	"strings"
@@ -8,6 +9,7 @@ import (
 
 	"github.com/querycraft/sqlquery/backend/internal/engine"
 	"github.com/querycraft/sqlquery/backend/internal/envdb"
+	"github.com/querycraft/sqlquery/backend/internal/store"
 )
 
 /* Dialect routing (M6 step 4): the gateway picks the executor that speaks the
@@ -21,12 +23,23 @@ import (
 // into another's.
 func sqliteTestServer(t *testing.T, exec engine.Executor) *Server {
 	t.Helper()
-	envs, err := envdb.NewSQLiteEnvironments(t.TempDir())
+	envs, err := envdb.NewSQLiteEnvironmentsWithOptions(t.TempDir(), envdb.SQLiteOptions{})
 	if err != nil {
-		t.Fatalf("NewSQLiteEnvironments: %v", err)
+		t.Fatalf("NewSQLiteEnvironmentsWithOptions: %v", err)
 	}
 	t.Cleanup(func() { _ = envs.Close() })
-	s := newTestServer(exec)
+	// Seed the shared fixture before any request runs. The first anonymous
+	// statement seeds schema+seed through SQLite, and under full-suite load
+	// that seed has spiked past the request deadline; a test fixture should
+	// not be paid for inside a timed request.
+	if _, err := envs.Shared(context.Background()); err != nil {
+		t.Fatalf("seed the shared SQLite fixture: %v", err)
+	}
+	// A generous request budget on purpose: every account's first statement
+	// seeds that account's SQLite file, and a cold seed on a loaded machine
+	// can outlast the default one-second budget. Timing is not what these
+	// tests assert — routing, isolation and refusal codes are.
+	s := New(exec, store.NewMemory(), Config{MaxRows: 100, TimeoutMS: 10_000, MaxConcurrent: 2}, nil)
 	s.UseSQLite(envs)
 	return s
 }

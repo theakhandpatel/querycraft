@@ -33,24 +33,24 @@ import {
   encodeSqliteValue,
   sqliteCapabilities,
   sqliteColumnTypeLabel,
-  sqlitePlanRefusal,
 } from './sqliteProfile';
 import { SQLITE_MAX_BYTES, SQLITE_MAX_ROWS, type EngineFailure, type EngineRows, type EngineTable } from './sqliteEngine';
 import type { WorkerRequest } from './sqlite.worker';
+import { stripComments } from './sql';
 
 /** The dialect this adapter runs. Named beside the engine string so the two can
     never drift apart. */
-export const SQLITE_DIALECT: Dialect = 'sqlite';
+const SQLITE_DIALECT: Dialect = 'sqlite';
 
 /** The engine string a result row carries before the engine has booted; the
     live version replaces it as soon as the workspace is open, the same
     `SQLite 3.53.4` shape the gateway's `SQLiteExecutor.Version` reports. */
-export const SQLITE_ENGINE_FALLBACK = SQLITE_ENGINE_LABEL;
+const SQLITE_ENGINE_FALLBACK = SQLITE_ENGINE_LABEL;
 
 /** Mirror of the gateway's `QC_TIMEOUT_MS`. Unlike PGlite, this engine honours
     it *inside* the engine: the deadline is a `sqlite3_progress_handler` and the
     statement stops with SQLITE_INTERRUPT(9). */
-export const SQLITE_TIMEOUT_MS = 5000;
+const SQLITE_TIMEOUT_MS = 5000;
 
 /* ---------- the driver's framing ---------- */
 
@@ -132,8 +132,10 @@ function workerTransport(worker: Worker): Transport {
  * what changes is the deadline. The progress handler still fires (it runs on the
  * same thread as the engine), but a *hung* statement — one that never reaches
  * the VM, or whose handler cannot run because the thread is blocked — cannot be
- * taken away from the page. `engineCapabilities().hardTimeout` reports `false`
- * here rather than claiming otherwise.
+ * taken away from the page. `sqliteEngineCapabilities()` still answers
+ * `hardTimeout: true`, because the engine's own progress handler is the
+ * interrupt and it runs on both placements; what this fallback cannot stop is a
+ * statement that never reaches the engine.
  */
 async function mainThreadTransport(): Promise<Transport> {
   const { openWorkspace } = await import('./sqliteEngine');
@@ -196,16 +198,8 @@ async function bootstrap(): Promise<Transport> {
 }
 
 /** The engine behind the next statement. */
-export function getSqliteTransport(): Promise<Transport> {
+function getSqliteTransport(): Promise<Transport> {
   return bootstrap();
-}
-
-export function disposeSqlite(): void {
-  const transport = slot.transport;
-  slot.transport = null;
-  slot.worker = null;
-  slot.placement = null;
-  void transport?.then((t) => t.close()).catch(() => undefined);
 }
 
 /**
@@ -240,25 +234,11 @@ export function sqliteEngineCapabilities(): EngineCapabilities | null {
 
 /** The engine's own label — `SQLite 3.53.4` — or the profile's placeholder
     before the engine has answered. Never a hardcoded version. */
-export function sqliteEngineLabel(): string {
+function sqliteEngineLabel(): string {
   return slot.version === null || slot.version === '' ? SQLITE_ENGINE_FALLBACK : `SQLite ${slot.version}`;
 }
 
-/** The profile's own refusal for a plan request on this dialect, for a caller
-    that must disable the action with the reason the profile gives. */
-export function sqlitePlanRefusalReason(): string | null {
-  return sqlitePlanRefusal();
-}
-
 /* ---------- execution ---------- */
-
-function stripComments(sql: string): string {
-  return sql
-    .replace(/\/\*[\s\S]*?\*\//g, ' ')
-    .replace(/--[^\n]*/g, ' ')
-    .replace(/\s+/g, ' ')
-    .trim();
-}
 
 function failed(code: QueryErrorCode, message: string, detail?: string | null): EngineResult {
   return {

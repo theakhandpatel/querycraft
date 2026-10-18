@@ -1,4 +1,4 @@
-import { createExecutionApi } from './execution';
+import { createExecutionApi } from './execution/service';
 import type { ExecutionApi } from '../types';
 
 /* One seam. Everything above it (screens, workbook, lesson) is adapter-agnostic.
@@ -6,7 +6,7 @@ import type { ExecutionApi } from '../types';
      - "pglite" (default): real PostgreSQL (WASM) in the page, no server needed
      - "http": the Go gateway */
 
-export type ApiMode = 'pglite' | 'http';
+type ApiMode = 'pglite' | 'http';
 
 let resolvedMode: ApiMode | null = null;
 let resolvedBase: string | null = null;
@@ -92,14 +92,3 @@ export function createApi({
     onUnauthorized,
   });
 }
-
-export {
-  AUTH_TOKEN_KEY,
-  ExecutionService,
-  GatewayError,
-  PGLITE_CONFIG,
-  clearAuthToken,
-  readAuthToken,
-  readAuthUser,
-  writeAuthToken,
-} from './execution';

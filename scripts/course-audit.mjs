@@ -41,10 +41,10 @@ import { Reporter, buildGateway, getJSON, liveEnv, postJSON, startGateway, stopG
 const REQUEST_TIMEOUT_MS = 180_000;
 
 const require = createRequire('/tmp/');
-assertFreshBundle('/tmp/curriculum.cjs', 'audit-courses', ['web/src/data/curriculum.ts', 'web/src/types.ts']);
+assertFreshBundle('/tmp/curriculum-for-courses.cjs', 'audit-courses', ['web/src/data/curriculum.ts', 'web/src/types.ts']);
 assertFreshBundle('/tmp/dialect-for-courses.cjs', 'audit-courses', ['web/src/lib/dialect.ts']);
 assertFreshBundle('/tmp/dataset-for-courses.cjs', 'audit-courses', ['web/src/lib/dataset.ts']);
-const c = require('/tmp/curriculum.cjs');
+const c = require('/tmp/curriculum-for-courses.cjs');
 const { dialectFor, dialectReason } = require('/tmp/dialect-for-courses.cjs');
 const { datasetFor, datasetReason } = require('/tmp/dataset-for-courses.cjs');
 

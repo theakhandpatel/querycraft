@@ -32,7 +32,7 @@ import { activeModules, courseById } from './model';
 import type { Course, Screen } from '../types';
 
 /** The routes, as a fragment spells them. */
-export type Route =
+type Route =
   | { name: 'home' }
   | { name: 'library' }
   | { name: 'course'; courseId: string }
@@ -45,7 +45,7 @@ export type Route =
   | { name: 'manage' };
 
 /** The slice of app state the fragment is bound to. */
-export interface RouteState {
+interface RouteState {
   screen: Screen;
   /** The selected course; every screen keeps one, so it is always known. */
   courseId: string;
@@ -97,7 +97,7 @@ function segment(raw: string): string {
 
 /** Parse a fragment into a route, or null when it names nothing the app has.
     `#/course/joins/m2`, `course/joins`, `#/` and `` all read. */
-export function parseRoute(hash: string): Route | null {
+function parseRoute(hash: string): Route | null {
   const raw = (hash.charAt(0) === '#' ? hash.slice(1) : hash).split('?')[0];
   const parts = raw.split('/').filter((p) => p.length > 0).map(segment);
   if (parts.length === 0) return { name: 'home' };

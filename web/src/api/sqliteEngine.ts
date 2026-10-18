@@ -22,9 +22,10 @@
  *     *inside* the engine (SQLITE_INTERRUPT, result code 9), which is what the
  *     profile's `interrupt` capability promises. `sql.js` has no in-engine stop
  *     at all.
- *   - Both go through the profile's rules: the build frames its errors as
- *     `SQLITE_ERROR: sqlite3 result code 1: incomplete input`, which
- *     `sqliteUnframe` in `./sqlite.ts` removes before the rules run.
+ *   - Both go through the profile's rules. The Go raw driver reports
+ *     sqlite3_errmsg unframed, so only this build frames its errors, as
+ *     `SQLITE_ERROR: sqlite3 result code 1: incomplete input`; `sqliteUnframe`
+ *     in `./sqliteFraming.ts` strips that before the rules run.
  *
  * This module is imported by `./sqlite.worker.ts` (the Worker) and by
  * `./sqlite.ts` (the main-thread fallback), so there is one engine
@@ -35,8 +36,8 @@ import type { PreparedStatement, SqlValue } from '@sqlite.org/sqlite-wasm';
 import sqliteWasmUrl from '@sqlite.org/sqlite-wasm/sqlite3.wasm?url';
 import { schemaSql, seedSql } from './sqliteDataset';
 
-export type Sqlite3 = Awaited<ReturnType<typeof sqlite3InitModule>>;
-export type SqliteDatabase = InstanceType<Sqlite3['oo1']['DB']>;
+type Sqlite3 = Awaited<ReturnType<typeof sqlite3InitModule>>;
+type SqliteDatabase = InstanceType<Sqlite3['oo1']['DB']>;
 
 /** SQLite's own sentence for a failure, plus the result code the driver
     reported. Both travel unchanged to `./sqlite.ts`, which unframes the sentence
@@ -93,7 +94,7 @@ const bootSqlite3 = sqlite3InitModule as unknown as (config?: {
  * engine then fetches the SPA's `index.html` instead of its 868 KB WASM build.
  * The URL comes from Vite's own `?url` import, so the asset is hashed and
  * emitted by the bundler and works in dev and in a production build alike. */
-export function getSqlite3(): Promise<Sqlite3> {
+function getSqlite3(): Promise<Sqlite3> {
   if (enginePromise === null) {
     enginePromise = bootSqlite3({ locateFile: () => sqliteWasmUrl }).catch((e: unknown) => {
       enginePromise = null;
@@ -104,7 +105,7 @@ export function getSqlite3(): Promise<Sqlite3> {
 }
 
  /** A statement's outcome, either the rows or the engine's failure. */
-export type ExecOutcome = { ok: true; value: EngineRows } | { ok: false; error: EngineFailure };
+type ExecOutcome = { ok: true; value: EngineRows } | { ok: false; error: EngineFailure };
 
 function asFailure(e: unknown): EngineFailure {
   if (typeof e === 'object' && e !== null) {

@@ -2,10 +2,9 @@ import Icon from '../ui/Icon';
 import Ring from '../ui/Ring';
 import DialectBadge, { useChapterDialect } from '../ui/DialectBadge';
 import { useStore } from '../../state/store';
-import { COURSES } from '../../data/curriculum';
 import {
   activeModules, courseAttempts, courseDoneCount, courseExerciseTotal, coursePassed,
-  exerciseIdsOfModule, lessonPercent, nextChapterIndex,
+  enrolledCourses, exerciseIdsOfModule, lessonPercent, nextChapterIndex,
 } from '../../lib/model';
 import type { Course, CourseModule } from '../../types';
 
@@ -25,7 +24,7 @@ export default function CourseScreen() {
   const pct = lessonPercent(course, progress);
   const ms = activeModules(course);
   const nextIdx = nextChapterIndex(course, progress);
-  const enrolled = COURSES.filter((c) => c.enrolled && c.built);
+  const enrolled = enrolledCourses();
 
   return (
     <div className="content">

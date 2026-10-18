@@ -1,9 +1,12 @@
 import { useEffect, useRef, useState } from 'react';
 import Icon from '../ui/Icon';
 import Field from '../ui/Field';
+import GenerationLog from '../ui/GenerationLog';
+import { useChecklist } from '../ui/useChecklist';
 import { useStore } from '../../state/store';
 import { COURSES } from '../../data/curriculum';
-import { courseShort } from '../../lib/model';
+import { courseShort, exercisesWithReference } from '../../lib/model';
+import { sleep } from '../../lib/sleep';
 import { artifactProvenanceLabel, executionEngineLabel, generationProvenance } from '../../lib/provenance';
 import type { AiArtifact, AiOutcome } from '../../api/aiContract';
 import type { Block } from '../../types';
@@ -17,14 +20,7 @@ const CL_STEPS = [
 
 /** The authored challenge whose reference query this lab validates against. */
 function referenceBlock(): Block | null {
-  const exercises: Block[] = [];
-  for (const c of COURSES) {
-    for (const m of c.modules ?? []) {
-      for (const b of m.blocks ?? []) {
-        if (b.type === 'exercise' && typeof b.solution === 'string' && b.solution.trim()) exercises.push(b);
-      }
-    }
-  }
+  const exercises = COURSES.flatMap((c) => exercisesWithReference(c));
   return exercises.find((b) => b.id === 'ex.5.1') ?? exercises[0] ?? null;
 }
 
@@ -78,7 +74,7 @@ export default function ChallengeLabScreen() {
   const [difficulty, setDifficulty] = useState('Challenging');
   const [scenario, setScenario] = useState('A subscription business wants to find the top plan per region each month');
   const [constraints, setConstraints] = useState('Answer with one statement. Return no more than 50 rows. Must include a deterministic tie-break.');
-  const [states, setStates] = useState(CL_STEPS.map(() => 'idle'));
+  const { states, mark, reset: resetChecklist, idleWord } = useChecklist(CL_STEPS, 'Idle');
   const [log, setLog] = useState<{ t: string; html: string }[]>([]);
   const [logOpen, setLogOpen] = useState(true);
   const [result, setResult] = useState<Evidence | null>(null);
@@ -123,7 +119,7 @@ export default function ChallengeLabScreen() {
 
   function reset(): void {
     stop();
-    setStates(CL_STEPS.map(() => 'idle'));
+    resetChecklist();
     setLog([]);
     setLogOpen(true);
     setResult(null);
@@ -143,7 +139,7 @@ export default function ChallengeLabScreen() {
     const { signal } = controller;
 
     setResult(null);
-    setStates(CL_STEPS.map(() => 'idle'));
+    resetChecklist();
     setLog([]);
     setLogOpen(true);
     /* Back to the authored pipeline view: this run is the offline evidence
@@ -154,28 +150,8 @@ export default function ChallengeLabScreen() {
     const t0 = performance.now();
     const stamp = (): string => `t+${((performance.now() - t0) / 1000).toFixed(1)}s`;
     const emit = (html: string): void => setLog((l) => [...l, { t: stamp(), html }]);
-    const mark = (i: number, state: 'idle' | 'running' | 'done'): void =>
-      setStates((prev) => {
-        if (prev[i] === state) return prev;
-        const next = prev.slice();
-        next[i] = state;
-        return next;
-      });
     /* The real work finishes in well under a second, which is too fast to read.
        The pause is legibility only — it is never reported as engine time. */
-    const pause = (ms: number): Promise<void> =>
-      new Promise((resolve) => {
-        if (signal.aborted) return resolve();
-        const onAbort = (): void => {
-          clearTimeout(id);
-          resolve();
-        };
-        const id = setTimeout(() => {
-          signal.removeEventListener('abort', onAbort);
-          resolve();
-        }, ms);
-        signal.addEventListener('abort', onAbort, { once: true });
-      });
 
     void (async () => {
       try {
@@ -204,7 +180,7 @@ export default function ChallengeLabScreen() {
         }
         mark(0, 'done');
         if (signal.aborted) return;
-        await pause(240);
+        await sleep(240, signal);
         if (signal.aborted) return;
 
         /* 2. The reference must pass its own contract on the real engine. */
@@ -222,7 +198,7 @@ export default function ChallengeLabScreen() {
         }
         mark(1, 'done');
         if (signal.aborted) return;
-        await pause(240);
+        await sleep(240, signal);
         if (signal.aborted) return;
 
         /* 3. Wrong queries must not pass. Measure it instead of asserting it. */
@@ -248,7 +224,7 @@ export default function ChallengeLabScreen() {
         );
         mark(2, 'done');
         if (signal.aborted) return;
-        await pause(240);
+        await sleep(240, signal);
         if (signal.aborted) return;
 
         /* 4. Register the artifact through the API. */
@@ -430,7 +406,7 @@ export default function ChallengeLabScreen() {
                   <div className={`pipe ${states[i]}`} key={i}>
                     <div className="check">{states[i] === 'done' ? '✓' : i + 1}</div>
                     <div><strong>{title}</strong><small>{small}</small></div>
-                    <span className="state">{states[i] === 'done' ? 'Done' : states[i] === 'running' ? 'Working' : 'Idle'}</span>
+                    <span className="state">{states[i] === 'done' ? 'Done' : states[i] === 'running' ? 'Working' : idleWord}</span>
                   </div>
                 ))}
           </div>
@@ -490,11 +466,7 @@ export default function ChallengeLabScreen() {
             </div>
           )}
           <button className="small ghost mt-12" onClick={() => setLogOpen((v) => !v)}><Icon name="chevron-down" />Show stream</button>
-          <div className={`stream${logOpen ? ' open' : ''}`}>
-            {log.map((l, i) => (
-              <div className="ln" key={i}><span className="t">{l.t}</span><span dangerouslySetInnerHTML={{ __html: l.html }} /></div>
-            ))}
-          </div>
+          <GenerationLog log={log} open={logOpen} />
         </div>
       </div>
 
@@ -547,7 +519,6 @@ export default function ChallengeLabScreen() {
                   <button className="primary" onClick={() => void tryIt(artifact)} disabled={trying}>
                     <Icon name="play" />{trying ? 'Grading…' : 'Try it'}
                   </button>
-                  <button onClick={() => s.toast('Saved to your challenge set.')}>Save challenge</button>
                 </div>
                 {tried && (
                   <div className="mt-12">
@@ -593,7 +564,7 @@ export default function ChallengeLabScreen() {
             <div className="grid2 mt-12">
               <div>
                 <h3>Prompt</h3>
-                <p className="mt-8" style={{ fontSize: 13.5 }}>{scenario}. Return the top plan per region each month, including a deterministic tie-break, using window functions.</p>
+                <p className="mt-8" style={{ fontSize: 13.5 }}>{referenceBlock()?.prompt ?? ''}</p>
                 <div className="reportrow mt-8"><span>Difficulty</span><span>{difficulty}</span></div>
                 <div className="reportrow"><span>Constraints</span><span className="mono" style={{ fontSize: 11 }}>{constraints}</span></div>
                 <div className="reportrow"><span>Reference rows</span><span>{result.referenceRows}</span></div>
@@ -623,7 +594,6 @@ export default function ChallengeLabScreen() {
             </div>
             <div className="actions mt-14">
               <button className="primary" onClick={s.resumeCourse}><Icon name="play" />Practise this now</button>
-              <button onClick={() => s.toast('Saved to your challenge set.')}>Save challenge</button>
               <button className="ghost" onClick={reset}>Discard</button>
             </div>
           </div>

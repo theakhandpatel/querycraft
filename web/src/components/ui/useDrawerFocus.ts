@@ -22,7 +22,14 @@ function focusable(el: HTMLElement): boolean {
   return el.getClientRects().length > 0 && getComputedStyle(el).visibility !== 'hidden';
 }
 
-export function useDrawerFocus(open: boolean, ref: React.RefObject<HTMLElement | null>) {
+export function useDrawerFocus(
+  open: boolean,
+  ref: React.RefObject<HTMLElement | null>,
+  /* The control that should take focus when the panel opens. A drawer focuses
+     the first control; a prompt focuses its own input, so the first thing a
+     learner types lands where they meant it to. */
+  initialFocus?: React.RefObject<HTMLElement | null>,
+) {
   const openedRef = useRef(false);
 
   useEffect(() => {
@@ -39,7 +46,7 @@ export function useDrawerFocus(open: boolean, ref: React.RefObject<HTMLElement |
     const restoreTo = opener && opener !== document.body ? opener : null;
 
     const root = ref.current;
-    const first = root?.querySelector<HTMLElement>(FOCUSABLE);
+    const first = initialFocus?.current ?? root?.querySelector<HTMLElement>(FOCUSABLE);
     (first ?? root)?.focus();
 
     function onKeyDown(e: KeyboardEvent) {
@@ -70,5 +77,5 @@ export function useDrawerFocus(open: boolean, ref: React.RefObject<HTMLElement |
       else document.getElementById('main')?.focus({ preventScroll: true });
       openedRef.current = false;
     };
-  }, [open, ref]);
+  }, [open, ref, initialFocus]);
 }

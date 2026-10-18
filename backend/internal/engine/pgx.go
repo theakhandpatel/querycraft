@@ -1,3 +1,8 @@
+// PgxExecutor: the PostgreSQL engine behind the Executor seam (engine.go), built
+// on pgx and pgxpool. It runs each learner statement in a transaction with
+// session timeouts, read-only for the shared dataset and writable for a copied
+// environment. execute.go supplies the caps; normalize.go decides how a value is
+// encoded.
 package engine
 
 import (
@@ -95,11 +100,6 @@ func NewPgxExecutorWithConfig(ctx context.Context, dsn string, config PgxConfig)
 	return &PgxExecutor{pool: pool, tm: pgtype.NewMap(), writable: config.Writable}, nil
 }
 
-// Writable reports whether this executor commits its transactions. A caller
-// that has to describe an environment honestly (Facts, diagnostics) can say so
-// without assuming it.
-func (e *PgxExecutor) Writable() bool { return e.writable }
-
 // Query implements Executor.
 func (e *PgxExecutor) Query(ctx context.Context, sql string, args ...any) (Rows, error) {
 	// A read-only transaction is a server-side guarantee, not a convention: it
@@ -165,7 +165,7 @@ func isContextErr(err error) bool {
 // only the second is a fault.
 func connectErr(err error) error {
 	if isContextErr(err) {
-		return fmt.Errorf("%w: %w", ErrPoolTimeout, err)
+		return fmt.Errorf("%w: %w", errPoolTimeout, err)
 	}
 	return fmt.Errorf("%w: %w", ErrEnvironmentUnavailable, err)
 }
@@ -405,6 +405,9 @@ func (r *pgxRows) Close() {
 	_ = r.tx.Rollback(context.WithoutCancel(r.ctx))
 }
 
+// typeName resolves a PostgreSQL type OID to the name pgx knows it by, so a
+// column reports "int4" rather than a bare number. An OID pgx cannot name is
+// reported as "oid:<n>" so the label still identifies the type.
 func typeName(m *pgtype.Map, oid uint32) string {
 	if t, ok := m.TypeForOID(oid); ok && t != nil && t.Name != "" {
 		return t.Name

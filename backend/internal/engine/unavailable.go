@@ -1,3 +1,7 @@
+// The executor the gateway uses when no execution database is configured. It
+// answers every Executor call with an honest refusal, so health, capabilities,
+// dataset introspection and in-memory progress keep working while SQL execution
+// reports ENVIRONMENT_UNAVAILABLE (engine.go, ErrEnvironmentUnavailable).
 package engine
 
 import (
@@ -24,12 +28,15 @@ func (u UnavailableExecutor) err() error {
 	return fmt.Errorf("%w: %s", ErrEnvironmentUnavailable, u.reason())
 }
 
+// Query implements Executor. No statement can run, so it refuses with err().
 func (u UnavailableExecutor) Query(ctx context.Context, sql string, args ...any) (Rows, error) {
 	return nil, u.err()
 }
 
+// Ping implements Executor. There is no server to reach, so it refuses.
 func (u UnavailableExecutor) Ping(ctx context.Context) error { return u.err() }
 
+// Version implements Executor. No engine answered, so there is no version.
 func (u UnavailableExecutor) Version(ctx context.Context) (string, error) { return "", u.err() }
 
 // Stats implements Executor: there is no pool, so the honest report is zero
@@ -59,4 +66,5 @@ func (u UnavailableExecutor) Diagnostics(ctx context.Context) map[string]any {
 	return map[string]any{"unavailable": true, "reason": u.reason()}
 }
 
+// Close implements Executor. There is nothing open to release.
 func (u UnavailableExecutor) Close() error { return nil }

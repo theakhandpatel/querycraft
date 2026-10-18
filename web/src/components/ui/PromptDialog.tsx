@@ -1,28 +1,20 @@
 import { useEffect, useRef, useState } from 'react';
 import Icon from './Icon';
+import { useDrawerFocus } from './useDrawerFocus';
 import { useStore } from '../../state/store';
 import type { PromptRequest } from '../../types';
 
 const INPUT_ID = 'prompt-dialog-input';
 
-/** Everything the dialog can put a focus ring on. */
-const FOCUSABLE =
-  'a[href], button:not([disabled]), input:not([disabled]), select:not([disabled]), textarea:not([disabled]), [tabindex]:not([tabindex="-1"])';
-
-/**
- * Whether an element would receive focus from the browser.
- *
- * `offsetParent` is null for anything inside a `position: fixed` panel, so it
- * drops real controls. Client rects plus `visibility` is what the browser uses.
- */
-function focusable(el: HTMLElement): boolean {
-  return el.getClientRects().length > 0 && getComputedStyle(el).visibility !== 'hidden';
-}
-
 function PromptForm({ req, onCancel }: { req: PromptRequest; onCancel: () => void }) {
   const [value, setValue] = useState(req.defaultValue ?? '');
   const inputRef = useRef<HTMLInputElement>(null);
   const formRef = useRef<HTMLFormElement>(null);
+  /* The prompt covers the page, so it shares the shell's focus contract: Tab
+     cycles inside it instead of walking into the shell behind. It focuses its
+     own input rather than the first control (the Close button), because the
+     learner opened it to type. Escape and the backdrop are the exits. */
+  useDrawerFocus(true, formRef, inputRef);
 
   useEffect(() => {
     setValue(req.defaultValue ?? '');
@@ -32,34 +24,6 @@ function PromptForm({ req, onCancel }: { req: PromptRequest; onCancel: () => voi
       input.select();
     }
   }, [req]);
-
-  useEffect(() => {
-    /* The prompt covers the page, so Tab has to cycle inside it. A Tab that
-       walks into the shell behind would move focus to a control the learner
-       cannot see. Escape and the backdrop are the exits. */
-    function onKeyDown(e: KeyboardEvent) {
-      if (e.key !== 'Tab') return;
-      const root = formRef.current;
-      if (!root) return;
-      const items = Array.from(root.querySelectorAll<HTMLElement>(FOCUSABLE)).filter(focusable);
-      if (items.length === 0) return;
-      const firstEl = items[0];
-      const lastEl = items[items.length - 1];
-      const current = document.activeElement as HTMLElement | null;
-      const inside = !!current && root.contains(current);
-      if (e.shiftKey && (!inside || current === firstEl)) {
-        e.preventDefault();
-        lastEl.focus();
-      } else if (!e.shiftKey && (!inside || current === lastEl)) {
-        e.preventDefault();
-        firstEl.focus();
-      }
-    }
-    /* Capture phase: the trap has to see the key before the form's Escape
-       handler and before the browser moves focus on its own. */
-    document.addEventListener('keydown', onKeyDown, true);
-    return () => document.removeEventListener('keydown', onKeyDown, true);
-  }, []);
 
   const trimmed = value.trim();
   const blocked = req.required !== false && trimmed === '';

@@ -38,6 +38,8 @@ type Error struct {
 	Detail  string `json:"detail,omitempty"`
 }
 
+// Error implements the error interface. It renders the code and message, plus
+// the stage when the failure names one.
 func (e *Error) Error() string {
 	if e == nil {
 		return ""
@@ -53,6 +55,7 @@ func (e *Error) Error() string {
 // Difficulty is the request's difficulty band.
 type Difficulty string
 
+// The difficulty bands a request or an artifact may carry.
 const (
 	Beginner     Difficulty = "beginner"
 	Intermediate Difficulty = "intermediate"
@@ -69,7 +72,6 @@ type GenerationRequest struct {
 	Scenario      string     `json:"scenario,omitempty"`
 	Constraints   []string   `json:"constraints,omitempty"`
 	ExerciseCount int        `json:"exercise_count,omitempty"`
-	Steps         []string   `json:"steps,omitempty"`
 	// RequireApproval asks a course run to stop after its outline is validated
 	// and stored, so the learner can approve the index before the expensive
 	// chapter phase runs. The run then ends StatusAwaitingApproval and the
@@ -124,7 +126,6 @@ type Provenance struct {
 type Artifact struct {
 	ID                 string         `json:"id"`
 	Version            int            `json:"version"`
-	LessonID           string         `json:"lesson_id,omitempty"`
 	Dialect            string         `json:"dialect,omitempty"`
 	Type               string         `json:"type,omitempty"`
 	Title              string         `json:"title"`
@@ -192,16 +193,6 @@ type Outcome struct {
 	Error    *Error          `json:"error"`
 }
 
-// StageIndex returns the position of a stage in the reported slice, or -1.
-func (o Outcome) StageIndex(name string) int {
-	for i, st := range o.Stages {
-		if st.Name == name {
-			return i
-		}
-	}
-	return -1
-}
-
 /* ---------- patches ---------- */
 
 // PatchChange is one field edit proposed by a verified defect.
@@ -237,7 +228,6 @@ type Record struct {
 type Depot interface {
 	SaveChallenge(ctx context.Context, rec Record) error
 	Challenge(ctx context.Context, id string) (Record, bool, error)
-	Challenges(ctx context.Context) ([]Record, error)
 	// ChallengesFor filters to one owner in the store, for the owner-scoped list
 	// route (see CoursesFor).
 	ChallengesFor(ctx context.Context, ownerID string) ([]Record, error)
@@ -258,15 +248,13 @@ type Depot interface {
 	ApprovePatch(ctx context.Context, id, approvedBy string) error
 	// Runs are the audit trail: each generation's transcript, owner-scoped and
 	// bounded before it arrives here (see transcript.go). Run returns the whole
-	// record including its owner, so the caller decides who may read it; Runs
-	// returns summaries, newest first. SaveRun is an upsert, because one run
-	// may be stored more than once (a building course updates its record as it
-	// writes chapters).
+	// record including its owner, so the caller decides who may read it;
+	// SaveRun is an upsert, because one run may be stored more than once (a
+	// building course updates its record as it writes chapters).
 	SaveRun(ctx context.Context, rec RunTranscript) error
 	Run(ctx context.Context, id string) (RunTranscript, bool, error)
-	Runs(ctx context.Context) ([]RunSummary, error)
-	// RunsFor is Runs filtered to one owner by the store, for the same reason
-	// CoursesFor exists: the list route is owner-scoped and should not load (and
-	// then discard) every learner's runs.
+	// RunsFor lists one owner's run summaries, newest first, for the same
+	// reason CoursesFor exists: the list route is owner-scoped and should not
+	// load (and then discard) every learner's runs.
 	RunsFor(ctx context.Context, ownerID string) ([]RunSummary, error)
 }

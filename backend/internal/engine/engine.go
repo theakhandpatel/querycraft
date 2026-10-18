@@ -2,7 +2,8 @@
 //
 // All database access goes through the small Executor interface so the gateway
 // logic, evaluator and HTTP handlers can be unit-tested against a fake without
-// a live PostgreSQL server. PgxExecutor is the real pgx-backed implementation.
+// a live server. PgxExecutor backs PostgreSQL with pgx and SQLiteExecutor backs
+// SQLite with this package's own driver (sqlite_raw.go).
 package engine
 
 import (
@@ -11,6 +12,8 @@ import (
 	"math"
 	"strings"
 	"time"
+
+	"github.com/querycraft/sqlquery/backend/internal/dialect"
 )
 
 // EngineName is reported in every QueryResult as the execution engine. It is
@@ -28,27 +31,30 @@ const (
 	DialectSQLite   = "sqlite"
 )
 
-// Stable error codes shared with contracts/query-result.schema.json.
+// The stable error codes of contracts/query-result.schema.json, aliased to
+// dialect's declaration so one declaration serves both packages. dialect owns
+// the list because the profiles name a code and this package already imports
+// dialect; a second copy here could drift from the profiles.
 const (
-	CodeEmptyQuery             = "EMPTY_QUERY"
-	CodeSyntax                 = "QUERY_SYNTAX_ERROR"
-	CodeRuntime                = "QUERY_RUNTIME_ERROR"
-	CodeTimeout                = "QUERY_TIMEOUT"
-	CodeResultLimit            = "RESULT_LIMIT_EXCEEDED"
-	CodeEnvironmentUnavailable = "ENVIRONMENT_UNAVAILABLE"
+	CodeEmptyQuery             = dialect.CodeEmptyQuery
+	CodeSyntax                 = dialect.CodeSyntaxError
+	CodeRuntime                = dialect.CodeRuntimeError
+	CodeTimeout                = dialect.CodeTimeout
+	CodeResultLimit            = dialect.CodeResultLimitExceeded
+	CodeEnvironmentUnavailable = dialect.CodeEnvironmentUnavailable
 	// CodeDialectMismatch is a product refusal, not an engine failure: the
 	// statement is fine and the engine is fine, but the chapter was written for
 	// a different dialect. Reusing ENVIRONMENT_UNAVAILABLE would hide a mistake
 	// the learner can fix in one action behind a fault they cannot.
-	CodeDialectMismatch = "DIALECT_MISMATCH"
-	CodeEvaluationError = "EVALUATION_ERROR"
+	CodeDialectMismatch = dialect.CodeDialectMismatch
+	CodeEvaluationError = dialect.CodeEvaluationError
 )
 
 // ErrEnvironmentUnavailable marks failures that mean the engine itself could
 // not be reached, as opposed to a problem with the submitted statement.
 var ErrEnvironmentUnavailable = errors.New("execution environment unavailable")
 
-// ErrPoolTimeout marks a request that spent its whole deadline waiting for a
+// errPoolTimeout marks a request that spent its whole deadline waiting for a
 // connection from the pool.
 //
 // The two conditions this separates are easy to confuse and mean opposite
@@ -56,9 +62,10 @@ var ErrEnvironmentUnavailable = errors.New("execution environment unavailable")
 // their statement timed out, while an unreachable database is a fault. Wrapping
 // a pool-acquire deadline as ErrEnvironmentUnavailable reports a healthy
 // service as broken and points the learner at a problem that is not theirs.
-var ErrPoolTimeout = errors.New("no execution connection became available in time")
+var errPoolTimeout = errors.New("no execution connection became available in time")
 
-// Column is one result column: name plus the PostgreSQL type name.
+// Column is one result column: name plus the type name the engine reports.
+// PostgreSQL names a pg type; SQLite reports the declared type (sqlite.go).
 type Column struct {
 	Name string `json:"name"`
 	Type string `json:"type"`
@@ -84,16 +91,6 @@ type QueryResult struct {
 	Engine     string      `json:"engine"`
 	Dialect    string      `json:"dialect"`
 }
-
-// DialectOf reports the dialect an executor runs. Every Executor answers
-// Dialect itself, so this reader needs no type assertion. It stays exported
-// because /health reports the default dialect's name through it.
-func DialectOf(ex Executor) string { return ex.Dialect() }
-
-// EngineLabelOf reports the human engine string for an executor. The answer
-// comes from Executor.EngineLabel; SQLite answers with its own version string,
-// so a result row never says "postgresql" on a page that ran SQLite.
-func EngineLabelOf(ex Executor) string { return ex.EngineLabel() }
 
 // Limits are the per-request caps. Zero values fall back to defaults.
 type Limits struct {
@@ -132,11 +129,11 @@ func (l Limits) Merge(fallback Limits) Limits {
 }
 
 // Fill sets any UNSET field from fallback and never lowers a set one. It is the
-// right merge when the caller's value is itself a ceiling — the operator's
-// configured caps, say — as opposed to a request body that must not exceed the
-// server's ceiling (that is Merge). Execute uses this: its caller has already
-// resolved request-vs-server through Merge, so re-clamping to the compiled
-// default here silently ignored a higher QC_MAX_ROWS.
+// right merge when the caller's value is itself a ceiling (the operator's
+// configured caps) rather than a request body that must not exceed the server's
+// ceiling (that is Merge). Execute uses this: its caller has already resolved
+// request-vs-server through Merge, so re-clamping to the compiled default here
+// would drop a higher QC_MAX_ROWS.
 func (l Limits) Fill(fallback Limits) Limits {
 	if l.MaxRows <= 0 {
 		l.MaxRows = fallback.MaxRows
@@ -172,8 +169,8 @@ type Rows interface {
 }
 
 // PoolStats is a point-in-time view of the connection pool learner statements
-// run on. It is exported so the load test (§13.2) can publish saturation as
-// measured, and so /metrics can show the same number the pool enforces.
+// run on. It is exported so the load test can publish saturation as measured,
+// and so /metrics can show the same number the pool enforces.
 type PoolStats struct {
 	MaxConns          int `json:"max_conns"`
 	TotalConns        int `json:"total_conns"`
@@ -184,8 +181,9 @@ type PoolStats struct {
 
 // Executor is the entire database surface the gateway depends on.
 //
-// The four capability methods are on the interface rather than on optional
-// interfaces beside it. Only PgxExecutor and SQLiteExecutor run statements, and
+// The four capability methods (Dialect, EngineLabel, ClassifyError,
+// Diagnostics) are on the interface rather than on optional interfaces beside
+// it. Only PgxExecutor and SQLiteExecutor run statements, and
 // UnavailableExecutor reports that nothing can. A probe that falls back to a
 // default when an executor is silent hides a missing answer, and every answer
 // here is one line.

@@ -4,12 +4,10 @@ import type { DatasetId, Dialect, ExecutionApi, TableDef } from '../types';
 
 export default function Schema({
   api,
-  tables: tablesProp,
   dataset = DEFAULT_DATASET,
   dialect = DEFAULT_DIALECT,
 }: {
   api: ExecutionApi;
-  tables?: TableDef[];
   /** M5. Which fixture to describe. The two datasets are the same schema at two
       scales, so the wrong one is not an obvious error in the drawer — it is a
       column list that happens to be right next to numbers that are not. The
@@ -23,10 +21,9 @@ export default function Schema({
       chapter resolves to. */
   dialect?: Dialect;
 }) {
-  const [tables, setTables] = useState<TableDef[] | null>(tablesProp || null);
+  const [tables, setTables] = useState<TableDef[] | null>(null);
   const [failed, setFailed] = useState(false);
   useEffect(() => {
-    if (tablesProp) return;
     let alive = true;
     /* Cleared first: when the dataset changes, the previous fixture's tables are
        not a preview of this one, and leaving them up would label perf columns

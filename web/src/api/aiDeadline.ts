@@ -19,7 +19,7 @@
 
 /** Extra wall clock beyond the advertised budget, so the pipeline's own answer
     always wins the race against the client giving up. */
-export const AI_DEADLINE_SLACK_MS = 30_000;
+const AI_DEADLINE_SLACK_MS = 30_000;
 
 /** Until the gateway has said how long a run may take, wait long enough that a
     slow-but-working run is never mistaken for an unreachable gateway. */

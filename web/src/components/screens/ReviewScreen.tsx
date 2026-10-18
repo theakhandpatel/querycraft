@@ -3,6 +3,7 @@ import Schema from '../Schema';
 import { useStore } from '../../state/store';
 import { COURSES, MODULES, TABLES } from '../../data/curriculum';
 import { chapterOutline, courseExerciseTotal, moduleExerciseBlocks } from '../../lib/model';
+import { dialectLabel, effectiveDialect } from '../../lib/dialect';
 import type { DraftReport } from '../../lib/draft';
 import type { Course } from '../../types';
 
@@ -42,7 +43,7 @@ export default function ReviewScreen() {
             {!report && (
               <span className="pill subtle">No build in this session · open Create to run one</span>
             )}
-            <span className="pill subtle">{dialectLabel(course.dialect)} · {modules.length} chapters · {exerciseTotal} exercises</span>
+            <span className="pill subtle">{dialectLabel(effectiveDialect(undefined, course))} · {modules.length} chapters · {exerciseTotal} exercises</span>
           </div>
         </div>
         <div className="actions">
@@ -87,7 +88,7 @@ export default function ReviewScreen() {
           <div className="card">
             <h2>Course decisions</h2>
             <div className="reportrow"><span>Starting assumption</span><span>{s.buildContext.level || 'Not stated'}</span></div>
-            <div className="reportrow"><span>Dialect</span><span>{dialectLabel(course.dialect)}</span></div>
+            <div className="reportrow"><span>Dialect</span><span>{dialectLabel(effectiveDialect(undefined, course))}</span></div>
             <div className="reportrow"><span>Learning style</span><span>Short concept + exercise</span></div>
             <div className="reportrow"><span>Grading</span><span>Result contract, not SQL text</span></div>
             <div className="reportrow"><span>Level</span><span>{course.level || 'Not stated'}</span></div>
@@ -215,12 +216,6 @@ function SampleChapter({ course }: { course: Course }) {
       </div>
     </div>
   );
-}
-
-/** The dialect as a heading reads it. The app runs two engines and a course
-    declares one, so this is never guessed from a default. */
-function dialectLabel(dialect: unknown): string {
-  return dialect === 'sqlite' ? 'SQLite' : 'PostgreSQL';
 }
 
 /**

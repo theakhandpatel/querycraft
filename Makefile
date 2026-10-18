@@ -34,7 +34,7 @@ SMOKE_PG_DIR  ?= $(BACKEND_DIR)/.data/smoke
 # cache but keep the smoke cluster's data and runtime dirs isolated.
 PG_BINARIES_DIR ?= $(BACKEND_DIR)/.data/pg/binaries
 
-.PHONY: help install web typecheck check-cgo embed backend build test verify verify-mock serve run dev docs dataset audit-lessons audit-content audit-storage audit-search audit-courses audit-progress audit-export audit-import audit-fixtures audit-themes audit-metrics audit-metrics-live audit-adversarial audit-adversarial-live audit-load audit-parity audit-ai audit-ai-adapters audit-course-store audit-ai-live audit-perf audit-perf-content audit-perf-seam audit-perf-fixtures audit-dataset-map audit-shell audit-sqlite-errors audit-boot audit-course-gen db-reset clean disk
+.PHONY: help install web typecheck check-cgo embed backend build test test-all gotest verify verify-mock serve run dev docs dataset audit-lessons audit-content audit-storage audit-search audit-courses audit-progress audit-export audit-import audit-fixtures audit-themes audit-metrics audit-metrics-live audit-adversarial audit-adversarial-live audit-load audit-parity audit-ai audit-ai-adapters audit-course-store audit-ai-live audit-perf audit-perf-content audit-perf-seam audit-perf-fixtures audit-dataset-map audit-shell audit-sqlite-errors audit-boot audit-course-gen db-reset clean disk
 
 help: ## List the available targets with a one-line description.
 	@echo "Querycraft — make targets"
@@ -79,7 +79,20 @@ backend: ## Compile the gateway to backend/bin/querycraft, stamping BuildVersion
 
 build: web embed backend ## Produce the single deployable binary (web + embed + backend).
 
-test: typecheck lint check-cgo audit-lessons audit-content audit-courses audit-storage audit-search audit-progress audit-export audit-import audit-fixtures audit-themes audit-metrics audit-adversarial audit-parity audit-dataset-map audit-sqlite-errors audit-perf audit-perf-fixtures audit-perf-content audit-perf-seam audit-ai-adapters audit-course-store audit-course-gen audit-shell audit-boot ## Run the Go test suite, the frontend type-check, the linter and the audit suites.
+test: ## Run the Go test suite, the frontend type-check, the linter and the audit suites (concurrent, up to TEST_JOBS).
+	+@$(MAKE) --no-print-directory -O -j$(TEST_JOBS) test-all
+
+# How many checks run at once. Every target under test-all shares no state —
+# each audit binds free ports and stages its own files — so the default is the
+# suite's normal width. Lower it on a small machine or a loaded CI box.
+TEST_JOBS ?= 8
+
+# test-all is the real suite, one target per check, so `make test` can fan it
+# out while a single check can still be run by name (make gotest,
+# make audit-parity).
+test-all: typecheck lint check-cgo gotest audit-lessons audit-content audit-courses audit-storage audit-search audit-progress audit-export audit-import audit-fixtures audit-themes audit-metrics audit-adversarial audit-parity audit-dataset-map audit-sqlite-errors audit-perf audit-perf-fixtures audit-perf-content audit-perf-seam audit-ai-adapters audit-course-store audit-course-gen audit-shell audit-boot
+
+gotest: ## (test-all) The Go test suite, as one schedulable job.
 	cd $(BACKEND_DIR) && $(GO) test ./...
 
 check-cgo: ## Prove the single binary stays cgo-free (CGO_ENABLED=0 build + a cgo dependency scan).
@@ -246,9 +259,10 @@ verify-mock: build test ## Smoke-test the binary with no embedded database (degr
 	fi; \
 	echo "verify-mock: OK (no database, honest degradation, auth still enforced)"
 
-db-reset: ## Delete the dev and smoke PostgreSQL clusters (fresh dataset next boot).
+db-reset: ## Delete the dev, smoke and golden PostgreSQL clusters (fresh dataset next boot).
 	@if [ -x $(BIN) ]; then $(BIN) db reset; fi
 	rm -rf $(BACKEND_DIR)/.data/pg/data
+	rm -rf $(BACKEND_DIR)/.data/pg/golden
 	rm -rf $(SMOKE_PG_DIR)
 	@echo "db-reset: clusters removed; the next boot re-applies the commerce dataset"
 
@@ -273,7 +287,7 @@ dataset: ## Regenerate backend/internal/dataset/schema.sql and seed.sql from the
 
 audit-courses: ## Run every authored exercise solution through a gateway, on the dialect and dataset the app would use (see docs/course-audit.md).
 	cd $(WEB_DIR) && ./node_modules/.bin/esbuild --bundle --format=cjs --platform=node \
-		--outfile=/tmp/curriculum.cjs src/data/curriculum.ts >/dev/null
+		--outfile=/tmp/curriculum-for-courses.cjs src/data/curriculum.ts >/dev/null
 	cd $(WEB_DIR) && ./node_modules/.bin/esbuild --bundle --format=cjs --platform=node \
 		--outfile=/tmp/dialect-for-courses.cjs src/lib/dialect.ts >/dev/null
 	cd $(WEB_DIR) && ./node_modules/.bin/esbuild --bundle --format=cjs --platform=node \
@@ -282,7 +296,7 @@ audit-courses: ## Run every authored exercise solution through a gateway, on the
 
 audit-lessons: ## Check every lesson has objectives, an example with a result, and an exercise or a reading-only reason (design 14, M2).
 	cd $(WEB_DIR) && ./node_modules/.bin/esbuild --bundle --format=cjs --platform=node \
-		--outfile=/tmp/curriculum.cjs src/data/curriculum.ts >/dev/null
+		--outfile=/tmp/curriculum-for-lessons.cjs src/data/curriculum.ts >/dev/null
 	node scripts/lesson-audit.mjs
 
 audit-content: ## Check the chapter-content seeder: fingerprint, ensure-not-once, and the rows it writes (M2 step 8).
@@ -310,21 +324,21 @@ audit-search: ## Check search ranking, AND semantics, no-fuzzy matching and empt
 
 audit-progress: ## Check the progress model: measured time only, and v4 snapshots upgrade instead of being dropped.
 	cd $(WEB_DIR) && ./node_modules/.bin/esbuild --bundle --format=cjs --platform=node \
-		--outfile=/tmp/progress.cjs src/lib/progress.ts >/dev/null
+		--outfile=/tmp/progress-for-progress.cjs src/lib/progress.ts >/dev/null
 	node scripts/progress-audit.mjs
 
 audit-export: ## Check the JSON export document: versioned, complete, credential-free (design 8.3).
 	cd $(WEB_DIR) && ./node_modules/.bin/esbuild --bundle --format=cjs --platform=node \
-		--outfile=/tmp/export-bundle.cjs src/lib/exportBundle.ts >/dev/null
+		--outfile=/tmp/export-bundle-for-export.cjs src/lib/exportBundle.ts >/dev/null
 	node scripts/export-audit.mjs
 
 audit-import: ## Check import validation, the merge policy and the export/import round trip (M2 step 7).
 	cd $(WEB_DIR) && ./node_modules/.bin/esbuild --bundle --format=cjs --platform=node \
 		--outfile=/tmp/import-bundle.cjs src/lib/importBundle.ts >/dev/null
 	cd $(WEB_DIR) && ./node_modules/.bin/esbuild --bundle --format=cjs --platform=node \
-		--outfile=/tmp/export-bundle.cjs src/lib/exportBundle.ts >/dev/null
+		--outfile=/tmp/export-bundle-for-import.cjs src/lib/exportBundle.ts >/dev/null
 	cd $(WEB_DIR) && ./node_modules/.bin/esbuild --bundle --format=cjs --platform=node \
-		--outfile=/tmp/progress.cjs src/lib/progress.ts >/dev/null
+		--outfile=/tmp/progress-for-import.cjs src/lib/progress.ts >/dev/null
 	node scripts/import-audit.mjs
 
 audit-fixtures: ## Check the language-neutral result-contract fixtures against the JS evaluator (the Go half is `go test ./internal/eval/`, run by `make test`).
@@ -337,12 +351,12 @@ audit-themes: ## Every shipped theme clears 4.5:1 on its key text pairs.
 
 audit-metrics: ## Check /metrics and /diagnostics on an isolated gateway with no database (design 13.1, M3).
 	cd $(WEB_DIR) && ./node_modules/.bin/esbuild --bundle --format=cjs --platform=node \
-		--outfile=/tmp/progress.cjs src/lib/progress.ts >/dev/null
+		--outfile=/tmp/progress-for-metrics.cjs src/lib/progress.ts >/dev/null
 	QC_GO=$(GO) QC_BACKEND=$(BACKEND_DIR) node scripts/metrics-audit.mjs
 
 audit-metrics-live: ## Same checks against a running gateway (QC_GATEWAY, default http://localhost:18077), plus timeout and row-cap outcomes.
 	cd $(WEB_DIR) && ./node_modules/.bin/esbuild --bundle --format=cjs --platform=node \
-		--outfile=/tmp/progress.cjs src/lib/progress.ts >/dev/null
+		--outfile=/tmp/progress-for-metrics.cjs src/lib/progress.ts >/dev/null
 	QC_GATEWAY=$${QC_GATEWAY:-http://localhost:18077} node scripts/metrics-audit.mjs
 
 audit-adversarial: ## Run the ten design 13.3 adversarial cases against a freshly booted gateway (M3 step 3).
@@ -361,7 +375,7 @@ audit-ai-adapters: ## Check the frontend AI seam (both adapters, no gateway need
 	@set -e; trap 'rm -f /tmp/qc-ai.cjs /tmp/qc-deadline.cjs' EXIT INT TERM; cd $(WEB_DIR) && npm run audit-ai
 
 audit-course-store: ## Check the M8 stored-course seam: a stored record parses whole (or is dropped), a building course is readable, a failed read refuses instead of reporting none, and the record's measured rows are the rows the lesson page shows.
-	@set -e; trap 'rm -f /tmp/qc-ai.cjs /tmp/qc-draft.cjs /tmp/qc-runresume.cjs' EXIT INT TERM; cd $(WEB_DIR) && npm run audit-course-store
+	@set -e; trap 'rm -f /tmp/qc-ai-course-store.cjs /tmp/qc-draft.cjs /tmp/qc-runresume.cjs' EXIT INT TERM; cd $(WEB_DIR) && npm run audit-course-store
 
 audit-ai: ## Run the M4 exit gate against a freshly booted gateway with the deterministic provider (design 11, 14).
 	QC_GO=$(GO) QC_BACKEND=$(BACKEND_DIR) node scripts/ai-audit.mjs
@@ -387,16 +401,16 @@ audit-perf-fixtures: ## Check every plan fixture's summary is the walk of its ow
 
 audit-perf-content: ## Check the perf course against the fixture it describes: every authored row, and every exercise contract against its own solution (M5).
 	cd $(WEB_DIR) && ./node_modules/.bin/esbuild --bundle --format=cjs --platform=node \
-		--outfile=/tmp/curriculum.cjs src/data/curriculum.ts >/dev/null
+		--outfile=/tmp/curriculum-for-perf-content.cjs src/data/curriculum.ts >/dev/null
 	cd $(WEB_DIR) && ./node_modules/.bin/esbuild --bundle --format=cjs --platform=node \
-		--outfile=/tmp/plan-contract.cjs src/api/planContract.ts >/dev/null
+		--outfile=/tmp/plan-contract-for-perf-content.cjs src/api/planContract.ts >/dev/null
 	QC_GO=$(GO) QC_BACKEND=$(BACKEND_DIR) node scripts/perf-content-audit.mjs
 
 audit-perf-seam: ## Drive the dataset seam through the shipping browser adapter: a perf chapter routes to the perf fixture, its authored rows come back from it, its plans are graded against it, and a perf write cannot touch commerce (M5).
 	cd $(WEB_DIR) && ./node_modules/.bin/esbuild --bundle --format=cjs --platform=node \
-		--outfile=/tmp/curriculum.cjs src/data/curriculum.ts >/dev/null
+		--outfile=/tmp/curriculum-for-perf-seam.cjs src/data/curriculum.ts >/dev/null
 	cd $(WEB_DIR) && ./node_modules/.bin/esbuild --bundle --format=cjs --platform=node \
-		--outfile=/tmp/plan-contract.cjs src/api/planContract.ts >/dev/null
+		--outfile=/tmp/plan-contract-for-perf-seam.cjs src/api/planContract.ts >/dev/null
 	cd $(WEB_DIR) && ./node_modules/.bin/esbuild --bundle --format=cjs --platform=node \
 		--outfile=/tmp/dataset-for-seam.cjs src/lib/dataset.ts >/dev/null
 	node scripts/perf-seam-audit.mjs

@@ -4,7 +4,7 @@ import DialectBadge from '../ui/DialectBadge';
 import { useStore } from '../../state/store';
 import { COURSES } from '../../data/curriculum';
 import { effectiveDialect } from '../../lib/dialect';
-import { coursePassed, courseDoneCount, courseExerciseTotal, lessonPercent, nextChapterIndex, courseShort, activeModules } from '../../lib/model';
+import { coursePassed, courseDoneCount, courseExerciseTotal, lessonPercent, nextChapterIndex, courseShort, activeModules, enrolledCourses } from '../../lib/model';
 import { currentStreak } from '../../lib/progress';
 import type { Course } from '../../types';
 
@@ -20,7 +20,7 @@ export default function HomeScreen() {
   const nextIdx = nextChapterIndex(course, progress);
   const nextM = ms[nextIdx];
 
-  const enrolled = COURSES.filter((c) => c.enrolled && c.built) as ViewCourse[];
+  const enrolled = enrolledCourses();
   const notes = (progress.notes || []).slice().sort((a, b) => (b.ts || 0) - (a.ts || 0));
   const more = COURSES.filter((c) => !c.enrolled) as ViewCourse[];
   /* Course authoring is the admin surface; learners do not see the CTA. */

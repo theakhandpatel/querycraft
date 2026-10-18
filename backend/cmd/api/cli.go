@@ -1,3 +1,13 @@
+// cli.go builds the cobra command tree and resolves the settings for every
+// subcommand. The root command serves, so `querycraft` and `querycraft serve`
+// run the same path. `db reset` and `db status` cover local maintenance, and
+// `version` prints the release.
+//
+// Precedence runs defaults, then the config file, then a flag. config.Load owns
+// the defaults and the file layer; this file owns the flag layer, in
+// applyAddrFlag. A subcommand that reads settings goes through loadSettings, so
+// every command resolves the same file.
+
 package main
 
 import (
@@ -5,7 +15,6 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
-	"strings"
 
 	"github.com/spf13/cobra"
 
@@ -108,8 +117,8 @@ func serve(cmd *cobra.Command) error {
 }
 
 // applyAddrFlag is the command-line layer of the precedence order: a flag that
-// was actually passed overrides the environment and the config file. An empty
-// flag value means "not passed" and changes nothing.
+// was actually passed overrides the config file. An empty flag value means "not
+// passed" and changes nothing.
 func applyAddrFlag(settings config.Settings, addr string) config.Settings {
 	if addr != "" {
 		settings.Addr = addr
@@ -184,24 +193,24 @@ func dbStatus(cmd *cobra.Command) error {
 	fmt.Printf("binary cache: %s", filepath.Clean(settings.PGBinariesDir))
 	printExists(settings.PGBinariesDir)
 
-	switch {
-	case settings.AdminDatabaseURL != "":
+	switch choice := selectMetadataStore(settings, settings.DatabaseURL); choice.kind {
+	case "admin":
 		fmt.Println("metadata: postgresql (admin_database_url)")
-	case strings.EqualFold(settings.Metadata, "sqlite"):
-		fmt.Printf("metadata: sqlite (%s)\n", settings.DeriveMetadataPath())
-	case settings.DatabaseURL != "":
+	case "sqlite":
+		fmt.Printf("metadata: sqlite (%s)\n", choice.path)
+	case "dsn":
 		fmt.Println("metadata: postgresql (the execution DSN)")
 	default:
 		fmt.Println("metadata: memory (no DSN)")
 	}
 
-	switch kind := strings.ToLower(strings.TrimSpace(settings.AIProvider)); kind {
-	case "", "off", "none", "disabled":
-		fmt.Println("ai provider: off")
-	case "fake", "deterministic":
+	switch kind, _ := classifyAIProvider(settings); kind {
+	case "fake":
 		fmt.Println("ai provider: fake")
+	case "openai-compatible":
+		fmt.Printf("ai provider: %s (model %s)\n", kind, settings.AIModel)
 	default:
-		fmt.Printf("ai provider: %s (model %s)\n", settings.AIProvider, settings.AIModel)
+		fmt.Println("ai provider: off")
 	}
 	return nil
 }

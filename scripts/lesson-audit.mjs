@@ -18,8 +18,8 @@
 import { createRequire } from 'node:module';
 import { assertFreshBundle } from './lib/bundle.mjs';
 const require = createRequire('/tmp/');
-assertFreshBundle('/tmp/curriculum.cjs', 'audit-lessons', ['web/src/data/curriculum.ts', 'web/src/types.ts']);
-const c = require('/tmp/curriculum.cjs');
+assertFreshBundle('/tmp/curriculum-for-lessons.cjs', 'audit-lessons', ['web/src/data/curriculum.ts', 'web/src/types.ts']);
+const c = require('/tmp/curriculum-for-lessons.cjs');
 
 /* Derived from the catalog rather than listed here: a hand-written list
    silently skipped a whole course the moment one was added (that is how the

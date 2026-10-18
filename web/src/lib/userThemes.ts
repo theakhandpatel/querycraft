@@ -116,7 +116,7 @@ function luminance(rgb: [number, number, number]): number {
   return 0.2126 * lin[0] + 0.7152 * lin[1] + 0.0722 * lin[2];
 }
 
-export function contrastRatio(a: string, b: string): number {
+function contrastRatio(a: string, b: string): number {
   const la = luminance(hexrgb(a));
   const lb = luminance(hexrgb(b));
   const [hi, lo] = la >= lb ? [la, lb] : [lb, la];
@@ -176,7 +176,7 @@ export function buildUserTheme(name: string, accentHex: string, base: 'light' | 
 }
 
 /** Render one user theme's tokens as a style element's text. */
-export function userThemeCSS(theme: UserTheme): string {
+function userThemeCSS(theme: UserTheme): string {
   const lines = Object.entries(theme.tokens)
     .map(([k, v]) => `  ${k}:${v};`)
     .join('\n');

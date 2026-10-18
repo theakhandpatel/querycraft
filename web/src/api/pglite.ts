@@ -1,6 +1,7 @@
 import type { PGliteInterface } from '@electric-sql/pglite';
 import { perfSql, schemaSql, seedSql } from './dataset';
 import { seedContentDocs } from './content';
+import { stripComments } from './sql';
 import { DEFAULT_DATASET } from '../types';
 import type { ContentSection, DatasetId, Dialect, EngineCapabilities, QueryErrorCode, QueryErrorShape, RowValue } from '../types';
 import {
@@ -32,7 +33,7 @@ export const PGLITE_ENGINE = 'PostgreSQL 18 · PGlite (in-browser)';
 
 /** The dialect this engine runs (M6). Named beside the engine string so the
     two can never drift apart. */
-export const PGLITE_DIALECT: Dialect = 'postgresql';
+const PGLITE_DIALECT: Dialect = 'postgresql';
 
 /** Rows returned to the UI before the result is flagged truncated. */
 const MAX_ROWS = 200;
@@ -130,7 +131,7 @@ function oidTypeName(oid: number): string {
  *
  * An identity parser keeps the bytes the server sent.
  */
-export const TEXT_VALUE_OIDS = [1082, 1083, 1114, 1184, 1186, 1266, 1700];
+const TEXT_VALUE_OIDS = [1082, 1083, 1114, 1184, 1186, 1266, 1700];
 
 /** Identity parsers for TEXT_VALUE_OIDS, handed to every query that reads
     learner data. `@electric-sql/pglite` calls these instead of its own. */
@@ -508,14 +509,6 @@ export async function resetEnvironment(
 }
 
 /* ---------- execution ---------- */
-
-function stripComments(sql: string): string {
-  return sql
-    .replace(/\/\*[\s\S]*?\*\//g, ' ')
-    .replace(/--[^\n]*/g, ' ')
-    .replace(/\s+/g, ' ')
-    .trim();
-}
 
 function sqlStateOf(e: unknown): { code: string; message: string; detail: string | null; hint: string | null; position: unknown } {
   if (typeof e === 'object' && e !== null) {

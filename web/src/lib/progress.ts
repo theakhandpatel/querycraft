@@ -6,7 +6,7 @@ import type { Progress, ProgressEvent } from '../types';
 export const PROGRESS_VERSION = 5;
 
 /** Design §7.3: the content versions an attempt was made against. */
-export interface ContentVersions {
+interface ContentVersions {
   datasetVersion: number;
   exerciseVersion: number;
 }
@@ -100,11 +100,6 @@ export function formatDuration(ms: number): string {
 }
 
 /**
- * True when a snapshot came from the sample-data generator rather than from a
- * learner. Sample snapshots are never adopted: they used to be seeded on first
- * run, which made a real gateway look like a canned mock.
- */
-/**
  * Bring a stored snapshot up to the current shape when the change is additive.
  *
  * A version bump used to discard the snapshot whole, which is right when the
@@ -123,6 +118,11 @@ export function migrateProgress(raw: unknown): Progress | null {
   return null;
 }
 
+/**
+ * True when a snapshot came from the sample-data generator rather than from a
+ * learner. Sample snapshots are never adopted: they used to be seeded on first
+ * run, which made a real gateway look like a canned mock.
+ */
 export function isSampleProgress(p: unknown): boolean {
   return !!p && typeof p === 'object' && (p as Progress).seeded === true;
 }
@@ -230,7 +230,7 @@ export function seedProgress(): Progress {
   return p;
 }
 
-export function dayKey(ts: number): string {
+function dayKey(ts: number): string {
   const d = new Date(ts);
   return `${d.getFullYear()}-${d.getMonth()}-${d.getDate()}`;
 }

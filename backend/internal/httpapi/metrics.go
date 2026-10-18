@@ -1,5 +1,21 @@
 package httpapi
 
+/* Instrumentation and the operator-facing reads.
+ *
+ * This file owns the gateway's measurement surface: the metric names and help
+ * strings, the middleware that times and logs every request once
+ * (withObservability), the statement and plan counters, and the two routes that
+ * expose it. GET /metrics renders the Prometheus text. GET /diagnostics
+ * describes the running gateway with measured values.
+ *
+ * The concurrency gate lives here too (enter and busyResult): a request that
+ * waits for a statement slot is a request whose waiting time an operator wants
+ * to see. The route label comes from the routing table through routeOfMux,
+ * never from the raw path, so a probe cannot mint an unbounded series.
+ * Nothing here reports a credential: the diagnostics body carries facts and
+ * limits only.
+ */
+
 import (
 	"bytes"
 	"context"
@@ -12,7 +28,6 @@ import (
 
 	"github.com/querycraft/sqlquery/backend/internal/dataset"
 	"github.com/querycraft/sqlquery/backend/internal/engine"
-	"github.com/querycraft/sqlquery/backend/internal/eval"
 	"github.com/querycraft/sqlquery/backend/internal/metrics"
 	"github.com/querycraft/sqlquery/backend/internal/perf"
 )
@@ -82,45 +97,13 @@ func (r *statusRecorder) WriteHeader(code int) {
 }
 
 // noteError attaches a stable error code to a response so the access log can
-// name the failure instead of only its status. writeJSON calls it, so a handler
-// cannot forget. A response written outside writeJSON (the SPA) has no code.
+// name the failure instead of only its status. A writer that knows a stable
+// code calls it, usually through writeOutcome, writePlan or noteStatement. A
+// response written without one (the SPA) carries no code.
 func noteError(w http.ResponseWriter, code string) {
 	if rec, ok := w.(*statusRecorder); ok && code != "" {
 		rec.code = code
 	}
-}
-
-// errorCode extracts the stable code from the two error shapes the gateway
-// writes: the map envelope handlers use, and the QueryResult/eval contract.
-func errorCode(v any) string {
-	switch body := v.(type) {
-	case engine.QueryResult:
-		if body.Error != nil {
-			return body.Error.Code
-		}
-	case *engine.QueryResult:
-		if body != nil && body.Error != nil {
-			return body.Error.Code
-		}
-	case eval.Response:
-		if body.QR.Error != nil {
-			return body.QR.Error.Code
-		}
-	case *eval.Response:
-		if body != nil && body.QR.Error != nil {
-			return body.QR.Error.Code
-		}
-	case map[string]any:
-		if e, ok := body["error"].(map[string]string); ok {
-			return e["code"]
-		}
-		if e, ok := body["error"].(map[string]any); ok {
-			if s, ok := e["code"].(string); ok {
-				return s
-			}
-		}
-	}
-	return ""
 }
 
 // withObservability is the one place a request is measured and logged.
@@ -128,14 +111,14 @@ func errorCode(v any) string {
 // It is a single middleware with a single recorder on purpose: a separate
 // logging layer and metrics layer would each keep their own status and error
 // code, and the log line could then disagree with the counter about what
-// happened. Every request — including one answered before routing, such as an
-// unauthenticated /progress call — is counted and logged exactly once, after
+// happened. Every request, including one answered before routing such as an
+// unauthenticated /progress call, is counted and logged exactly once, after
 // the response is written.
 //
 // routeOf resolves the label from the routing table rather than the handler
 // chain, so a request that never reached the mux still gets a bounded route
 // instead of its raw path (one series per probe otherwise).
-func (s *Server) withObservability(next http.Handler, routeOf func(*http.Request) string) http.Handler {
+func (s *Server) withObservability(next http.Handler, routeOf func(*http.Request) string, operations map[string]string) http.Handler {
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		start := time.Now()
 		rec := newStatusRecorder(w)
@@ -144,6 +127,12 @@ func (s *Server) withObservability(next http.Handler, routeOf func(*http.Request
 		route := routeOf(r)
 		if route == "" {
 			route = routeUnmatched
+		}
+		// The operation is the route table's own word for this route, so the
+		// log vocabulary cannot contain a route the router does not serve.
+		operation := operations[route]
+		if operation == "" {
+			operation = "other"
 		}
 		elapsed := time.Since(start)
 
@@ -160,7 +149,7 @@ func (s *Server) withObservability(next http.Handler, routeOf func(*http.Request
 		// carries no request or response body: the body is where a credential
 		// would hide, and an error code is the part an operator filters on.
 		attrs := []any{
-			"operation", operationOf(route),
+			"operation", operation,
 			"route", route,
 			"method", r.Method,
 			"path", r.URL.Path,
@@ -177,57 +166,6 @@ func (s *Server) withObservability(next http.Handler, routeOf func(*http.Request
 
 // routeUnmatched labels a request that no route claimed.
 const routeUnmatched = "unmatched"
-
-// operations maps a route to the stable operation name the log carries. The
-// route is a path; the operation is the word a query filters on, and it is
-// deliberately decoupled from the URL so renaming a path does not change how
-// past logs read.
-var operations = map[string]string{
-	"/health":                            "health",
-	"/metrics":                           "metrics",
-	"/diagnostics":                       "diagnostics",
-	"/capabilities":                      "capabilities",
-	"/query":                             "query",
-	"/explain":                           "explain",
-	"/answers/evaluate":                  "evaluate",
-	"/environment":                       "environment",
-	"/environment/reset":                 "reset_environment",
-	"/datasets/{id}/tables":              "tables",
-	"/auth/signup":                       "signup",
-	"/auth/login":                        "login",
-	"/auth/logout":                       "logout",
-	"/auth/me":                           "me",
-	"/progress/{course}":                 "progress",
-	"/events":                            "event",
-	"/courses/generate":                  "generate_course",
-	"/courses":                           "courses",
-	"/courses/{id}":                      "course",
-	"/courses/{id}/build":                "build_course",
-	"/generation/{id}":                   "generation_job",
-	"/challenges/generate":               "generate_challenge",
-	"/challenges":                        "challenges",
-	"/challenges/{id}":                   "challenge",
-	"/challenges/{id}/reset":             "reset_challenge",
-	"/challenges/{id}/critique":          "critique",
-	"/challenges/{id}/report":            "report_defect",
-	"/challenges/{id}/patches/{patchID}": "apply_patch",
-	"/tutor":                             "tutor",
-	"/runs":                              "runs",
-	"/runs/{id}":                         "run",
-	"/openapi.json":                      "openapi",
-	"/docs":                              "docs",
-	"/":                                  "spa",
-	routeUnmatched:                       "unmatched",
-}
-
-// operationOf names the work behind a route, defaulting to a constant so an
-// unmapped route cannot expand the log vocabulary.
-func operationOf(route string) string {
-	if op, ok := operations[route]; ok {
-		return op
-	}
-	return "other"
-}
 
 // requestIDOf reads the correlation id attached by withRequest.
 func requestIDOf(r *http.Request) string {

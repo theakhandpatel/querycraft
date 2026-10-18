@@ -13,6 +13,14 @@ func TestMemoryRoundTrip(t *testing.T) {
 
 	const alice, bob = "u_alice", "u_bob"
 
+	// Progress and events carry a foreign key to the account that owns them on
+	// every backend, including degraded mode, so the accounts exist first.
+	for _, id := range []string{alice, bob} {
+		if err := m.CreateUser(ctx, User{ID: id, Email: id + "@example.test", Name: id}, "hash"); err != nil {
+			t.Fatalf("create %s: %v", id, err)
+		}
+	}
+
 	if _, ok, err := m.LoadProgress(ctx, alice, "missing"); err != nil || ok {
 		t.Fatalf("missing course returned ok=%v err=%v", ok, err)
 	}
@@ -25,7 +33,9 @@ func TestMemoryRoundTrip(t *testing.T) {
 	if err != nil || !ok {
 		t.Fatalf("load ok=%v err=%v", ok, err)
 	}
-	if string(got) != string(snap) {
+	// Progress round-trips through the JSON column, which normalizes key order
+	// and whitespace on every backend; the value is what must survive.
+	if !sameJSON(got, snap) {
 		t.Fatalf("got %s want %s", got, snap)
 	}
 
@@ -47,7 +57,7 @@ func TestMemoryRoundTrip(t *testing.T) {
 	}
 	aliceSnap, _, _ := m.LoadProgress(ctx, alice, "sql-analytics")
 	bobSnap, _, _ := m.LoadProgress(ctx, bob, "sql-analytics")
-	if string(aliceSnap) != string(snap) || string(bobSnap) != string(other) {
+	if !sameJSON(aliceSnap, snap) || !sameJSON(bobSnap, other) {
 		t.Fatalf("progress leaked across owners: alice=%s bob=%s", aliceSnap, bobSnap)
 	}
 	if _, ok, _ := m.LoadProgress(ctx, "u_nobody", "sql-analytics"); ok {
@@ -72,8 +82,8 @@ func TestMemoryUsersAndSessions(t *testing.T) {
 	m := NewMemory()
 	ctx := context.Background()
 
-	if n, err := m.CountUsers(ctx); err != nil || n != 0 {
-		t.Fatalf("fresh store count=%d err=%v", n, err)
+	if ids, err := m.UserIDs(ctx); err != nil || len(ids) != 0 {
+		t.Fatalf("fresh store ids=%v err=%v", ids, err)
 	}
 
 	u := User{ID: "u_1", Email: "a@example.test", Name: "A", Role: RoleAdmin}
@@ -117,6 +127,9 @@ func TestMemoryUsersAndSessions(t *testing.T) {
 func TestMemorySaveEventRequiresID(t *testing.T) {
 	m := NewMemory()
 	ctx := context.Background()
+	if err := m.CreateUser(ctx, User{ID: "u_1", Email: "u1@example.test", Name: "One"}, "hash"); err != nil {
+		t.Fatalf("create user: %v", err)
+	}
 	if err := m.SaveEvent(ctx, "u_1", "", json.RawMessage(`{"kind":"passed"}`)); err == nil {
 		t.Fatalf("empty event id was accepted")
 	}

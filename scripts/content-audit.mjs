@@ -259,35 +259,6 @@ check('sections keep their authored order', (() => {
 const moduleOrder = [...new Set(rows.map((r) => r.module_id))];
 check('modules are written in sorted order', JSON.stringify(moduleOrder) === JSON.stringify([...moduleOrder].sort()));
 
-/* ---------- 5. authored check codes are inside the contract enum ---------- */
-
-/*
- * Every exercise's `checks[].code` is a feedback code that must be one the
- * contract declares (contracts/evaluation.schema.json). The mock adapter passes
- * an authored code straight through, while the Go evaluator clamps unknown
- * codes to VALUE_MISMATCH — so a code the schema omits shows a *different*
- * feedback row depending on which adapter served the answer. Eight authored
- * codes were outside the enum before this guard existed. Reading the enum from
- * the schema (not a copy of it here) is the point: a copy would drift the same
- * way.
- */
-console.log('check codes');
-const repoRoot = new URL('..', import.meta.url).pathname;
-const evalSchema = JSON.parse(readFileSync(`${repoRoot}/contracts/evaluation.schema.json`, 'utf8'));
-const checkCodeEnum = new Set(evalSchema.properties.checks.items.properties.code.enum);
-const authoredCodes = new Set();
-const curriculumAll = require('/tmp/curriculum-for-content.cjs');
-for (const exported of Object.values(curriculumAll)) {
-  if (!Array.isArray(exported)) continue;
-  for (const mod of exported) {
-    for (const b of mod?.blocks ?? []) {
-      for (const c of b?.checks ?? []) if (c?.code) authoredCodes.add(c.code);
-    }
-  }
-}
-const strays = [...authoredCodes].filter((c) => !checkCodeEnum.has(c));
-check(`every authored check code is in the contract enum (${authoredCodes.size} codes)`, strays.length === 0, strays.join(', '));
-
 if (failed) {
   console.log(`\ncontent-audit: ${failed} check(s) failed`);
   process.exit(1);

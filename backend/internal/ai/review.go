@@ -4,6 +4,7 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
+	"strconv"
 	"strings"
 
 	"github.com/querycraft/sqlquery/backend/internal/ai/provider"
@@ -22,19 +23,19 @@ import (
 // feedbackSystemPrompt is the system message for the two kinds whose answer the
 // learner reads as plain text: a hint and a critique.
 //
-// Both used to be sent systemPrompt(), which tells the model to reply with one
-// JSON object and no prose, and a hint is prose. No test caught the
-// contradiction because the built-in provider answers by Kind and never reads
-// the system message. A real provider was being told to wrap a hint in JSON.
+// systemPrompt tells the model to reply with one JSON object and no prose, so
+// it cannot serve these two kinds. The built-in provider answers by Kind and
+// never reads the system message, so only a real provider reveals a wrong
+// pairing here; a model handed the wrong message wraps a hint in JSON.
 //
-// The writing rules are the same ones the generated course prose carries, for
-// the same reason: this text is the learner's reading material.
+// The writing rules match the generated course prose, because this text is the
+// learner's reading material.
 func feedbackSystemPrompt() string {
 	return "You are a SQL tutor. The learner reads your reply as plain text, not as JSON. Write for a beginner: short sentences, active voice, present tense, one idea per line. Say what is wrong and what to change. Never write the full solution. No praise, no preamble, no closing summary."
 }
 
-// tutor answers with a hint that never reveals the reference solution.
-func (s *Service) tutor(ctx context.Context, req TutorRequest) (TutorResponse, error) {
+// Tutor answers with a hint that never reveals the reference solution.
+func (s *Service) Tutor(ctx context.Context, req TutorRequest) (TutorResponse, error) {
 	if err := s.requireAvailable(); err != nil {
 		return TutorResponse{}, err
 	}
@@ -42,7 +43,7 @@ func (s *Service) tutor(ctx context.Context, req TutorRequest) (TutorResponse, e
 		return TutorResponse{}, NewError(CodeInvalidRequest, "",
 			"A hint needs the learner's SQL and the objective.", "sql/objective")
 	}
-	limits := s.cfg.Limits.Merge(DefaultLimits())
+	limits := s.cfg.Limits
 	level := clampInt(req.HintLevel, 0, limits.MaxHints)
 
 	text, terr := s.complete(ctx, provider.ProviderRequest{
@@ -68,9 +69,9 @@ func (s *Service) tutor(ctx context.Context, req TutorRequest) (TutorResponse, e
 	}, nil
 }
 
-// critique reviews the learner's query on demand, under the same no-solution
+// Critique reviews the learner's query on demand, under the same no-solution
 // rule as tutoring.
-func (s *Service) critique(ctx context.Context, req CritiqueRequest) (CritiqueResponse, error) {
+func (s *Service) Critique(ctx context.Context, req CritiqueRequest) (CritiqueResponse, error) {
 	if err := s.requireAvailable(); err != nil {
 		return CritiqueResponse{}, err
 	}
@@ -78,7 +79,7 @@ func (s *Service) critique(ctx context.Context, req CritiqueRequest) (CritiqueRe
 		return CritiqueResponse{}, NewError(CodeInvalidRequest, "",
 			"A critique needs the learner's SQL.", "sql")
 	}
-	limits := s.cfg.Limits.Merge(DefaultLimits())
+	limits := s.cfg.Limits
 	text, terr := s.complete(ctx, provider.ProviderRequest{
 		Kind:           "critique",
 		System:         feedbackSystemPrompt(),
@@ -100,11 +101,11 @@ func (s *Service) critique(ctx context.Context, req CritiqueRequest) (CritiqueRe
 
 // guardSolutions refuses a reply that contains a known solution. It is
 // defence in depth: a well-behaved provider cannot produce the reference
-// because it was never sent one, and this guard is what keeps a future
-// provider — or a future prompt change that accidentally includes the
-// artifact — from regressing that property. When there is no stored challenge
-// there is nothing to compare against, which is not a silent pass on the
-// property; the request itself still carried no solution.
+// because it was never sent one, and this guard keeps a future provider
+// (or a future prompt change that accidentally includes the artifact) from
+// regressing that property. When there is no stored challenge there is nothing
+// to compare against, which is not a silent pass on the property; the request
+// itself still carried no solution.
 func (s *Service) guardSolutions(ctx context.Context, challengeID, text string) *schema.Error {
 	art, ok, err := s.storedArtifact(ctx, challengeID)
 	if err != nil || !ok {
@@ -144,12 +145,12 @@ func containsSolution(reply, solution string) bool {
 	return strings.Contains(norm(reply), want)
 }
 
-// reportDefect verifies a claimed defect by execution before proposing
+// ReportDefect verifies a claimed defect by execution before proposing
 // anything. The claim this settles is concrete: the learner's query returns
 // something the reference result contradicts under the challenge's own
-// contract. A claim we cannot turn into a probe is reported as not verified,
-// never as agreed with.
-func (s *Service) reportDefect(ctx context.Context, rep DefectReport) (DefectVerdict, error) {
+// contract. A claim this code cannot turn into a probe is reported as not
+// verified, never as agreed with.
+func (s *Service) ReportDefect(ctx context.Context, rep DefectReport) (DefectVerdict, error) {
 	if err := s.requireAvailable(); err != nil {
 		return DefectVerdict{}, err
 	}
@@ -171,7 +172,7 @@ func (s *Service) reportDefect(ctx context.Context, rep DefectReport) (DefectVer
 		}, nil
 	}
 
-	limits := s.cfg.Limits.Merge(DefaultLimits())
+	limits := s.cfg.Limits
 	runCtx, cancel := context.WithTimeout(ctx, limits.Timeout)
 	defer cancel()
 
@@ -227,7 +228,7 @@ func (s *Service) reportDefect(ctx context.Context, rep DefectReport) (DefectVer
 // proposal records the clarification in the prompt: a verified defect must
 // still produce something the learner can approve or dismiss.
 func (s *Service) proposePatch(ctx context.Context, rec schema.Record, rep DefectReport) (*schema.PatchProposal, *schema.Error) {
-	limits := s.cfg.Limits.Merge(DefaultLimits())
+	limits := s.cfg.Limits
 	previous, _ := json.Marshal(rec.Artifact)
 	// The objectives come first so a generator that picks its topic from the
 	// brief (the fake provider does) stays on the same topic as the artifact.
@@ -275,10 +276,10 @@ func (s *Service) proposePatch(ctx context.Context, rec schema.Record, rep Defec
 	return &proposal, nil
 }
 
-// applyPatch applies a patch only with an explicit approval, and only after the
+// ApplyPatch applies a patch only with an explicit approval, and only after the
 // patched artifact has passed the same verification every generated bundle
 // passes. Applied:false is returned on every refusal.
-func (s *Service) applyPatch(ctx context.Context, dec PatchDecision) (PatchResult, error) {
+func (s *Service) ApplyPatch(ctx context.Context, dec PatchDecision) (PatchResult, error) {
 	if err := s.requireAvailable(); err != nil {
 		return PatchResult{}, err
 	}
@@ -303,7 +304,7 @@ func (s *Service) applyPatch(ctx context.Context, dec PatchDecision) (PatchResul
 	if !dec.Approved || strings.TrimSpace(dec.ApprovedBy) == "" {
 		e := NewError(CodePatchUnapproved, "",
 			"A patch is never applied without an explicit approval.", "approved/approved_by")
-		return PatchResult{Applied: false, Patch: &patch, Error: e}, e
+		return PatchResult{Applied: false, Patch: &patch}, e
 	}
 	rec, found, err := s.cfg.Depot.Challenge(ctx, patch.ChallengeID)
 	if err != nil {
@@ -315,16 +316,16 @@ func (s *Service) applyPatch(ctx context.Context, dec PatchDecision) (PatchResul
 
 	patched, aerr := applyChanges(rec.Artifact, patch.Changes)
 	if aerr != nil {
-		return PatchResult{Applied: false, Patch: &patch, Error: aerr}, aerr
+		return PatchResult{Applied: false, Patch: &patch}, aerr
 	}
-	limits := s.cfg.Limits.Merge(DefaultLimits())
+	limits := s.cfg.Limits
 	runCtx, cancel := context.WithTimeout(ctx, limits.Timeout)
 	defer cancel()
 	if verr := s.verifyArtifact(runCtx, patched, limits); verr != nil {
 		e := NewError(CodePatchUnverified, verr.Stage,
 			"The patched challenge did not pass verification; it was not applied.",
 			strings.TrimSpace(verr.Message+" "+verr.Detail))
-		return PatchResult{Applied: false, Patch: &patch, Error: e}, e
+		return PatchResult{Applied: false, Patch: &patch}, e
 	}
 
 	patched.Version = rec.Artifact.Version + 1
@@ -359,13 +360,12 @@ func (s *Service) requireAvailable() *schema.Error {
 	if av.Available {
 		return nil
 	}
-	code := CodeUnavailable
-	if s != nil && s.cfg.Provider != nil && s.cfg.Runner == nil {
-		code = CodeEnvironmentDown
-	}
-	return NewError(code, "", av.Reason, "")
+	return NewError(s.unavailableCode(), "", av.Reason, "")
 }
 
+// storedArtifact loads the artifact a challenge id names. A blank id or a
+// missing depot is not an error; it reports ok=false, because the caller's
+// guard then has nothing to compare against.
 func (s *Service) storedArtifact(ctx context.Context, id string) (schema.Artifact, bool, error) {
 	if strings.TrimSpace(id) == "" || s.cfg.Depot == nil {
 		return schema.Artifact{}, false, nil
@@ -378,8 +378,8 @@ func (s *Service) storedArtifact(ctx context.Context, id string) (schema.Artifac
 }
 
 // stampProvenance attributes a non-artifact reply (a hint, a critique) to the
-// provider that produced it. DatasetVersion may be zero here: a hint is not
-// graded against a dataset, and zero says so rather than inventing a version.
+// provider that produced it. It shares provenance's DatasetVersion, which the
+// config always sets.
 func (s *Service) stampProvenance(repairs int) schema.Provenance {
 	return provenance(s.cfg.Provider.Descriptor(), s.cfg.DatasetVersion, repairs)
 }
@@ -396,18 +396,20 @@ func (s *Service) verifyArtifact(ctx context.Context, art schema.Artifact, limit
 // re-checks its dataset, so a defect probe runs against the same objects the
 // challenge runs against.
 func (s *Service) prepareScratch(ctx context.Context, ex engine.Executor, art schema.Artifact) *schema.Error {
-	limits := s.cfg.Limits.Merge(DefaultLimits())
+	limits := s.cfg.Limits
 	p := newPipeline(s, schema.GenerationRequest{Kind: "challenge"}, limits)
 	return p.prepare(ctx, ex, art)
 }
 
+// tutorPrompt renders the hint request from the learner's own material: SQL,
+// objective, the error context, and the requested level.
 func tutorPrompt(req TutorRequest, level int) string {
 	var b strings.Builder
 	b.WriteString("Learner SQL:\n")
 	b.WriteString(req.SQL)
 	b.WriteString("\nObjective:\n")
 	b.WriteString(req.Objective)
-	fmt.Fprintf(&b, "\nhint_level: %d\n", level)
+	b.WriteString("\n" + hintLevelLine(level) + "\n")
 	if req.ErrorCode != "" {
 		b.WriteString("Error code: " + req.ErrorCode + "\n")
 	}
@@ -421,6 +423,38 @@ func tutorPrompt(req TutorRequest, level int) string {
 	return b.String()
 }
 
+// hintLevelPrefix is the one spelling of the hint level. The tutor prompt writes
+// it and the built-in provider reads it, so the level cannot be written one way
+// and parsed another.
+const hintLevelPrefix = "hint_level: "
+
+// hintLevelLine renders the hint level for the tutor prompt.
+func hintLevelLine(level int) string {
+	return hintLevelPrefix + strconv.Itoa(level)
+}
+
+// parseHintLevel reads the level back out of a tutor prompt, defaulting to 1.
+func parseHintLevel(prompt string) int {
+	i := strings.Index(prompt, hintLevelPrefix)
+	if i < 0 {
+		return 1
+	}
+	rest := prompt[i+len(hintLevelPrefix):]
+	end := 0
+	for end < len(rest) && rest[end] >= '0' && rest[end] <= '9' {
+		end++
+	}
+	if end == 0 {
+		return 1
+	}
+	n, err := strconv.Atoi(rest[:end])
+	if err != nil {
+		return 1
+	}
+	return n
+}
+
+// critiquePrompt renders the learner's query and objective for review.
 func critiquePrompt(req CritiqueRequest) string {
 	var b strings.Builder
 	b.WriteString("Review this query and list the concrete problems, without writing a full replacement.\n")

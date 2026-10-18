@@ -6,7 +6,7 @@ import { STORE_DRAFTS, idbGet, idbPut } from '../idb';
 import type { ApiConfig, ApiLogEntry, ExecutionApi } from '../../types';
 import { ExecutionService, readAuthToken } from './shared';
 import type { ExecutionServiceShape, NoteFn } from './shared';
-import { PGLITE_CONFIG, pgliteLayer } from './pglite';
+import { PGLITE_CONFIG, pgliteLayer } from './browser';
 import { httpLayer } from './http';
 
 /* The promise facade the screens use.

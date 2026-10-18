@@ -65,8 +65,7 @@ func TestRecorderUsesTheProvidersOwnScrub(t *testing.T) {
 	rec := NewRecorder(schema.RunKindChallenge, "run_1", Redactor(p))
 	rec.record(schema.EntryMessage, "assistant", "the key is "+key, "", "", 0)
 
-	got, ok := rec.Finish(schema.StatusActive, nil), true
-	_ = ok
+	got := rec.Finish(schema.StatusActive, nil)
 	if strings.Contains(got.Entries[0].Content, key) {
 		t.Fatalf("the provider's own credential survived: %q", got.Entries[0].Content)
 	}

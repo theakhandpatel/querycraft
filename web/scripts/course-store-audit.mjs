@@ -7,7 +7,7 @@
  * them. This suite pins the seam that fixes it.
  *
  *   node scripts/course-store-audit.mjs
- *     Requires /tmp/qc-ai.cjs and /tmp/qc-draft.cjs (bundled by
+ *     Requires /tmp/qc-ai-course-store.cjs and /tmp/qc-draft.cjs (bundled by
  *     `npm run audit-course-store`), boots a tiny node:http server that answers
  *     the fixed routes with canned gateway bodies, drives the real
  *     `gatewayAiMethods` and `courseFromPlan` against it, and asserts on what
@@ -34,7 +34,7 @@ import { createRequire } from 'node:module';
 import { Effect } from 'effect';
 
 const require = createRequire('/tmp/');
-const ai = require('/tmp/qc-ai.cjs');
+const ai = require('/tmp/qc-ai-course-store.cjs');
 const draft = require('/tmp/qc-draft.cjs');
 
 /* `runResume` reads and writes `window.localStorage`, so this suite hands it

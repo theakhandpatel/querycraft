@@ -40,6 +40,11 @@ func TestPersistentStoreParity(t *testing.T) {
 			t.Cleanup(func() { _ = st.Close() })
 			return st
 		},
+		// Degraded mode is the SQLite backend over an in-memory database, so
+		// the same cases cover it. It is listed here so that stays true.
+		"memory": func(t *testing.T) Store {
+			return NewMemory()
+		},
 	}
 
 	tests := []struct {
@@ -164,7 +169,7 @@ func parityNewestFirst(t *testing.T, st Store) {
 			t.Fatalf("save run: %v", err)
 		}
 	}
-	list, err := st.Runs(ctx)
+	list, err := st.RunsFor(ctx, "")
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -177,7 +182,7 @@ func parityNewestFirst(t *testing.T, st Store) {
 			t.Fatalf("save challenge: %v", err)
 		}
 	}
-	challenges, err := st.Challenges(ctx)
+	challenges, err := st.ChallengesFor(ctx, "")
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -210,7 +215,7 @@ func parityOwnerCarried(t *testing.T, st Store) {
 	if err != nil || !ok || rec.OwnerID != "u_bob" {
 		t.Fatalf("run owner=%q ok=%v err=%v", rec.OwnerID, ok, err)
 	}
-	list, err := st.Runs(ctx)
+	list, err := st.RunsFor(ctx, "")
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -243,7 +248,7 @@ func parityUpsert(t *testing.T, st Store) {
 	if len(got.Entries) != 1 || got.OwnerID != "u_bob" || !got.StartedAt.Equal(start) {
 		t.Fatalf("upsert result=%+v", got)
 	}
-	list, err := st.Runs(ctx)
+	list, err := st.RunsFor(ctx, "")
 	if err != nil || len(list) != 1 {
 		t.Fatalf("run list=%d err=%v", len(list), err)
 	}
@@ -280,17 +285,28 @@ func parityUpsert(t *testing.T, st Store) {
 		t.Fatalf("patch=%+v ok=%v err=%v", gotPatch, ok, err)
 	}
 	var approvedBy string
-	if concrete, ok := st.(*Postgres); ok {
-		if err := concrete.pool.QueryRow(ctx, `SELECT approved_by FROM app.patches WHERE id=$1`, proposal.ID).Scan(&approvedBy); err != nil {
-			t.Fatal(err)
-		}
-	} else if concrete, ok := st.(*SQLite); ok {
-		if err := concrete.db.QueryRowContext(ctx, `SELECT approved_by FROM patches WHERE id=?`, proposal.ID).Scan(&approvedBy); err != nil {
-			t.Fatal(err)
-		}
+	if shared := sharedStore(st); shared == nil {
+		t.Fatalf("no shared statements for %T", st)
+	} else if err := shared.queryRow(ctx, shared.stmt(`SELECT approved_by FROM %s WHERE id = ?`, "patches"), proposal.ID).Scan(&approvedBy); err != nil {
+		t.Fatal(err)
 	}
 	if approvedBy != "alice" {
 		t.Fatalf("first approver=%q, want alice", approvedBy)
+	}
+}
+
+// sharedStore returns the sqlStore every backend embeds, so a test that needs
+// one raw read does not spell a query per concrete type.
+func sharedStore(st Store) *sqlStore {
+	switch backend := st.(type) {
+	case *Postgres:
+		return &backend.sqlStore
+	case *SQLite:
+		return &backend.sqlStore
+	case *Memory:
+		return &backend.SQLite.sqlStore
+	default:
+		return nil
 	}
 }
 

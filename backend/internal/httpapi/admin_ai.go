@@ -18,10 +18,13 @@ import (
  *
  * The config file decides what the gateway boots with; the manage surface
  * decides what it runs with. A persisted setting (the store's "ai" key) is the
- * live truth once it exists — the boot path applies it over the file's
- * provider, and PUT /admin/ai writes it and swaps the running configuration.
- * The API key travels one way: it is stored, it is never logged and never
- * returned in a body, which is why every read answers key_set, a boolean.
+ * live truth once it exists. The boot path applies it over the file's provider,
+ * and PUT /admin/ai writes it and swaps the running configuration. The API key
+ * travels one way: the gateway stores it, never logs it and never returns it in
+ * a body. That is why every read answers key_set, a boolean.
+ *
+ * requireAdmin gates every route here, because the configuration is shared by
+ * the whole gateway rather than owned by one account.
  */
 
 // settingAIKey is the store key the AI configuration persists under.
@@ -117,6 +120,12 @@ func (s *Server) handleAdminAIModels(w http.ResponseWriter, r *http.Request) {
 	writeJSON(w, http.StatusOK, map[string]any{"ok": true, "models": out})
 }
 
+// badAIRequest writes the one 400 an unusable AI setting gets: the code an AI
+// route answers an unreadable body with, and the sentence that says what to fix.
+func badAIRequest(w http.ResponseWriter, message string) {
+	errorEnvelope(w, http.StatusBadRequest, "AI_INVALID_REQUEST", message)
+}
+
 // handleAdminAISave implements PUT /admin/ai: validate, persist, and swap the
 // running configuration. An invalid request changes nothing.
 func (s *Server) handleAdminAISave(w http.ResponseWriter, r *http.Request) {
@@ -139,31 +148,26 @@ func (s *Server) handleAdminAISave(w http.ResponseWriter, r *http.Request) {
 		}
 		if body.Provider == "openai-compatible" {
 			if body.BaseURL == "" || body.Model == "" {
-				errorEnvelope(w, http.StatusBadRequest, "AI_INVALID_REQUEST",
-					"The openai-compatible provider needs base_url and model.")
+				badAIRequest(w, "The openai-compatible provider needs base_url and model.")
 				return
 			}
 		}
 		if body.Provider == "pi-ai" {
 			if body.Model == "" {
-				errorEnvelope(w, http.StatusBadRequest, "AI_INVALID_REQUEST",
-					"The pi-ai provider needs a model ref (provider/model, e.g. anthropic/claude-sonnet-4-5) or a base_url and model for a custom server.")
+				badAIRequest(w, "The pi-ai provider needs a model ref (provider/model, e.g. anthropic/claude-sonnet-4-5) or a base_url and model for a custom server.")
 				return
 			}
 			if body.BaseURL == "" && !strings.Contains(body.Model, "/") {
-				errorEnvelope(w, http.StatusBadRequest, "AI_INVALID_REQUEST",
-					"The pi-ai provider's model is a provider/model ref (e.g. anthropic/claude-sonnet-4-5), or set base_url and model for a custom server.")
+				badAIRequest(w, "The pi-ai provider's model is a provider/model ref (e.g. anthropic/claude-sonnet-4-5), or set base_url and model for a custom server.")
 				return
 			}
 		}
 	default:
-		errorEnvelope(w, http.StatusBadRequest, "AI_INVALID_REQUEST",
-			"provider must be one of: off, fake, openai-compatible.")
+		badAIRequest(w, "provider must be one of: off, fake, openai-compatible, pi-ai.")
 		return
 	}
 	if body.TimeoutMS < 0 {
-		errorEnvelope(w, http.StatusBadRequest, "AI_INVALID_REQUEST",
-			"timeout_ms must be zero (for the shipped default) or a positive number.")
+		badAIRequest(w, "timeout_ms must be zero (for the shipped default) or a positive number.")
 		return
 	}
 	if body.TimeoutMS == 0 {
@@ -184,11 +188,11 @@ func (s *Server) handleAdminAISave(w http.ResponseWriter, r *http.Request) {
 
 	persisted, err := json.Marshal(body)
 	if err != nil {
-		errorEnvelope(w, http.StatusInternalServerError, "AI_INVALID_REQUEST", "The setting could not be encoded.")
+		persistenceFailed(w, err)
 		return
 	}
 	if err := s.store.SaveSetting(r.Context(), settingAIKey, string(persisted)); err != nil {
-		errorEnvelope(w, http.StatusInternalServerError, "AI_INVALID_REQUEST", "The setting could not be saved.")
+		persistenceFailed(w, err)
 		return
 	}
 

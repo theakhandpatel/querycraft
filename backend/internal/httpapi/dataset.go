@@ -2,6 +2,7 @@ package httpapi
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"net/http"
 	"strings"
@@ -15,15 +16,13 @@ import (
  * Querycraft serves two fixtures: `commerce`, the shared dataset every lesson
  * starts from, and `perf`, the larger fixture the PostgreSQL query plans course
  * runs against. The perf fixture exists only as a per-account writable
- * environment — its own sealed template — because the plan lessons ask the
- * learner to CREATE INDEX; that is a fact /explain has always honoured, and it
- * is now a fact /query and /answers/evaluate honour too.
+ * environment, with its own sealed template, because the plan lessons ask the
+ * learner to CREATE INDEX.
  *
  * All three statement routes resolve the dataset the same way, through
  * resolveDataset, so a plan lesson is graded against the rows its authored
- * results were written for. Before this, /query and /answers/evaluate always ran
- * on commerce, so every exercise in the plan course compared perf SQL against
- * commerce results and failed.
+ * results were written for. /explain, /query and /answers/evaluate must agree,
+ * or an exercise in the plan course compares perf SQL against commerce results.
  */
 
 const (
@@ -33,18 +32,17 @@ const (
 	commerceDatasetID = "commerce"
 
 	// perfSignInRefusal is the sentence an anonymous perf request is refused
-	// with — the same wording /explain has used since the perf route existed,
-	// because the fix is the same on all three routes: sign in.
+	// with. All three statement routes share one wording, because the fix is the
+	// same on each: sign in.
 	perfSignInRefusal = "The perf dataset lives in a signed-in learner's own environment. Sign in and run the lesson again."
 )
 
 // resolveDataset picks the dataset a statement request runs against.
 //
 // The explicit field wins. Otherwise an exercise authored for the perf fixture
-// (exercise.perf) implies perf — the fallback /explain already used, kept so
-// nothing that works today changes. Everything else is commerce, including ""
-// and the literal "commerce": both resolve to "" so the anonymous commerce path
-// is byte-for-byte the path it always was.
+// (exercise.perf) implies perf. Everything else is commerce, including "" and
+// the literal "commerce": both resolve to "" so the anonymous commerce path is
+// byte-for-byte the path it always was.
 //
 // An unrecognised value is returned untouched (lower-cased and trimmed):
 // resolving must not silently swallow a typo, so the caller refuses it by name.
@@ -79,39 +77,60 @@ func (s *Server) refusingDataset(ctx context.Context, requested string) engine.Q
 
 // refusingPerfDialect refuses a perf request in a dialect the perf lab cannot
 // run. Perf is a PostgreSQL lab (ADR 0004: it needs EXPLAIN ANALYZE and a cost
-// model), so the refusal is DIALECT_MISMATCH and names PostgreSQL — the dialect
-// the perf dataset is served in — rather than the dialect this gateway happens
-// to run first.
+// model), so the refusal is DIALECT_MISMATCH and names PostgreSQL, the dialect
+// the perf dataset is served in, rather than the dialect this gateway runs
+// first.
 func (s *Server) refusingPerfDialect(ctx context.Context, requested string) engine.QueryResult {
 	message := fmt.Sprintf("The %q dataset is a PostgreSQL lab, so it cannot serve a chapter written for %s.",
 		dataset.PerfDatasetID, requested)
 	return engine.RefusingDialect(engine.DialectPostgres, message, engine.RequestIDFromContext(ctx))
 }
 
-// perfExecutor returns the executor the perf dataset is served from: the
-// signed-in learner's own plan environment, a database of its own apart from
-// their challenge workspace, so a CREATE INDEX in a plan lesson cannot touch
-// the tables the rest of the course grades.
-//
-// A refusal is returned whole rather than as an error because the anonymous
-// case has a learner-facing sentence of its own and every statement route must
-// answer it identically.
-func (s *Server) perfExecutor(ctx context.Context, r *http.Request) (engine.Executor, *engine.QueryResult) {
+// perfWorkspace resolves the signed-in learner's perf environment, apart from
+// their challenge workspace because a plan lesson asks the learner to CREATE
+// INDEX. The error says why none could be provided; each caller keeps its own
+// learner-facing sentence for it.
+func (s *Server) perfWorkspace(ctx context.Context, r *http.Request) (engine.Executor, error) {
 	u, signedIn := userFrom(r.Context())
 	if !signedIn {
-		res := engine.Failing(engine.CodeEnvironmentUnavailable,
-			perfSignInRefusal, "", engine.RequestIDFromContext(ctx))
-		return nil, &res
+		return nil, errPerfAnonymous
 	}
 	if s.envs == nil {
-		res := workspaceRefusal(ctx, "The learner workspace is unavailable.",
-			fmt.Errorf("%w: no writable workspace manager is configured", engine.ErrEnvironmentUnavailable))
-		return nil, &res
+		return nil, errPerfNoManager
 	}
-	exec, err := s.envs.EnsurePerf(ctx, u.ID)
+	return s.envs.EnsurePerf(ctx, u.ID)
+}
+
+// errPerfAnonymous and errPerfNoManager classify the two perf refusals that
+// happen before EnsurePerf is reached, so a caller keeps the sentence that fits
+// its shape.
+var (
+	errPerfAnonymous = errors.New("anonymous caller has no perf environment")
+	errPerfNoManager = errors.New("no writable workspace manager is configured")
+)
+
+// perfExecutor returns the executor the perf dataset is served from. A refusal
+// is returned whole rather than as an error because the anonymous case has a
+// learner-facing sentence of its own and every statement route must answer it
+// identically.
+func (s *Server) perfExecutor(ctx context.Context, r *http.Request) (engine.Executor, *engine.QueryResult) {
+	exec, err := s.perfWorkspace(ctx, r)
 	if err != nil {
-		res := workspaceRefusal(ctx, "The perf environment could not be prepared.", err)
+		res := workspaceRefusal(ctx, perfExecutorMessage(err), err)
 		return nil, &res
 	}
 	return exec, nil
+}
+
+// perfExecutorMessage keeps the statement route's own sentence for each way the
+// perf workspace can be missing.
+func perfExecutorMessage(err error) string {
+	switch {
+	case errors.Is(err, errPerfAnonymous):
+		return perfSignInRefusal
+	case errors.Is(err, errPerfNoManager):
+		return "The learner workspace is unavailable."
+	default:
+		return "The perf environment could not be prepared."
+	}
 }

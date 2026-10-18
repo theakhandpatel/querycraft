@@ -265,8 +265,8 @@ func TestDefaultAdminCanSignIn(t *testing.T) {
 	}, log); err != nil {
 		t.Fatalf("second seed: %v", err)
 	}
-	if n, err := st.CountUsers(context.Background()); err != nil || n != 1 {
-		t.Fatalf("count = %d err = %v, want exactly one admin", n, err)
+	if ids, err := st.UserIDs(context.Background()); err != nil || len(ids) != 1 {
+		t.Fatalf("users = %v err = %v, want exactly one admin", ids, err)
 	}
 
 	s := New(&fakeExecutor{}, st, Config{MaxRows: 100, TimeoutMS: 1000, MaxConcurrent: 2}, log)

@@ -5,7 +5,6 @@ package eval
 
 import (
 	"context"
-	"encoding/json"
 	"fmt"
 	"slices"
 	"strings"
@@ -43,95 +42,30 @@ func (c Contract) normalized() Contract {
 	return c
 }
 
-// Setup names the dataset an exercise runs against.
-type Setup struct {
-	Dataset       string `json:"dataset"`
-	SchemaVersion int    `json:"schema_version"`
-	SeedVersion   int    `json:"seed_version"`
-	/* Dialect is the engine this exercise's contract was written for. Grading a
-	   statement the *other* dialect produced against it would compare
-	   engine-specific values (a boolean against 0/1, a numeric against text,
-	   a timestamp's rendering) and call a correct answer wrong. */
-	Dialect string `json:"dialect"`
-}
-
 // ExpectedResult is the reference output that rows are compared against.
 type ExpectedResult struct {
 	Columns []string `json:"columns"`
 	Rows    [][]any  `json:"rows"`
 }
 
-// Check is one author-supplied grading check. A check may carry a RE2 `pattern`
-// (or a `test` field holding a regex string); when it does, the check is ok only
-// if the SQL text also matches. Checks without a pattern are ok exactly when the
-// result contract passes.
-type Check struct {
-	Label   string          `json:"label"`
-	Code    string          `json:"code"`
-	Pattern string          `json:"pattern,omitempty"`
-	Test    json.RawMessage `json:"test,omitempty"`
-}
-
-// Exercise is the subset of ExerciseSpec the evaluator needs, plus the optional
-// expected result and reference solution used to derive one. Both `contract`
-// and the schema's `result_contract` are accepted.
+// Exercise is the subset of ExerciseSpec the evaluator needs: the result
+// contract, the expected result, and the optional reference solution used to
+// derive an expected result when none is given.
 type Exercise struct {
-	ID                string          `json:"id"`
-	Version           int             `json:"version"`
-	LessonID          string          `json:"lesson_id"`
-	Type              string          `json:"type"`
-	Prompt            string          `json:"prompt"`
-	Setup             Setup           `json:"setup"`
 	Contract          Contract        `json:"result_contract"`
-	ContractAlt       *Contract       `json:"contract"`
 	ReferenceSolution string          `json:"reference_solution"`
-	Solution          string          `json:"solution"`
-	Hints             []string        `json:"hints"`
-	Difficulty        string          `json:"difficulty"`
 	Result            *ExpectedResult `json:"result"`
-	ExpectedResult    *ExpectedResult `json:"expected_result"`
-	ExpectedRows      [][]any         `json:"expected_rows"`
-	Checks            []Check         `json:"checks"`
-}
-
-func (e Exercise) effectiveContract() Contract {
-	if e.ContractAlt != nil {
-		c := *e.ContractAlt
-		if len(c.Columns) == 0 {
-			c.Columns = e.Contract.Columns
-		}
-		if c.ColumnOrder == "" {
-			c.ColumnOrder = e.Contract.ColumnOrder
-		}
-		if c.RowOrder == "" {
-			c.RowOrder = e.Contract.RowOrder
-		}
-		if c.Duplicates == "" {
-			c.Duplicates = e.Contract.Duplicates
-		}
-		return c.normalized()
-	}
-	return e.Contract.normalized()
 }
 
 func (e Exercise) expected() (ExpectedResult, bool) {
 	if e.Result != nil {
 		return *e.Result, true
 	}
-	if e.ExpectedResult != nil {
-		return *e.ExpectedResult, true
-	}
-	if e.ExpectedRows != nil {
-		return ExpectedResult{Columns: e.effectiveContract().Columns, Rows: e.ExpectedRows}, true
-	}
 	return ExpectedResult{}, false
 }
 
 func (e Exercise) reference() string {
-	if strings.TrimSpace(e.ReferenceSolution) != "" {
-		return e.ReferenceSolution
-	}
-	return e.Solution
+	return e.ReferenceSolution
 }
 
 // Request is the /answers/evaluate body.
@@ -157,27 +91,22 @@ type Response struct {
 	DurationMS string             `json:"duration_ms"`
 }
 
-// ErrorResponse is returned when the evaluator itself fails (§6.1 rule 9).
-type ErrorResponse struct {
-	Error *engine.QueryError `json:"error"`
-}
-
 // Evaluate runs the learner's SQL, compares the real result to the exercise's
-// contract, and grades each check. An execution error is an execution failure
-// (reported through qr.status), never a "wrong answer".
+// contract, and reports the contract checklist. An execution error is an
+// execution failure (reported through qr.status), never a "wrong answer".
 func Evaluate(ctx context.Context, ex engine.Executor, req Request) Response {
 	start := time.Now()
-	/* Fill, not Merge: the caller (the HTTP handler) has already resolved
-	   request-vs-server with Merge, where the server's configured caps are the
-	   ceiling. Re-merging the compiled DefaultLimits() here clamped DOWN, so a
-	   gateway configured above the default (QC_MAX_ROWS=2000) silently ran at
-	   the default 500. */
+	/* Fill, not Merge: the HTTP handler already resolved request-versus-server
+	   with Merge, where the server's configured caps are the ceiling. Merging
+	   the compiled DefaultLimits() again here would clamp down, so a gateway
+	   configured above the default (QC_MAX_ROWS=2000) would silently run at the
+	   default 500. */
 	limits := req.Limits.Fill(engine.DefaultLimits())
 
 	qr := engine.Execute(ctx, ex, req.SQL, limits)
-	resp := Response{QR: qr, Checks: []CheckResult{}}
+	resp := Response{QR: qr}
 
-	contract := req.Exercise.effectiveContract()
+	contract := req.Exercise.Contract.normalized()
 	expected, hasExpected := req.Exercise.expected()
 	referenceFailed := false
 	if !hasExpected {
@@ -187,8 +116,9 @@ func Evaluate(ctx context.Context, ex engine.Executor, req Request) Response {
 				expected = ExpectedResult{Columns: columnNames(refQR.Columns), Rows: refQR.Rows}
 				hasExpected = true
 			} else {
-				// A reference that does not run is our bug, not the learner's.
-				// Say so instead of silently degrading to a column check.
+				// A reference that does not run is an authoring bug, not the
+				// learner's. Say so instead of silently degrading to a column
+				// check.
 				referenceFailed = true
 			}
 		}
@@ -202,20 +132,7 @@ func Evaluate(ctx context.Context, ex engine.Executor, req Request) Response {
 	}
 	contractOK := cmp.OK
 
-	for _, chk := range req.Exercise.Checks {
-		ok := contractOK
-		if ok {
-			if pat, has := chk.patternString(); has {
-				if matched, err := matchPattern(pat, req.SQL); err == nil {
-					ok = matched
-				}
-			}
-		}
-		resp.Checks = append(resp.Checks, CheckResult{Label: chk.Label, Code: NormalizeCode(chk.Code), OK: ok})
-	}
-	if len(req.Exercise.Checks) == 0 {
-		resp.Checks = comparisonChecks(cmp, contract)
-	}
+	resp.Checks = comparisonChecks(cmp, contract)
 	if referenceFailed {
 		resp.Checks = append(resp.Checks, CheckResult{
 			Label: "Reference query could not be executed",

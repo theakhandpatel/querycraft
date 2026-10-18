@@ -26,10 +26,10 @@ import (
  * "Why was this course stored?" was only answerable from the stored plan, never
  * from the run.
  *
- * This file keeps that conversation. Every provider call a generation makes —
- * the challenge bundle, a repair, the outline, and every chapter turn of the M8
- * course agent — records the messages it sent, the reply it received, and each
- * tool call and tool result in the order they happened. The record is
+ * This file keeps that conversation. Every provider call a generation makes,
+ * covering the challenge bundle, a repair, the outline, and every chapter turn
+ * of the course agent, records the messages it sent, the reply it received, and
+ * each tool call and tool result in the order they happened. The record is
  * owner-scoped (the write is stamped by the same wrapper that stamps a stored
  * course), redacted (a credential never reaches it), and bounded (a runaway run
  * cannot bloat the database).
@@ -113,7 +113,7 @@ func Redactor(p any) func(string) string {
 type transcriptKey struct{}
 
 // WithRecorder attaches a recorder for one run. A provider call made with no
-// recorder in context — tutoring, critique — is not recorded, because it is not
+// recorder in context (tutoring, critique) is not recorded, because it is not
 // a generation run.
 func WithRecorder(ctx context.Context, r *Recorder) context.Context {
 	if r == nil {
@@ -127,8 +127,8 @@ func From(ctx context.Context) *Recorder {
 	return r
 }
 
-// runIDKey carries the id a caller has already given the run — the job id a
-// client polls — so the transcript and the job share one identity. Absent, the
+// runIDKey carries the id a caller has already given the run, the job id a
+// client polls, so the transcript and the job share one identity. Absent, the
 // recorder mints its own.
 type runIDKey struct{}
 
@@ -245,7 +245,7 @@ func (r *Recorder) Message(role, content string) {
 // records the turns it assembles as it assembles them (see runCourseAgent), and
 // recording them here as well would store every chapter turn once per round.
 func (r *Recorder) RecordRequestMessages(req provider.ProviderRequest) {
-	if r == nil || len(req.Messages) > 0 {
+	if r == nil {
 		return
 	}
 	if strings.TrimSpace(req.System) != "" {

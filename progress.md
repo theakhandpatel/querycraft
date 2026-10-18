@@ -2523,3 +2523,452 @@ instead of the pipeline bouncing failed chapters through a repair loop.
 
 The implementation is a focused next change: the plan, the API surface and
 the kill list are mapped here so it can be picked up cleanly.
+
+## The pi course agent landed, and the test audit, 2026-10-17
+
+### The refactor is done
+
+The hand-rolled chapter loop is gone. One `runCourseAgent` in
+`backend/internal/ai/course_agent_tools.go` resolves the model once from the
+saved `AIRawConfig`, builds one `agent.Agent`, and pi's loop carries every turn
+after that. There is no legacy path and no fallback.
+
+- The model resolves from `AIRawConfig` (the manage surface's saved parts). A
+  base URL names a custom OpenAI-compatible server; otherwise a `vendor/model`
+  ref resolves against pi's catalog. When the provider speaks the chapter loop
+  itself (the built-in fake), `ai.CourseStream(p)` supplies the conversation
+  and the model record is a placeholder.
+- The tools are the deterministic part: `save_chapter` (the grading gate),
+  `finish_course` (closes and sets `Terminate`, so pi's loop ends there),
+  `run_sql`, `reset_environment`.
+- The non-deterministic part is pi's: parsing, retries, transcript folding.
+  Our turn policy is one deterministic hook: a turn with no tool call is
+  steered with a bounded correction (`courseMaxNudges = 2`) and `TurnContinue`.
+- `recoverToolCallsFromText` is the deterministic transport repair for servers
+  that answer tool calls as JSON in message text: it converts them to native
+  calls before the loop executes.
+- The run budget is the conversation's deadline (`Limits.Timeout`). pi owns
+  the turn count; the configuration owns the clock.
+- `finish_course` sets `Terminate` on its tool result. The loop ends at the
+  close: no post-close request, exactly `outline + saves + close` calls.
+- The transcript records at `EvMessageEnd`, so replayed resume turns and live
+  turns both land paired (every call has its result). A resumed build replays
+  its stored chapters through `PromptMessages`.
+- The SSE discovery: pi's openai-completions adapter always sends
+  `stream: true`; `ai.Complete` is a wrapper, not a wire mode. The audit stub
+  now answers SSE for streamed requests and plain JSON for the outline call,
+  which goes through the gateway's own HTTP provider.
+- The debug probe in `openScratch` was deleted. It read `dbg.Error.Code` where
+  `Error` is a pointer that is nil on success, so it crashed production and
+  passed tests. A probe that only fires in production is pure liability.
+
+The audit suite `make audit-course-gen` is green: the fake activates twice
+identically, the stub streams a course readable mid-run, a broken chapter is
+dropped and reported, and a run with nothing verified is rejected and stores
+nothing.
+
+### The whole-backend test audit (findings recorded)
+
+A survey of all 73 backend test files found no tautology problem in general.
+The suite is disciplined. The actionable cluster:
+
+DELETE (done):
+- `internal/ai/course_test.go` `planJSON`: never called.
+- `internal/ai/helpers_test.go` `testDepot.saves`: recorded, never read.
+- `internal/httpapi/ai_test.go` `recordingDepot.savedRuns`: same pattern.
+- `internal/ai/jobs/jobs_test.go`: the whole duplicated fixture suite
+  (scriptedAgent copy, coursePlanFixture, chapterFixture, outlineFor,
+  saveChapterCall, finishCourseCall, ~200 lines) replaced by the built-in
+  provider plus a 40-line `chapterBreaker` stream wrapper.
+- The scripted `RawConfig` blocks in the three test harnesses: noise.
+
+TRIM (done):
+- `ai/jobs/jobs_test.go` `TestAJobReportsProgressWhileItRuns`: drop the stage
+  choreography and measured-rows assertions (ai's promises). Keep the
+  truthfulness of the live view.
+- `ai/jobs/jobs_test.go` `TestARunThatExceedsItsBudgetEnds`: drop the depot
+  count (ai owns "a failed run stores nothing").
+- `ai/jobs/jobs_test.go` `TestACourseThatLosesAChapterStillReportsWhy`: keep
+  the view projection, drop the stored-record shape.
+- `httpapi/jobs_test.go` `TestACourseIsReadableWhileLaterChaptersAreStillBeingWritten`:
+  keep the mid-run route answer, drop the per-chapter content assertions.
+- `httpapi/jobs_test.go` `TestARefusedCourseLeavesNoRowBehind`: keep the HTTP
+  status and empty-list-through-the-route, drop the report loop.
+- Budget advertisement: trim (done): the ai layer keeps the default-budget
+  half; the httpapi test owns the configured number a client waits on.
+- `dialect_test.go:285` `_ = sortedSet`: deleted.
+- `piai.completeFn`: deleted. The seam existed to capture the pre-normalize
+  `ai.Context`; the tools ride the recorded transcript's leading system
+  message (`ToolsAdded`), so `TestCompleteSendsToolDefinitions` asserts on the
+  request the provider actually saw.
+- `httpapi/jobs_test.go` wire structs: `jobStage.MS` and `jobView.CreatedAt`
+  deleted (recorded, never read).
+
+The dead helpers (`planJSON`, `testDepot.saves`, `recordingDepot.savedRuns`)
+were deleted right away, as were the duplicated jobs fixtures and the
+scripted `RawConfig` harness noise.
+
+KEEP (noted, not problems):
+- `ProvidedRunner`, `Config.StreamFn`, `loginThrottle.size()`,
+  `cachedAccounts()`, `sqliteError.code`: production seams with real
+  test consumers; the alternative for each is worse.
+- `pi_ai.completeFn`: borderline; deleting it means unit-testing the converter
+  instead of proving `Complete` wires the tools.
+
+### Environment
+
+- Node v22.18.0 is the system default: `/usr/local/bin/node` (and npm, npx)
+  are self-contained copies, not nvm-dependent.
+- Go 1.26.9 is on PATH in every shell: `/usr/local/bin/go` plus `.bashrc`.
+- `.bashrc` now loads for non-interactive shells too: the toolchain exports
+  sit above the interactive guard, and `BASH_ENV` chains plain `bash -c`
+  shells to it.
+- The user's sudo password is available on request; never write it to a file.
+
+### Subagent policy
+
+Every subagent launched from here on runs deepseek-v4.1-flash (the
+opencode-go provider), not the session's own model. Resolve the exact
+provider/model id from the live catalog before delegating.
+
+## Interrupted builds are a real state now, 2026-10-17
+
+The problem: a stored course row could sit `building` forever. A hard failure
+mid-run returned without touching the row. A killed process left the row too.
+A paused course was `building` as well, so a live build, a crashed one and a
+paused one were indistinguishable. The library listed all of them as normal
+courses. Those are the ghost records.
+
+The state machine, now:
+
+- `building` is a live build in this process, and nothing else.
+- `awaiting_approval` is stored on the row when a run pauses for the outline
+  approval. Before, it lived only in the outcome.
+- `interrupted` is a build that stopped without finishing. The chapters that
+  verified are kept. POST /courses/{id}/build resumes it, DELETE discards it.
+- `active` is a finished course.
+
+The rules that keep it honest:
+
+- A hard failure with no written chapter deletes the row: a course with no
+  chapters is not a course, the same rule a refusal follows.
+- A hard failure with written chapters flips the row to `interrupted`.
+- At boot, every `building` row is stale by definition: the process that was
+  writing it is this one's predecessor. The sweep runs once at startup: no
+  written chapter deletes the row, otherwise it becomes `interrupted`. Paused
+  and active rows are untouched. Caveat: this assumes one gateway owns the
+  database. Two instances sharing one DSN would fight over the sweep; the
+  shipped single binary is the supported deployment, and a multi-writer
+  deployment would need a heartbeat instead.
+- The library shows `Interrupted` and `Waiting for approval` as their own
+  states, each with Resume, which re-enters the same build machinery the
+  approval flow already uses.
+
+### The live check, on the real binary
+
+- A `building` row with no written chapter was planted in a real database,
+  the gateway was restarted, and the boot log read:
+  `stale course builds swept kept_as_interrupted=0 removed_empty=1`. The row
+  was gone from the database and from `GET /courses`; the active course next
+  to it was untouched.
+- A paused course was flipped to `interrupted`, `GET /courses` reported
+  `interrupted`, and `POST /courses/{id}/build?async=1` continued it: the
+  record read back `active` with all chapters present.
+
+Tests: `TestAHardFailureWithNoChapterRemovesTheRow`,
+`TestAHardFailureAfterAChapterKeepsItInterrupted`,
+`TestTheBootSweepInterruptsWhatVerifiedAndRemovesTheRest` (ai), and
+`TestAnInterruptedCourseIsResumedOverTheRealRoutes` (httpapi, real routes,
+real PostgreSQL). The two pause tests were updated: the row now says
+`awaiting_approval`, not `building`, which is the point of the change.
+
+The frontend: the library shows `Interrupted` and `Waiting for approval` as
+their own states, each with Resume, which hands the course to the build screen
+through the same approval machinery. The resumed POST is idempotent across
+StrictMode's double mount: the handle the gateway returned is kept per course,
+so the second mount watches the build instead of starting a second one.
+
+## The thermo-nuclear review, 2026-10-17
+
+Two review skills are vendored into the repo, with provenance:
+`.agents/skills/code-simplification/` and
+`.agents/skills/thermo-nuclear-code-quality-review/`. Four reviewers ran in
+parallel against the whole repository, one per layer, each following both
+skills and writing a report with file:line evidence.
+
+The reports are `docs/reviews/2026-10-17/01_httpapi.md` through
+`04_web_frontend.md`. The consolidated verdict and the plan of attack are
+`docs/quality-review.md`.
+
+The short version: the HTTP layer is not a hand-rolled mess (ServeMux patterns
+and six middleware functions are already the right shape, and no third-party
+package earns its place across any layer); the generation layer describes one
+provider three times; the store implements its Depot twice beside the seam that
+already solved two dialects; the web store is 2,038 lines and re-renders
+everything on every API log line. The biggest net deletions: fold the Depot
+onto `sqlStore` (~400 lines), replace `store.Memory` with SQLite `:memory:`
+(~600 lines), collapse the provider descriptions to one (~150 lines plus the
+dead pre-pi wire surface), split `course_agent.go`, decompose the web store.
+The reviewers also said what to keep: the hand-rolled SQLite driver (earned),
+the config switch, and every interface as it stands.
+
+## The bold refactor begins: shred, then the store collapse, 2026-10-17/18
+
+Direction: be unattached to existing code. The target is
+`docs/target-architecture.md`; the evidence is the four thermo-nuclear
+reviews in `docs/reviews/2026-10-17/`.
+
+### Phase 1: the shred (done, each a behavior-preserving deletion)
+
+- `webui.fmtInt` deleted; `strconv.Itoa` does it (22 lines).
+- The fake provider's outline markers and `courseAgentPrompt` now share one
+  pair of symbols; the two literals that agreed by luck are gone. Editing the
+  prompt can no longer silently break the shipped default provider.
+- `engine`: the dead `SQLiteConfig.DSN` field, `parseSQLiteDSN` and its
+  connector branch deleted (~55 lines). `DialectOf`/`EngineLabelOf` inlined
+  at their call sites and deleted.
+- `ai`: `sectionCount`, `CodeAIAvailable`, `Config.AdversarialFixtures` (plus
+  its unreachable branch) and `GenerationRequest.Steps` deleted from the wire,
+  the contract (`contracts/ai.schema.json`), the docs and the web request
+  type. `Steps` was validated and never rendered anywhere.
+- `internal/apidocs`: the unreferenced `CourseGenerateRequest` schema deleted.
+- The store's `Memory.saves` and the other dead test machinery: already gone
+  in the earlier test audit.
+
+### Phase 2, first move: the store collapse (done, net -924 lines)
+
+The review's finding: the store wrote the same 17 Depot queries twice
+(`$n`/pgx and `?`/database/sql), beside a dialect shim
+(`metadata.go`) that already solved exactly that, plus a third full
+implementation (`memory.go`) outside every parity harness.
+
+- `challenges.go`, `courses.go`, `runs.go` now hold the shared statements,
+  written once with `?` placeholders and `%s` tables, rendered by
+  `sqlStore.stmt`/`dialect` for both engines. `sqlite_depot.go` (402 lines)
+  is deleted entirely.
+- `memory.go` (609 lines) is now a 39-line wrapper: `NewMemory` opens
+  `NewSQLite(":memory:")` and only `Kind()` differs ("memory"), which is the
+  one distinction callers rely on (the environment reaper). Degraded mode now
+  runs the same statements as every other backend, so it cannot answer a
+  different rule; the `ApprovePatch`-on-unknown-id drift is gone by
+  construction.
+- Drift removed as a side effect: the challenges list no longer selects an
+  unused `id`, `Patch` no longer reads an unused `approved_at`, and
+  `ApprovePatch` binds one timestamp expression for both engines (it was
+  `now()` vs `timestamp(time.Now())`).
+- `sqlite_test.go`'s parity factory map now includes `"memory"`, so the same
+  behavior cases cover degraded mode; `sharedStore` replaces the per-type
+  switches in the test helpers.
+- Test alignments that are honest consequences: metadata timestamps are
+  microsecond-precision (the fixture truncates), progress/events carry the
+  user foreign key on every backend (the tests create the accounts first), and
+  stored JSON is compared by value (every backend normalizes the column).
+
+`make test` green: 23 audits OK, backend suite green.
+
+### Phase 2, second move: one provider description (done, net -1188 lines)
+
+The AI review's finding 1 and 2, together, because they were one defect: the
+provider configuration was written down three times (`Config.Provider` +
+`Config.RawConfig` + `Config.StreamFn`, synced by hand at three wiring sites,
+with `resolveCourseModel` re-implementing `piai.New`), and the pre-pi course
+wire surface was dead but still shipped.
+
+- `provider.CourseProvider` is the one optional capability a provider can
+  implement: `Course()` returns the pi model record, the key resolver, and
+  (optionally) the stream source. `FakeProvider` serves its own chapter
+  policy, `piai.PIAI` hands over the model it already resolved, and
+  `HTTPProvider` builds the custom-server record for an OpenAI-compatible base
+  URL. `provider.CourseCapabilityOf` is the single lookup.
+- Deleted: `Config.RawConfig`, `Config.StreamFn`, `AIRawConfig`,
+  `resolveCourseModel`, `CourseStream`, and piai's byte-identical
+  `jsonSchemaToPi`/`schemaFromMap` copy. The three wiring sites in `main.go`
+  and `admin_ai.go` are one line each now.
+- Deleted the dead pre-pi wire surface: `ProviderRequest.Messages/Tools/
+  ToolChoice`, `ProviderMessage`, `Tool`, `ToolFunction`,
+  `ProviderResponse.FinishReason`, the conversation branches in both
+  transports, and the tests that exercised the removed design. The transcript
+  recorder's request guard went with it.
+- `storedChapterTurns` renders pi messages directly; `storedTurnsToMessages`
+  and its provider-message middle layer are gone.
+- The test doublets now implement the capability themselves (`scriptedAgent`,
+  `gatedProvider`, `chapterBreaker`, `crossCheckBreaker`), and `testService`
+  has nothing to wire beside the provider.
+
+904 audit lines greener, 23 audits OK, `make verify` OK.
+
+### Phase 2, third move: one routing table, explicit error codes (done)
+
+The HTTP review's findings 1-3, together: the HTTP layer kept a second table
+beside the route table, and it guessed error codes out of response bodies.
+
+- `route` now carries its `operation` (the access log's name) and its body
+  `vocab` (which refusal codes an unreadable body keeps). `withRouteAuth`
+  attaches the entry to the request context, `requestErrorCode` reads the
+  vocab from it, and the observability middleware reads the operation from
+  the same table. Deleted: the parallel `operations` map, `operationOf`, and
+  `isStatementRoute` with its path-prefix switch. The four list routes'
+  "AI is off" bodies collapsed into `aiOff`, and the sentence they carried
+  into `aiOffMessage` (14 call sites, one truth).
+- The error-code recovery type switch (`errorCode`) is gone. It knew only
+  three body shapes, so AI refusals (*schema.Error), generation outcomes and
+  plan bundles logged no code at all. Now every writer that knows a stable
+  code names it through `noteError`: `errorEnvelope`, `writeAIError`,
+  `writeOutcome`, `writePlan`, `noteStatement`, `aiOff`, `runsOff`,
+  `courseSetupFailed`, `environmentUnavailable`. `writeJSON` no longer
+  guesses, so a new body shape cannot silently log nothing.
+- New regression test `TestAccessLogNamesTheAICode` pins the fix: a refused
+  build logs `error_code=AI_UNAVAILABLE` (previously nothing), and an
+  unreadable body on an AI route keeps `AI_INVALID_REQUEST` from the table.
+
+`make test` green (23 audits), `make verify` green (real PostgreSQL smoke).
+
+## Testing speed: make test ~260s -> ~51s, 2026-10-18
+
+Two independent costs, two fixes.
+
+### The PostgreSQL boot was the dominant cost
+
+Every `pgtest.Start(t)` ran initdb + the commerce seed + a server start for one
+test: ~3.5s each, ~69 boots across the suite, and the reason `ai`, `httpapi`,
+`store`, `dataset` and `envdb` dominated `go test ./...`.
+
+`pgtest` now keeps a golden cluster at `.data/pg/golden`: initdb and the seed
+run once per repository, the server stops cleanly, and a stamp (PostgreSQL
+version + sha256 of schema.sql+seed.sql) invalidates it when either changes.
+The build is atomic (staged, renamed; a losing concurrent test binary uses the
+winner's cluster). Every `Start` copies it (~47MB, ~0.2s) and starts a server
+on the copy, so each test still owns a virgin cluster and nothing outlives the
+test; a boot drops from ~3.5s to ~0.75s. `make db-reset` removes the cache.
+
+- `go test ./...` cold: 109s -> 59s.
+
+### make test ran everything serially
+
+typecheck + lint + check-cgo + 23 audits + `go test` were prerequisites of one
+target, so the wall was their sum (~260s). `make test` now fans the suite out
+with a sub-make: `-j$(TEST_JOBS)` (default 8, `-O` grouped output) over a
+`test-all` target, with `gotest` as one schedulable job. Every audit binds free
+ports and stages per-run dirs, so the real collisions were four shared /tmp
+bundle caches plus `/tmp/qc-ai.cjs`; each audit now owns its bundle name
+(Makefile outfile and script require both moved), and the two npm audits
+bundle to distinct files.
+
+- `make test` warm: 51s. `make verify` (web build + tests + smoke): 134.6s.
+
+Also fixed on the way: `TestEvaluateGradesOnTheRequestedDialect` flaked when
+the first anonymous SQLite statement seeded its fixture inside a request's 1s
+deadline under load; `sqliteTestServer` now seeds the shared fixture before any
+request runs.
+
+### Deferred cross-domain cleanups (settle after the execution wave lands)
+
+- `ProvidedRunner` deletion (wave2 ai-pipeline): needs call-site edits in
+  `internal/ai/jobs/**_test.go` and `internal/httpapi/**_test.go`, skipped by
+  the ai-core agent because those directories were owned elsewhere.
+- Dead reply-surface writers the ai-provider agent could not reach:
+  `internal/ai/fake.go`, `internal/ai/course_agent_test.go`,
+  `internal/ai/helpers_test.go` (ai-core's files).
+- `courseGenerateSchema` mirror in `internal/httpapi/contract_test.go` is now
+  unused (the apidocs agent moved the document to `apidocs/spec.json` +
+  `go:embed`); delete it once httpapi ownership frees.
+- Verify `internal/perf/explain.go` unused `slices` import at gate time
+  (noted while the apidocs agent ran).
+
+- Store cascade leftovers reported by the store agent (verify with the
+  compiler once all executors land): `internal/httpapi/auth_test.go` (CountUsers),
+  `internal/httpapi/ai_test.go`, `internal/apidocs/apidocs.go` if a stale
+  mirror line survives the spec.json move, and `web/src/api/aiContract.ts`
+  (`lesson_id` mirror of the removed contract field).
+
+- ai-provider leftovers to settle at gate time: `internal/ai/fake.go` still
+  writes the removed reply-surface fields; `internal/ai/course_agent_test.go`
+  still sets `ToolCall.Type`; `internal/httpapi/ai.go` still calls
+  `jobs.Job` with a context (signature changed).
+
+- engine leftovers to settle at gate time: `internal/envdb/perf_test.go`
+  and `internal/envdb/manager_test.go` still call the deleted `.Writable()`;
+  `docs/adversarial-suite.md` still names `ErrPoolTimeout`;
+  `web/src/api/sqliteProfile.ts` keep/delete decided by the web-data agent.
+
+- eval-perf leftovers to settle at gate time: `internal/ai/pipeline.go` still
+  sets the deleted `eval.Exercise.Prompt` (delete the setter or restore the
+  field — decide by reading whether eval reads it), `httpapi/plan.go` still
+  calls the old two-value `perf.Explain` (httpapi agent's), and the
+  `contracts/*.schema.json` / `perf-*.json fixtures` still carry removed
+  fields (`definition`, trimmed exercise keys) for the schema sweep.
+
+- platform leftovers at gate time: confirm no external caller still uses the
+  unexported `pgtest.EmbeddedBinariesEnv` / the two-arg `localdb.DefaultDataDir`
+  and `BinariesDir`; `docs/backend-decomposition-muse-spark.md` still names
+  `DefaultBuckets` for the docs pass.
+
+- web-view leftovers: `web/src/state/store.tsx` still accepts the edit fields
+  the screens no longer send (`saveCourseEdits{goal,context,dialect}`,
+  `addLesson{position}`) — trim if web-data does not; the `.pill` tone variant
+  collapse waits for a styles/ decision; `resetDialectChoice` export is an
+  owner call. web-view ran the shell/content/import/progress/theme audits green
+  after its edits.
+
+- ai-core leftovers: `ProvidedRunner` + `ErrNotConfigured` (call sites in
+  jobs/httpapi tests), `FakeProvider.Delay` (its only setter is
+  httpapi/jobs_test.go), the shadow-state `Progress` collapse and
+  `challengeSchema` home deferred to the course-agent split. ai-core reports
+  `go build ./...` green and `go test ./internal/ai/` ok after adapting the
+  provider/eval field ripples inside its files.
+
+- envdb-dataset leftovers: `backend/README.md` still documents the deleted
+  package-level `dialect.ClassifyError` (docs pass); the five test-only dialect
+  exports and `EncodeValue` arms wait on a docs policy call
+  (`docs/sqlite-dialect.md`, `backend/README.md`). Engine test refs to
+  `ClassifyError` were sent back to the engine executor.
+
+- engine follow-up: its tests now call `dialect.SQLite().ClassifyError`;
+  `go test ./internal/engine/` ok and `go build ./...` exit 0. Stale web prose
+  naming removed Go symbols (`web/src/api/sqliteProfile.ts` line 20,
+  `sqliteEngine.ts:27`) belongs to the web-data executor or the docs pass.
+
+- httpapi done: `requireAI`/`requireCourseDepot`, `submitJob`, `admitGeneration`,
+  `listSpec`/`list`, `writeAuthRequired`, `badAIRequest`,
+  `errorObject`/`writeErrorEnvelope`, `resolveCourseSetup`; `runsOff` folded
+  into `aiOff`; `UseDialect` folded into `UseSQLite`; sqlite introspection moved
+  to `sqlite_tables.go`. Tests ok (27.5s), build OK. Skipped for a later pass:
+  AI call-timeout owner, `piai.CatalogEntry` JSON tags, `login_throttle` move
+  to auth, the two admin provider helpers move.
+
+## Deep user session (2026-10-18)
+
+The full flow walkthrough, the findings, and the fixes are written up in
+`docs/reviews/2026-10-18/user-session.md`. Summary of what moved:
+
+- Walked: first boot, auth (learner + admin), preloaded lesson (example,
+  syntax error, exercise pass/fail, hints, reveal), workbook/notes/reload
+  persistence, SQLite chapter on SQLite 3.50.3, course generation through the
+  draft review and build (fake provider), generated exercise graded, challenge
+  lab pipeline (reference + adversarial fixtures), workspace reset (123 ms),
+  and the bad-actor API pass (401/403/404, 429 throttle after 5 failures,
+  stacked statements refused by the prepared-statement protocol).
+- Fixed: exercise prompts now render (SqlCell + `.cellprompt`); lesson sample
+  and Exercise 1.1's authored rows now match the seed (Chidi city Lagos, the
+  Electronics list); the alias contract is now stated where it is enforced
+  (save_chapter description, chapter prompt schema, the four fake prompts).
+- Open decisions: chapter/section edits on a stored course are in-memory only
+  (`saveLessonEdits`/`saveCourseEdits` need a `PUT /courses/{id}` or honest
+  draft-only copy); "Practise this now" lands on the source chapter; the
+  workspace drawer gives an honest "checking" for a few seconds on first ask.
+- Load robustness: `audit-perf` now retries once when the first perf-workspace
+  provision misses the request deadline (the copy is heavy and runs inside the
+  request), which was the one flake under the parallel gate.
+
+## Release v0.9.0 prep (2026-10-18)
+
+- Docs: `docs/self-hosting.md` written and linked from `README.md` and
+  `docs/README.md`; version bumped to v0.9.0 in `web/package.json`,
+  `docs/features.md`, `docs/architecture.md`; the resume row added to
+  features.md; `backend/README.md` sanitized (its 2026-10-16 report moved to
+  `docs/reviews/2026-10-16-simplification.md`, transcript path fixed).
+- Comment pass: seven agents run package by package (store/schema/dialect;
+  engine/envdb/dataset; course agent; pipeline core; provider/jobs/transcript/
+  eval/perf; httpapi; platform). Comments only, guards per package.
+- Still to do: full gates, rebuild, refresh the lesson/exercise screenshots,
+  commit, push, tag `v0.9.0`.

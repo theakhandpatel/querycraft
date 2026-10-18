@@ -1,5 +1,7 @@
 import { Effect } from 'effect';
 import { GatewayError, asGatewayError } from './errors';
+import { readAuthUser } from './authStorage';
+import { isAiErrorCode } from '../types';
 import type {
   AdminAIConfig,
   AdminAIModelEntry,
@@ -48,11 +50,12 @@ import type {
  * challenge that never passed the pipeline.
  *
  * Keeping the AI surface in its own module (it only needs `effect`, the
- * contract types and the typed error) is what lets the audit scripts exercise
- * it in node, away from the browser engine that `./execution` also owns.
+ * contract types, the typed error and the account-id reader in `./authStorage`)
+ * is what lets the audit scripts exercise it in node, away from the browser
+ * engine that `./execution` also owns.
  */
 
-export const AI_UNAVAILABLE_REASON = 'AI generation runs on the gateway; start the app with the Go backend.';
+const AI_UNAVAILABLE_REASON = 'AI generation runs on the gateway; start the app with the Go backend.';
 
 /** The AI slice of the ExecutionService contract. */
 export interface AiServiceShape {
@@ -102,7 +105,7 @@ export function unavailableAvailability(reason: string = AI_UNAVAILABLE_REASON):
   return { configured: false, available: false, provider: '', reason };
 }
 
-export function unavailableOutcome(kind: 'challenge' | 'course', reason: string = AI_UNAVAILABLE_REASON): AiOutcome {
+function unavailableOutcome(kind: 'challenge' | 'course', reason: string = AI_UNAVAILABLE_REASON): AiOutcome {
   return {
     status: 'unavailable',
     kind,
@@ -176,14 +179,14 @@ export interface AiPerformOptions {
   retries?: number;
 }
 
-export type AiPerform = (
+type AiPerform = (
   method: string,
   path: string,
   body?: unknown,
   opts?: AiPerformOptions,
 ) => Effect.Effect<AiPerformResult, GatewayError>;
 
-export interface AiGatewayOptions {
+interface AiGatewayOptions {
   perform: AiPerform;
   /** Fired when the gateway reports the session is gone, so the token is
       cleared and the app returns to sign-in. */
@@ -194,21 +197,8 @@ export interface AiGatewayOptions {
   providerDeadlineMs?: () => number | undefined;
 }
 
-const AI_ERROR_CODES: readonly AiErrorCode[] = [
-  'AI_UNAVAILABLE',
-  'AI_INVALID_REQUEST',
-  'AI_INVALID_ARTIFACT',
-  'AI_REFERENCE_FAILED',
-  'AI_CROSS_CHECK_FAILED',
-  'AI_REPAIR_EXHAUSTED',
-  'AI_NOT_FOUND',
-  'AI_PATCH_UNVERIFIED',
-  'AI_PATCH_UNAPPROVED',
-  'ENVIRONMENT_UNAVAILABLE',
-];
-
-export function asAiErrorCode(code: string | null | undefined): AiErrorCode {
-  return code && (AI_ERROR_CODES as readonly string[]).includes(code) ? (code as AiErrorCode) : 'ENVIRONMENT_UNAVAILABLE';
+function asAiErrorCode(code: string | null | undefined): AiErrorCode {
+  return code && isAiErrorCode(code) ? code : 'ENVIRONMENT_UNAVAILABLE';
 }
 
 function asAdminAIConfig(body: unknown): AdminAIConfig {
@@ -250,7 +240,7 @@ function statusWord(status: number): string {
 
 /* ---------- parsing the contract (tolerant, never inventing) ---------- */
 
-export function asAiAvailability(value: unknown): AiAvailability | null {
+function asAiAvailability(value: unknown): AiAvailability | null {
   if (!isRecord(value)) return null;
   if (typeof value.configured !== 'boolean' || typeof value.available !== 'boolean') return null;
   return {
@@ -317,7 +307,7 @@ function asEvidence(value: unknown): AiEvidence | undefined {
     required — an id, a title, a difficulty, a reference solution, a result
     contract and a provenance. Anything less reads as absent, so a half-valid
     artifact is never rendered as if it had passed the pipeline. */
-export function asAiArtifact(value: unknown): AiArtifact | null {
+function asAiArtifact(value: unknown): AiArtifact | null {
   if (!isRecord(value)) return null;
   if (typeof value.id !== 'string' || typeof value.title !== 'string') return null;
   if (typeof value.prompt !== 'string' || typeof value.reference_solution !== 'string') return null;
@@ -336,7 +326,7 @@ export function asAiArtifact(value: unknown): AiArtifact | null {
   };
 }
 
-export function asAiError(value: unknown): AiError | null {
+function asAiError(value: unknown): AiError | null {
   if (!isRecord(value)) return null;
   const code = typeof value.code === 'string' ? value.code : null;
   if (!code || typeof value.message !== 'string') return null;
@@ -351,7 +341,7 @@ export function asAiError(value: unknown): AiError | null {
 /** A generation outcome, honoured only when it names a status the contract
     defines. Malformed bodies are rejected so the caller builds an honest
     failure instead of rendering a half-parsed artifact. */
-export function asAiOutcome(value: unknown): AiOutcome | null {
+function asAiOutcome(value: unknown): AiOutcome | null {
   if (!isRecord(value)) return null;
   const status = value.status;
   if (
@@ -458,7 +448,7 @@ function asCourseChapter(value: unknown): AiCourseChapter | null {
     A chapter with no readable exercises is not a chapter this client will show,
     because a course whose exercises were not verified is exactly what the
     pipeline refuses to activate. */
-export function asCoursePlan(value: unknown): AiCoursePlan | null {
+function asCoursePlan(value: unknown): AiCoursePlan | null {
   if (!isRecord(value)) return null;
   if (typeof value.id !== 'string' || typeof value.title !== 'string' || typeof value.version !== 'number') return null;
   if (!isRecord(value.setup) || !isRecord(value.provenance)) return null;
@@ -497,7 +487,7 @@ function asExerciseResult(value: unknown): AiExerciseResult | null {
 /** The per-chapter verification report. It exists on a refusal too — "which
     exercise failed and what the engine said" is the useful half of a rejection
     — so an unreadable chapter is skipped rather than failing the whole report. */
-export function asChapterResults(value: unknown): AiChapterResult[] {
+function asChapterResults(value: unknown): AiChapterResult[] {
   if (!Array.isArray(value)) return [];
   return value.flatMap((raw): AiChapterResult[] => {
     if (!isRecord(raw) || typeof raw.id !== 'string') return [];
@@ -508,7 +498,7 @@ export function asChapterResults(value: unknown): AiChapterResult[] {
   });
 }
 
-export function asAiRecord(value: unknown): AiRecord | null {
+function asAiRecord(value: unknown): AiRecord | null {
   if (!isRecord(value)) return null;
   const artifact = asAiArtifact(value.artifact);
   if (!artifact) return null;
@@ -522,7 +512,7 @@ export function asAiRecord(value: unknown): AiRecord | null {
   };
 }
 
-export function asAiRecords(value: unknown): AiRecord[] {
+function asAiRecords(value: unknown): AiRecord[] {
   if (!Array.isArray(value)) return [];
   const out: AiRecord[] = [];
   for (const raw of value) {
@@ -605,31 +595,46 @@ export function asCourseRecords(body: unknown): AiCourseRecord[] {
    course was removed). Any other value — including one this build has never
    heard of — is read as "still going", so an unknown word from a newer gateway
    keeps the poller polling rather than being mistaken for a finish. */
-const JOB_TERMINAL_STATUSES: readonly string[] = [
+const JOB_TERMINAL_STATUSES = [
   'active',
   'rejected',
   'unavailable',
   'failed',
   'awaiting_approval',
   'discarded',
-];
+] as const;
+
+type JobTerminalStatus = (typeof JOB_TERMINAL_STATUSES)[number];
+
+function isTerminalJobStatus(status: string): status is JobTerminalStatus {
+  return JOB_TERMINAL_STATUSES.some((known) => known === status);
+}
 
 export function jobIsRunning(job: { status: string }): boolean {
-  return !JOB_TERMINAL_STATUSES.includes(job.status);
+  return !isTerminalJobStatus(job.status);
+}
+
+/* The words a job's own report uses for one stage, as `AiJobStage.state` fixes
+   them. Stated once so the guard and the contract type cannot drift apart. */
+const JOB_STAGE_STATES = ['queued', 'running', 'done', 'failed', 'skipped'] as const;
+
+type JobStageState = (typeof JOB_STAGE_STATES)[number];
+
+function isJobStageState(state: string): state is JobStageState {
+  return JOB_STAGE_STATES.some((known) => known === state);
 }
 
 /** One stage of a live job view, or null when it carries no name. A stage
     without a name cannot be matched to the step it belongs to, so it is
     dropped rather than shown as an unnamed step. */
-export function asJobStage(value: unknown): AiJobStage | null {
+function asJobStage(value: unknown): AiJobStage | null {
   if (!isRecord(value)) return null;
   const name = typeof value.name === 'string' ? value.name : '';
   if (!name) return null;
   const state = typeof value.state === 'string' ? value.state : 'queued';
-  const known = ['queued', 'running', 'done', 'failed', 'skipped'];
   return {
     name,
-    state: (known.includes(state) ? state : 'queued') as AiJobStage['state'],
+    state: isJobStageState(state) ? state : 'queued',
     detail: typeof value.detail === 'string' ? value.detail : undefined,
     ms: typeof value.ms === 'number' ? value.ms : undefined,
   };
@@ -637,7 +642,7 @@ export function asJobStage(value: unknown): AiJobStage | null {
 
 /** The handle a submission answers with, or null when the gateway answered with
     something else — the blocking envelope, which has no job to poll. */
-export function asJobHandle(body: unknown): AiJobHandle | null {
+function asJobHandle(body: unknown): AiJobHandle | null {
   const job = isRecord(body) ? body.job : undefined;
   if (!isRecord(job)) return null;
   const id = typeof job.id === 'string' ? job.id : '';
@@ -655,7 +660,7 @@ export function asJobHandle(body: unknown): AiJobHandle | null {
  * does not say" are different facts, and a screen that prints a count should
  * print the one it was given.
  */
-export function asJob(body: unknown): AiJob | null {
+function asJob(body: unknown): AiJob | null {
   const job = memberOf(body, 'job');
   if (!isRecord(job)) return null;
   const id = typeof job.id === 'string' ? job.id : '';
@@ -691,8 +696,10 @@ export function asJob(body: unknown): AiJob | null {
 }
 
 /** The settled states a finished job shares with an outcome envelope, plus the
-    two course-run states that stopped the run without activating a course. */
-const SETTLED_JOB_STATES = ['active', 'rejected', 'unavailable', 'failed', 'awaiting_approval'];
+    two course-run states that stopped the run without activating a course.
+    Derived from the one terminal tuple; `discarded` is handled separately in
+    `outcomeFromJob`, which reads it as a refusal. */
+const SETTLED_JOB_STATES: readonly string[] = JOB_TERMINAL_STATUSES.filter((s) => s !== 'discarded');
 
 /**
  * Assemble the outcome an adoption path already understands from a finished job
@@ -743,7 +750,7 @@ export function outcomeFromJob(job: AiJob, record: AiCourseRecord | null): AiOut
  * that still carries the envelope. Otherwise the envelope's own code and message
  * are surfaced, with `unavailable` reserved for AI_UNAVAILABLE.
  */
-export function outcomeFromResponse(status: number, body: unknown): AiOutcome {
+function outcomeFromResponse(status: number, body: unknown): AiOutcome {
   const parsed = asAiOutcome(body);
   if (parsed) return parsed;
 
@@ -764,7 +771,7 @@ export function outcomeFromResponse(status: number, body: unknown): AiOutcome {
 }
 
 /** A transport-level failure (no response, timeout, unreadable body). */
-export function outcomeFromError(e: unknown): AiOutcome {
+function outcomeFromError(e: unknown): AiOutcome {
   const err = e instanceof GatewayError ? e : asGatewayError(e);
   const code = asAiErrorCode(err.code);
   return {
@@ -979,17 +986,13 @@ function patchPath(ref: string): string {
 
 /* The approver is the signed-in learner. The gateway attributes the approval to
    the bearer token; `approved_by` is the contract's required echo of that. The
-   id is kept in local storage by the http layer at sign-in. */
+   id is kept in local storage at sign-in, and `readAuthUser` carries the
+   storage guards. */
 function readApprover(): string {
-  try {
-    if (typeof window === 'undefined' || !window.localStorage) return 'learner';
-    return window.localStorage.getItem('querycraft.user') || 'learner';
-  } catch {
-    return 'learner';
-  }
+  return readAuthUser() ?? 'learner';
 }
 
-export function asTutorResponse(value: unknown): AiTutorResponse | null {
+function asTutorResponse(value: unknown): AiTutorResponse | null {
   if (!isRecord(value) || typeof value.message !== 'string') return null;
   const level = typeof value.hint_level === 'number' ? value.hint_level : 0;
   return {
@@ -1000,7 +1003,7 @@ export function asTutorResponse(value: unknown): AiTutorResponse | null {
   };
 }
 
-export function asCritiqueResponse(value: unknown): AiCritiqueResponse | null {
+function asCritiqueResponse(value: unknown): AiCritiqueResponse | null {
   if (!isRecord(value) || typeof value.message !== 'string') return null;
   return {
     message: value.message,
@@ -1009,7 +1012,7 @@ export function asCritiqueResponse(value: unknown): AiCritiqueResponse | null {
   };
 }
 
-export function asDefectVerdict(value: unknown): AiDefectVerdict | null {
+function asDefectVerdict(value: unknown): AiDefectVerdict | null {
   if (!isRecord(value) || typeof value.summary !== 'string') return null;
   return {
     verified: value.verified === true,

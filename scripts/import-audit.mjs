@@ -22,9 +22,9 @@
 import { createRequire } from 'node:module';
 import { readFileSync } from 'node:fs';
 const require = createRequire('/tmp/');
-const ex = require('/tmp/export-bundle.cjs');
+const ex = require('/tmp/export-bundle-for-import.cjs');
 const im = require('/tmp/import-bundle.cjs');
-const pr = require('/tmp/progress.cjs');
+const pr = require('/tmp/progress-for-import.cjs');
 
 let failed = 0;
 function check(name, cond, detail) {

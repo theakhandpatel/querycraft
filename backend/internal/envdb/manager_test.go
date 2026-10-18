@@ -56,9 +56,6 @@ func TestManagerGivesEachAccountItsOwnWritableEnvironment(t *testing.T) {
 	if envA == envB {
 		t.Fatal("both accounts share one executor")
 	}
-	if !envA.Writable() || !envB.Writable() {
-		t.Fatal("an environment reports itself read-only; challenge environments must accept writes")
-	}
 
 	// Each environment arrives seeded from the template.
 	for name, ex := range map[string]*engine.PgxExecutor{accountA: envA, accountB: envB} {

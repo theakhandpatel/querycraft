@@ -1,21 +1,21 @@
 import { useEffect, useRef, useState } from 'react';
 import Icon from '../ui/Icon';
+import GenerationLog from '../ui/GenerationLog';
+import { useChecklist } from '../ui/useChecklist';
 import { useStore } from '../../state/store';
 
-import { courseExerciseTotal, moduleExerciseBlocks } from '../../lib/model';
+import { courseExerciseTotal, exercisesWithReference } from '../../lib/model';
 import { executionEngineLabel, generationProvenance, provenanceLabel } from '../../lib/provenance';
 import { runPipeline } from '../../lib/pipeline';
-import { authoredReport, courseFromPlan, reportFromOutcome, type DraftReport } from '../../lib/draft';
-import { jobIsRunning, outcomeFromJob } from '../../api/ai';
-import type { AiCourseRecord, AiJob, AiJobHandle, AiOutcome } from '../../api/aiContract';
-import type { Block, Course } from '../../types';
-
 /* Stage names and details arrive from the gateway (and, behind it, a model), so
    they are untrusted text. The log renders innerHTML for the paced lines, so
    anything interpolated from the response is escaped first. */
-function esc(value: string): string {
-  return value.replace(/[&<>"']/g, (c) => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' })[c] as string);
-}
+import { escapeHtmlAttribute as esc } from '../../lib/markdown';
+import { sleep } from '../../lib/sleep';
+import { authoredReport, courseFromPlan, reportFromOutcome, type DraftReport } from '../../lib/draft';
+import { jobIsRunning, outcomeFromJob } from '../../api/ai';
+import type { AiCourseRecord, AiJob, AiJobHandle, AiOutcome } from '../../api/aiContract';
+import type { Course } from '../../types';
 
 /* The checklist is the pipeline's report, not a script.
  *
@@ -77,7 +77,7 @@ function pacedLines(goal: string, level: string, ask: string): string[] {
     failure itself is printed in the transcript and on the failure card. */
 function applyStages(
   stages: readonly { name: string; state: string }[],
-  mark: (i: number, state: 'queued' | 'running' | 'done') => void
+  mark: (i: number, state: 'idle' | 'running' | 'done') => void
 ): void {
   const byName = new Map(stages.map((stage) => [stage.name, stage.state]));
   PIPE_STEPS.forEach((step, i) => {
@@ -89,43 +89,22 @@ function applyStages(
   });
 }
 
-type Measured = { ran: number; failed: number; rows: number; ms: number };
-
 type Failure = {
   title: string;
   detail: string;
   exercises: { id: string; title: string; stage: string; message: string; detail?: string | null }[];
 };
 
-/** Exercises in the draft that carry a reference query we can actually run. */
-function referenceExercises(course: Course): Block[] {
-  return (course.modules ?? [])
-    .flatMap((m) => moduleExerciseBlocks(m))
-    .filter((b) => typeof b.solution === 'string' && b.solution.trim().length > 0);
-}
-
-/** A poll pause a cancel can cut short, so leaving the screen never waits out
-    the interval before it can stop. */
-function pauseFor(ms: number, signal: AbortSignal): Promise<void> {
-  return new Promise((resolve) => {
-    if (signal.aborted) {
-      resolve();
-      return;
-    }
-    function done(): void {
-      clearTimeout(timer);
-      signal.removeEventListener('abort', done);
-      resolve();
-    }
-    const timer = setTimeout(done, ms);
-    signal.addEventListener('abort', done, { once: true });
-  });
-}
-
 /** How often a running job is read. The gateway's own stage list is what makes
     the checklist move, so this is a read of a small document, not a poll for a
     verdict. */
 const JOB_POLL_MS = 1200;
+
+/* The job a resumed build is running under, keyed by course id. A resume is a
+   POST, and StrictMode mounts the run effect twice: the first mount sends the
+   POST and is torn down, so the handle is kept here and the second mount
+   watches the same build instead of starting a second one. */
+const resumedBuildJobs = new Map<string, AiJobHandle>();
 
 export default function BuildingScreen() {
   const s = useStore();
@@ -133,10 +112,9 @@ export default function BuildingScreen() {
      the honest state for the opening seconds: there is no course yet. */
   const draftCourse = s.draftCourse;
   const [runKey, setRunKey] = useState(0);
-  const [states, setStates] = useState(PIPE_STEPS.map(() => 'queued'));
+  const { states, mark, reset: resetChecklist, idleWord } = useChecklist(PIPE_STEPS, 'Queued');
   const [log, setLog] = useState<{ t: string; html: string }[]>([]);
   const [logOpen, setLogOpen] = useState(true);
-  const [measured, setMeasured] = useState<Measured | null>(null);
   /* The draft the run produced, held locally so the right-hand card can show
      what was planned even before the store's render catches up. */
   const [built, setBuilt] = useState<Course | null>(null);
@@ -182,13 +160,6 @@ export default function BuildingScreen() {
     const t0 = performance.now();
     const stamp = (): string => `t+${((performance.now() - t0) / 1000).toFixed(1)}s`;
     const emit = (html: string): void => setLog((l) => [...l, { t: stamp(), html }]);
-    const mark = (i: number, state: 'queued' | 'running' | 'done'): void =>
-      setStates((prev) => {
-        if (prev[i] === state) return prev;
-        const next = prev.slice();
-        next[i] = state;
-        return next;
-      });
     const finish = (): void => {
       if (signal.aborted) return;
       navTimer.current = setTimeout(() => {
@@ -209,7 +180,11 @@ export default function BuildingScreen() {
          run is picked up where it got to, because starting it again is the one
          thing a resumed tab must never do. */
       const resuming = s.resumeRun;
-      const goal = resuming ? resuming.goal : s.goalInput;
+      /* A stored course the library asked to resume. The gateway owns the
+         outline and whatever chapters verified; this screen continues it the
+         way an approval does, so nothing new is submitted. */
+      const resumingBuild = s.resumeBuild;
+      const goal = resuming ? resuming.goal : resumingBuild ? resumingBuild.goal : s.goalInput;
       if (resuming) {
         emit(`<span class="hi">↻</span> reattached to the run already going on the gateway<span class="mono"> ${esc(resuming.jobId)}</span>`);
         mark(0, 'done');
@@ -275,12 +250,6 @@ export default function BuildingScreen() {
           const nextReport = reportFromOutcome(outcome, goal);
           setReport(nextReport);
           s.setDraftReport(nextReport);
-          setMeasured({
-            ran: nextReport.totals.verified,
-            failed: Math.max(0, nextReport.totals.exercises - nextReport.totals.verified),
-            rows: nextReport.totals.rows,
-            ms: nextReport.totals.ms,
-          });
 
           if (outcome.error) {
             emit(`<span class="fail">✕</span> generation ${outcome.status} · ${esc(outcome.error.code)} — ${esc(outcome.error.message)}`);
@@ -304,7 +273,7 @@ export default function BuildingScreen() {
             setRecordStatus('building');
             setBuilt((prev) => prev ?? courseFromPlan(plan, goal));
             mark(1, 'done');
-            mark(2, 'queued');
+            mark(2, 'idle');
             const count = plan.chapters.length;
             emit(`<span class="hi">→</span> the outline is stored: <span class="hi">${count}</span> chapter${count === 1 ? '' : 's'} planned — approve it to write them, or discard it`);
             for (const ch of plan.chapters) {
@@ -323,7 +292,7 @@ export default function BuildingScreen() {
             for (const f of failed) {
               emit(`<span class="fail">✕</span> ${esc(f.id)} · ${esc(f.stage)} — ${esc(f.message)}`);
             }
-            mark(4, 'queued');
+            mark(4, 'idle');
             emit('<span class="caret"></span>');
             setFailure({
               title:
@@ -373,26 +342,38 @@ export default function BuildingScreen() {
           mark(2, 'running');
           emit(`<span class="hi">→</span> approval sent — writing every chapter of <span class="mono">${esc(courseId)}</span>`);
           let answer;
-          try {
-            answer = await s.api.approveCourse(courseId);
-          } catch (e) {
-            setApproving(false);
-            emit(`<span class="fail">✕</span> the approval could not be sent — ${esc(e instanceof Error ? e.message : String(e))}`);
-            setFailure({
-              title: 'The course could not be built',
-              detail: 'The gateway did not accept the approval. The outline is still stored, so you can approve it again or discard it.',
-              exercises: [],
-            });
-            return;
+          const carried = resumedBuildJobs.get(courseId);
+          if (carried) {
+            /* StrictMode mounts this effect twice: the first mount sent the
+               POST and was torn down. The build it started is real, so this
+               mount watches it rather than starting a second one. */
+            answer = { job: carried, outcome: null };
+          } else {
+            try {
+              answer = await s.api.approveCourse(courseId);
+            } catch (e) {
+              setApproving(false);
+              s.buildSettled();
+              emit(`<span class="fail">✕</span> the approval could not be sent — ${esc(e instanceof Error ? e.message : String(e))}`);
+              setFailure({
+                title: 'The course could not be built',
+                detail: 'The gateway did not accept the approval. The outline is still stored, so you can approve it again or discard it.',
+                exercises: [],
+              });
+              return;
+            }
+            if (answer.job) resumedBuildJobs.set(courseId, answer.job);
           }
           if (signal.aborted) return;
           let built: AiOutcome | null = null;
           if (answer.job) {
             built = await watchJob(answer.job);
+            resumedBuildJobs.delete(courseId);
           } else if (answer.outcome) {
             built = answer.outcome;
           }
           setApproving(false);
+          s.buildSettled();
           if (signal.aborted || !built) return;
           settle(built);
           if (answer.job) s.runSettled(answer.job.id);
@@ -522,9 +503,17 @@ export default function BuildingScreen() {
               });
               return null;
             }
-            await pauseFor(JOB_POLL_MS, signal);
+            await sleep(JOB_POLL_MS, signal);
           }
         };
+
+        /* A stored course the library asked to resume: the gateway already
+           holds the outline and whatever chapters verified, so the build route
+           continues it and nothing new is submitted. */
+        if (resumingBuild) {
+          await runApproval(resumingBuild.courseId);
+          return;
+        }
 
         const request = {
           kind: 'course' as const,
@@ -612,7 +601,7 @@ export default function BuildingScreen() {
       mark(1, 'done');
       mark(2, 'done');
       mark(3, 'running');
-      const exercises = referenceExercises(course);
+      const exercises = exercisesWithReference(course);
       emit(`No provider is configured: opening the built-in curriculum and running its ${exercises.length} reference queries on <span class="hi">${executionEngineLabel(s.api)}</span> …`);
       const startedAt = performance.now();
       let ran = 0;
@@ -642,7 +631,6 @@ export default function BuildingScreen() {
         }
       }
       const verifyMs = Math.round(performance.now() - startedAt);
-      setMeasured({ ran, failed: failedCount, rows, ms: verifyMs });
       if (failedCount > 0) {
         emit(`<span class="fail">✕</span> ${failedCount} of ${exercises.length} references failed on the engine — the draft ships with the failures listed`);
       } else {
@@ -681,7 +669,7 @@ export default function BuildingScreen() {
       }
       approveRef.current = null;
       discardRef.current = null;
-      setStates(PIPE_STEPS.map(() => 'queued'));
+      resetChecklist();
       setLog([]);
       setJob(null);
       setRecordStatus(null);
@@ -691,6 +679,11 @@ export default function BuildingScreen() {
 
   const shown = built ?? draftCourse;
   const exerciseTotal = shown ? courseExerciseTotal(shown) : null;
+  /* The report is the one measured record this run produced; the card reads it
+     rather than keeping a second copy of the same numbers. `totals.verified`
+     counts executed references, so the rest of the total are the failures. */
+  const totals = report?.totals ?? null;
+  const failed = totals ? Math.max(0, totals.exercises - totals.verified) : 0;
 
   return (
     <div className="content">
@@ -750,7 +743,7 @@ export default function BuildingScreen() {
             </div>
           )}
           <div className="actions mt-12">
-            <button className="primary" onClick={() => { setFailure(null); setLog([]); setMeasured(null); setReport(null); setGenerated(null); setBuilt(null); setJob(null); setRecordStatus(null); setRunKey((k) => k + 1); }}>Try again</button>
+            <button className="primary" onClick={() => { setFailure(null); setLog([]); setReport(null); setGenerated(null); setBuilt(null); setJob(null); setRecordStatus(null); setRunKey((k) => k + 1); }}>Try again</button>
             <button onClick={() => s.showScreen('create')}>Change the goal</button>
             {report && <button className="ghost" onClick={() => { s.setDraftReport(report); s.setReviewTab('validation'); s.showScreen('review'); }}>See what was measured</button>}
           </div>
@@ -771,18 +764,14 @@ export default function BuildingScreen() {
               <div className={`pipe ${states[i]}`} key={i}>
                 <div className="check">{states[i] === 'done' ? '✓' : i + 1}</div>
                 <div><strong>{title}</strong><small>{small}</small></div>
-                <span className="state">{states[i] === 'done' ? 'Done' : states[i] === 'running' ? 'Working' : 'Queued'}</span>
+                <span className="state">{states[i] === 'done' ? 'Done' : states[i] === 'running' ? 'Working' : idleWord}</span>
               </div>
             ))}
           </div>
           <button className="small ghost mt-12" onClick={() => setLogOpen((v) => !v)}>
             <Icon name="chevron-down" />Show generation stream
           </button>
-          <div className={`stream${logOpen ? ' open' : ''}`}>
-            {log.map((l, i) => (
-              <div className="ln" key={i}><span className="t">{l.t}</span><span dangerouslySetInnerHTML={{ __html: l.html }} /></div>
-            ))}
-          </div>
+          <GenerationLog log={log} open={logOpen} />
         </div>
         <div className="card">
           <h2>Why this takes a moment</h2>
@@ -805,16 +794,16 @@ export default function BuildingScreen() {
           <div className="reportrow"><span>Exercises with result contracts</span><span>{exerciseTotal ?? '—'}</span></div>
           <div className="reportrow">
             <span>Exercises executed and cross-checked</span>
-            <span>{measured ? `${measured.ran}/${measured.ran + measured.failed} · ${measured.rows} rows` : 'measuring …'}</span>
+            <span>{totals ? `${totals.verified}/${totals.verified + failed} · ${totals.rows} rows` : 'measuring …'}</span>
           </div>
           <div className="reportrow">
             <span>Engine time</span>
-            <span>{measured ? `${measured.ms} ms` : '—'}</span>
+            <span>{totals ? `${totals.ms} ms` : '—'}</span>
           </div>
           <div className="reportrow">
             <span>Reference failures</span>
-            <span className={measured && measured.failed > 0 ? 'fail' : undefined}>
-              {measured ? (measured.failed > 0 ? `${measured.failed} to review` : '0') : '—'}
+            <span className={totals && failed > 0 ? 'fail' : undefined}>
+              {totals ? (failed > 0 ? `${failed} to review` : '0') : '—'}
             </span>
           </div>
           <div className="reportrow"><span>Execution engine</span><span className="mono">{executionEngineLabel(s.api)}</span></div>

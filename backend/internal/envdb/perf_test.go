@@ -95,9 +95,6 @@ func TestEnsurePerfProvidesThePlanFixture(t *testing.T) {
 	if got := scalarInt(t, ctx, challenge, "SELECT count(*) FROM dataset.customers"); got != 30 {
 		t.Errorf("the challenge environment has %d customers, want the 30-row commerce dataset", got)
 	}
-	if !plan.Writable() {
-		t.Error("the plan environment reports itself read-only; the lesson adds an index")
-	}
 }
 
 // TestPerfResetKeepsTheChallengeResetTime pins the reset bookkeeping to the

@@ -10,6 +10,12 @@ import (
 	"time"
 )
 
+/* sqlite.go is the embedded SQLite profile plus the value and error encoders the
+ * profile drives. dialect.go holds the profile types and the affinity algorithm;
+ * this file holds the profile bytes and the code that reads them, so the
+ * encoders follow the contract file rather than a second copy of the rules.
+ */
+
 // sqliteProfileJSON is the SQLite dialect profile.
 //
 // contracts/dialects/sqlite.json is the source of truth. A go:embed pattern
@@ -25,31 +31,30 @@ var sqliteProfileJSON []byte
 // handing every caller an error it cannot act on.
 var sqliteProfile = mustDecode(sqliteProfileJSON)
 
+// mustDecode decodes the embedded profile and checks the keys EncodeValue reads
+// verbatim. A profile that omitted one would make the encoder invent an answer,
+// so a missing key is a fault caught here once rather than defaulted at each
+// call.
 func mustDecode(raw []byte) Profile {
 	p, err := Decode(raw)
 	if err != nil {
 		panic("dialect: embedded SQLite profile is invalid: " + err.Error())
+	}
+	if p.ValueEncoding.Integer.MaxSafeInteger <= 0 {
+		panic("dialect: embedded SQLite profile has no integer.max_safe_integer")
+	}
+	nonFinite := p.ValueEncoding.Real.NonFinite
+	if nonFinite.NaN == "" || nonFinite.PositiveInfinity == "" || nonFinite.NegativeInfinity == "" {
+		panic("dialect: embedded SQLite profile has an incomplete real.non_finite rule")
+	}
+	if p.ValueEncoding.Blob.Prefix == "" {
+		panic("dialect: embedded SQLite profile has no blob.prefix")
 	}
 	return p
 }
 
 // SQLite returns the embedded SQLite profile.
 func SQLite() Profile { return sqliteProfile }
-
-// ClassifyError classifies err with the SQLite profile. It is a package
-// function as well as a method because SQLite is the only engine-error profile
-// this milestone ships; a later adapter that already holds a Profile should call
-// Profile.ClassifyError.
-//
-// The message it reads must be SQLite's own sentence — what sqlite3_errmsg
-// returns — because that is what every pattern in the profile was written
-// against. A driver renders that sentence with framing of its own (modernc's
-// "SQL logic error: incomplete input (1)", the wasm builds' own wrapper), and the
-// framing is removed by the adapter that knows its driver, one layer down:
-// engine/sqlite.go (sqliteErrorOf) on the Go side, and
-// web/src/api/sqliteProfile.ts (sqliteEngineMessage) in the browser. Unwrapping it
-// here would put a driver's format into a language-neutral profile.
-func ClassifyError(err error) string { return sqliteProfile.ClassifyError(err) }
 
 // ClassifyError returns the closed QueryResult error code for err by matching
 // the profile's message rules in order (first match wins; the profile's last
@@ -64,8 +69,9 @@ func ClassifyError(err error) string { return sqliteProfile.ClassifyError(err) }
 // The rules mean what they say only for the engine's sentence. Four of them —
 // the equals rules for "incomplete input", "database is locked" and
 // "interrupted", and the prefix rule for "unrecognized token:" — cannot match a
-// framed message at all, which is why the adapter must unwrap first
-// (TestClassifyErrorExpectsTheEnginesSentence records the boundary).
+// framed message at all, so a caller whose driver adds framing must strip it
+// first (web/src/api/sqliteFraming.ts; the Go adapter reads the raw sentence).
+// TestClassifyErrorExpectsTheEnginesSentence records the boundary.
 func (p Profile) ClassifyError(err error) string {
 	if err == nil {
 		return ""
@@ -92,10 +98,6 @@ func (r MatchRule) matches(msg string) bool {
 		return strings.Contains(msg, r.Pattern)
 	}
 }
-
-// defaultMaxSafeInteger is 2^53-1: the largest integer a JSON number (an IEEE
-// 754 double) can hold exactly.
-const defaultMaxSafeInteger = int64(1)<<53 - 1
 
 // EncodeValue renders one value the engine handed back as the JSON value a
 // QueryResult row carries.
@@ -161,7 +163,7 @@ func (p Profile) EncodeValue(raw any, declaredAffinity string) any {
 // is outside the range a JSON number can hold exactly. That is the same rule
 // web/src/api/pglite.ts already applies to PostgreSQL bigint.
 func (p Profile) encodeInt(v int64) any {
-	if max := p.maxSafeInteger(); v > max || v < -max {
+	if max := p.ValueEncoding.Integer.MaxSafeInteger; v > max || v < -max {
 		return strconv.FormatInt(v, 10)
 	}
 	return v
@@ -170,41 +172,29 @@ func (p Profile) encodeInt(v int64) any {
 // encodeUint is encodeInt for an unsigned value, which cannot be negative and
 // may not fit an int64.
 func (p Profile) encodeUint(v uint64) any {
-	if v > uint64(p.maxSafeInteger()) {
+	if v > uint64(p.ValueEncoding.Integer.MaxSafeInteger) {
 		return strconv.FormatUint(v, 10)
 	}
 	return int64(v)
 }
 
-func (p Profile) maxSafeInteger() int64 {
-	if n := p.ValueEncoding.Integer.MaxSafeInteger; n > 0 {
-		return n
-	}
-	return defaultMaxSafeInteger
-}
-
 // encodeFloat reports a REAL as a JSON number, with the profile's named rule for
-// the three values JSON cannot hold. SQLite stores NaN as NULL, so NaN is
-// reported as null — the engine's own answer; the infinities are strings,
-// because a null would hide a value that exists and a number would be wrong.
+// the three values JSON cannot hold. SQLite stores NaN as NULL, so the profile's
+// NaN rule is the JSON null — the engine's own answer; the infinities are
+// strings, because a null would hide a value that exists and a number would be
+// wrong.
 func (p Profile) encodeFloat(v float64) any {
 	nonFinite := p.ValueEncoding.Real.NonFinite
 	switch {
 	case math.IsNaN(v):
-		if nonFinite.NaN == "" || nonFinite.NaN == "null" {
+		if nonFinite.NaN == "null" {
 			return nil
 		}
 		return nonFinite.NaN
 	case math.IsInf(v, 1):
-		if nonFinite.PositiveInfinity != "" {
-			return nonFinite.PositiveInfinity
-		}
-		return "Infinity"
+		return nonFinite.PositiveInfinity
 	case math.IsInf(v, -1):
-		if nonFinite.NegativeInfinity != "" {
-			return nonFinite.NegativeInfinity
-		}
-		return "-Infinity"
+		return nonFinite.NegativeInfinity
 	}
 	return v
 }
@@ -212,9 +202,5 @@ func (p Profile) encodeFloat(v float64) any {
 // encodeBlob reports binary as the profile's prefix plus lowercase hex, the
 // form PostgreSQL bytea already uses, so both dialects agree.
 func (p Profile) encodeBlob(b []byte) string {
-	prefix := p.ValueEncoding.Blob.Prefix
-	if prefix == "" {
-		prefix = `\x`
-	}
-	return prefix + hex.EncodeToString(b)
+	return p.ValueEncoding.Blob.Prefix + hex.EncodeToString(b)
 }

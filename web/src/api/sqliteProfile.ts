@@ -16,13 +16,14 @@
  *     rules describe *SQLite's* own message text (what sqlite3_errmsg returns),
  *     so this is a **pure matcher**: it is handed the engine's sentence and
  *     nothing else. Removing the framing a driver wraps around that sentence is
- *     the *driver's* business, and it happens beside the driver — on the
- *     gateway that is `sqliteUnframe`/`sqliteErrorOf` in
- *     `backend/internal/engine/sqlite.go`, and in the browser it is
- *     `sqliteUnframe` in `web/src/api/sqlite.ts` (the wasm build frames as
- *     `SQLITE_ERROR: sqlite3 result code 1: incomplete input`). Keeping the
- *     strip out of here is why the same file can serve two drivers that frame
- *     differently: without it the `equals` and `prefix` rules can never fire
+ *     the *driver's* business, and it happens beside the driver — the gateway's
+ *     raw driver (`backend/internal/engine/sqlite_raw.go`) reports
+ *     sqlite3_errmsg verbatim, so the Go executor hands the sentence straight to
+ *     the profile, while the browser's wasm build frames its errors as
+ *     `SQLITE_ERROR: sqlite3 result code 1: incomplete input`, which
+ *     `sqliteUnframe` in `web/src/api/sqliteFraming.ts` strips before the rules
+ *     run. Keeping the strip out of here is why the same file can serve two
+ *     drivers: without it the `equals` and `prefix` rules can never fire
  *     and a syntax error reaches the learner as a runtime error.
  *   - `encodeSqliteValue` — the storage-class → JSON-value map. SQLite reports
  *     the class of a value, never the declared type of its column, so a text
@@ -83,8 +84,8 @@ export function sqliteErrorRules(): readonly MessageRule[] {
  *
  * `message` is the engine's own sentence, already stripped of the driver's
  * framing by the caller that owns the driver (`sqliteUnframe` in
- * `web/src/api/sqlite.ts`, `sqliteUnframe` in the Go executor). This function
- * matches and nothing else — see the module header. Ordered, first match wins,
+ * `web/src/api/sqliteFraming.ts`; the Go raw driver supplies it unframed). This
+ * function matches and nothing else — see the module header. Ordered, first match wins,
  * and the profile's last rule is the catch-all, so this always returns a code —
  * the same guarantee `TestClassifyErrorNeverEmitsExecutorCodes` pins on the Go
  * side. */

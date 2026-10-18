@@ -1,3 +1,7 @@
+// Result-contract comparison (§6.1). This file holds the value and row rules:
+// column matching, per-column alignment, row comparison, and the set and
+// multiset operations the duplicate rule needs. eval.go resolves the contract
+// and runs the SQL; nothing here executes anything.
 package eval
 
 import (
@@ -7,91 +11,27 @@ import (
 	"slices"
 	"strconv"
 	"strings"
-
-	"github.com/querycraft/sqlquery/backend/internal/engine"
 )
 
 // Result-contract feedback codes (contracts/evaluation.schema.json).
 const (
+	// CodeValueMismatch: at least one compared value differs.
 	CodeValueMismatch = "VALUE_MISMATCH"
-	CodeColumn        = "COLUMN_MISMATCH"
-	CodeColumnOrder   = "COLUMN_ORDER_MISMATCH"
-	CodeRowCount      = "ROW_COUNT_MISMATCH"
-	CodeRowOrder      = "ROW_ORDER_MISMATCH"
+	// CodeColumn: the set or the count of column names differs.
+	CodeColumn = "COLUMN_MISMATCH"
+	// CodeColumnOrder: the same columns appear in a different order.
+	CodeColumnOrder = "COLUMN_ORDER_MISMATCH"
+	// CodeRowCount: the row counts differ.
+	CodeRowCount = "ROW_COUNT_MISMATCH"
+	// CodeRowOrder: the rows match as a multiset but not in order.
+	CodeRowOrder = "ROW_ORDER_MISMATCH"
 )
 
-// validFeedbackCodes is the feedback-code enum from evaluation.schema.json.
-// Keep in lockstep with that file — a code the contract declares but this set
-// omits would be silently clamped to VALUE_MISMATCH by NormalizeCode, changing
-// what the learner sees. The mock adapter emits these same authored codes, so
-// the two sides must agree on the whole set.
-var validFeedbackCodes = map[string]bool{
-	"VALUE_MISMATCH":         true,
-	"COLUMN_MISMATCH":        true,
-	"COLUMN_ORDER_MISMATCH":  true,
-	"ROW_COUNT_MISMATCH":     true,
-	"ROW_ORDER_MISMATCH":     true,
-	"FILTER_MISSING":         true,
-	"AGGREGATION_MISSING":    true,
-	"GROUPING_MISSING":       true,
-	"JOIN_MISSING":           true,
-	"JOIN_TYPE_MISMATCH":     true,
-	"CTE_MISSING":            true,
-	"WINDOW_MISSING":         true,
-	"PARTITION_MISSING":      true,
-	"WINDOW_ORDER_MISSING":   true,
-	"RANK_FUNCTION_MISMATCH": true,
-	"GRAIN_ERROR":            true,
-	"EXPLANATION_MISSING":    true,
-	"CASE_MISSING":           true,
-	"DISTINCT_MISSING":       true,
-	"NULL_SAFETY":            true,
-	"NULL_TRAP":              true,
-	"RECURSION_MISSING":      true,
-	"SET_OP_MISSING":         true,
-	"SUBQUERY_MISSING":       true,
-	"TABLE_MISSING":          true,
-	"EVALUATION_ERROR":       true,
-}
-
-// NormalizeCode keeps emitted feedback codes inside the schema enum.
-func NormalizeCode(code string) string {
-	c := strings.ToUpper(strings.TrimSpace(code))
-	if validFeedbackCodes[c] {
-		return c
-	}
-	return CodeValueMismatch
-}
-
-// CompareColumns checks only the column names of a successful result. It is the
-// fallback when an exercise ships no expected rows and no reference solution.
-//
-// It is a thin wrapper over CompareColumnsDetailed so the column rule lives in
-// exactly one place. The two used to be separate implementations of the same
-// rule, which meant a §6.1 change had to be made twice in the grading core.
-func CompareColumns(contract Contract, qr engine.QueryResult) (bool, []string) {
-	c := CompareColumnsDetailed(contract, qr)
-	return c.OK, c.Codes
-}
-
-// Compare applies every §6.1 rule:
-//
-//  1. execution errors are execution failures (handled by the caller),
-//  2. column names are checked; order matters only when column_order is exact,
-//  3. row order is ignored unless row_order is exact,
-//  4. duplicates are preserved unless duplicates is ignored,
-//  5. NULL is distinct from "" and 0,
-//  6. numeric comparison uses the contract's tolerance,
-//  7. no implicit text normalization,
-//  8. an empty result is compared like any other.
-//
-// It is a thin wrapper over CompareDetailed (the implementation production and
-// the fixture suite both run), for the same one-rule-one-place reason.
-func Compare(expected ExpectedResult, contract Contract, qr engine.QueryResult) (bool, []string) {
-	c := CompareDetailed(expected, contract, qr)
-	return c.OK, c.Codes
-}
-
+// matchColumns reports whether got satisfies the contract's column names. A
+// length difference is a plain column mismatch. When order is "exact" the
+// comparison is positional, and a wanted column found elsewhere in got is
+// reported as CodeColumnOrder as well. Otherwise the columns match as a
+// multiset: every wanted name must claim one unused actual name.
 func matchColumns(want, got []string, order string) (bool, []string) {
 	if len(want) != len(got) {
 		return false, []string{CodeColumn}
@@ -153,6 +93,9 @@ func alignColumns(want, got []string, order string) []int {
 	return idx
 }
 
+// projectRows reorders each row so its columns line up with the expected
+// order. A wanted column that got does not carry (index -1) projects to nil,
+// which the value rule then reports as a mismatch.
 func projectRows(rows [][]any, order []int) [][]any {
 	out := make([][]any, len(rows))
 	for r, row := range rows {
@@ -167,6 +110,9 @@ func projectRows(rows [][]any, order []int) [][]any {
 	return out
 }
 
+// rowsEqual reports whether two rows hold the same values, column for column,
+// under the value rule and the contract's numeric tolerance. A length
+// difference is a mismatch, because some column has nothing to compare against.
 func rowsEqual(a, b []any, tol float64) bool {
 	if len(a) != len(b) {
 		return false
@@ -225,6 +171,9 @@ func isNumericValue(v any) bool {
 	return false
 }
 
+// toFloat coerces a numeric or numeric-looking value to float64. A string is
+// accepted here because the caller reaches this path only when the other side
+// is already numeric, which is what keeps two strings from being normalized.
 func toFloat(v any) (float64, bool) {
 	switch t := v.(type) {
 	case float64:
@@ -265,6 +214,7 @@ func toFloat(v any) (float64, bool) {
 	return 0, false
 }
 
+// toBool coerces a bool, or a string strconv.ParseBool accepts.
 func toBool(v any) (bool, bool) {
 	switch t := v.(type) {
 	case bool:
@@ -276,11 +226,14 @@ func toBool(v any) (bool, bool) {
 	return false, false
 }
 
+// toStr returns the string value, when v holds one.
 func toStr(v any) (string, bool) {
 	s, ok := v.(string)
 	return s, ok
 }
 
+// uniqueRows keeps the first copy of each distinct row, so the "ignored"
+// duplicate rule can compare the two sides as row sets.
 func uniqueRows(rows [][]any, tol float64) [][]any {
 	var out [][]any
 	for _, r := range rows {
@@ -291,6 +244,7 @@ func uniqueRows(rows [][]any, tol float64) [][]any {
 	return out
 }
 
+// containsRow reports whether want appears in rows under the value rule.
 func containsRow(rows [][]any, want []any, tol float64) bool {
 	for _, r := range rows {
 		if rowsEqual(r, want, tol) {
@@ -300,6 +254,10 @@ func containsRow(rows [][]any, want []any, tol float64) bool {
 	return false
 }
 
+// multisetEqual applies the duplicate rule for the exact-row-order path, where
+// it decides whether a value mismatch is only an ordering difference. With
+// duplicates ignored it compares the two row sets; otherwise it matches every
+// expected row to an unused actual row.
 func multisetEqual(expected, actual [][]any, tol float64, duplicates string) bool {
 	if duplicates == "ignored" {
 		expSet := uniqueRows(expected, tol)
@@ -334,6 +292,8 @@ func multisetEqual(expected, actual [][]any, tol float64, duplicates string) boo
 	return true
 }
 
+// dedupe removes repeated codes while preserving first-seen order, so a
+// multi-column mismatch does not report CodeColumn twice.
 func dedupe(codes []string) []string {
 	seen := make(map[string]bool, len(codes))
 	out := make([]string, 0, len(codes))

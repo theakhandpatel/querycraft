@@ -18,14 +18,13 @@ import (
 
 /* Generation as a job.
  *
- * A run is minutes of work — a real course took 147 s — and the whole time it
- * is a black box: the request is open, the learner sees a spinner, and a
- * browser that reloads, navigates or loses the tab takes the answer with it. A
- * submit can instead be answered with an id, and the run continues on a context
- * that is not the request's. Detaching matters for a reason beyond the
- * transport: the provider calls are already paid for, so cancelling them
- * because a client went away throws away work the learner asked for and waits
- * for nothing.
+ * A run is minutes of work, and the whole time it is a black box: the request
+ * is open, the learner sees a spinner, and a browser that reloads, navigates or
+ * loses the tab takes the answer with it. A submit can instead be answered with
+ * an id, and the run continues on a context that is not the request's.
+ * Detaching matters for a reason beyond the transport: the provider calls are
+ * already paid for, so cancelling them because a client went away throws away
+ * work the learner asked for and waits for nothing.
  *
  * The registry is deliberately modest. It is not a queue: a submission is
  * refused when the gateway is already running its maximum number of
@@ -55,8 +54,8 @@ type Job struct {
 // JobView is one job as a poller sees it. While the run is in flight the stages
 // are a live picture: a stage that has not started reads "queued", the one
 // executing reads "running", and the rest carry what they measured. Once the
-// run ends, the stages are the pipeline's own final report — the same slice the
-// blocking envelope carries — so the two routes cannot disagree about what ran.
+// run ends, the stages are the pipeline's own final report, the same slice the
+// blocking envelope carries, so the two routes cannot disagree about what ran.
 type JobView struct {
 	ID     string `json:"id"`
 	Kind   string `json:"kind"`
@@ -102,8 +101,8 @@ type Submission struct {
 	Request schema.GenerationRequest
 	// BuildCourseID, when set, makes the job a *continuation* rather than a new
 	// generation: the stored course with this id is resumed into its chapter
-	// phase (BuildCourse). Request is then unused — the request that
-	// produced the outline is the one stored beside it — and kind is always
+	// phase (BuildCourse). Request is then unused, because the request that
+	// produced the outline is stored beside the course, and kind is always
 	// course.
 	BuildCourseID string
 	// OnFinish, when set, is called once with the terminal view, after the job
@@ -126,11 +125,10 @@ const maxFinishedJobsPerOwner = 20
 type Jobs struct {
 	serviceFor ServiceFor
 
-	// maxRunning and maxFinished are bounds, not preferences: a generation
-	// spends a scratch database, and an unbounded registry is a resource leak
-	// that looks like a feature.
-	maxRunning  int
-	maxFinished int
+	// maxRunning is a bound, not a preference: a generation spends a scratch
+	// database, and an unbounded registry is a resource leak that looks like a
+	// feature.
+	maxRunning int
 
 	mu      sync.Mutex
 	jobs    map[string]*job
@@ -146,14 +144,10 @@ type Jobs struct {
 // rather than a second, private guess.
 func NewJobs(serviceFor ServiceFor, limits ai.Limits) *Jobs {
 	l := limits.Merge(ai.DefaultLimits())
-	if l.MaxConcurrent <= 0 {
-		l.MaxConcurrent = 1
-	}
 	return &Jobs{
-		serviceFor:  serviceFor,
-		maxRunning:  l.MaxConcurrent,
-		maxFinished: maxFinishedJobsPerOwner,
-		jobs:        map[string]*job{},
+		serviceFor: serviceFor,
+		maxRunning: l.MaxConcurrent,
+		jobs:       map[string]*job{},
 	}
 }
 
@@ -193,8 +187,8 @@ func (j *Jobs) Drain(ctx context.Context) error {
 
 // Submit starts a run and returns immediately with the id to poll. The run gets
 // its own context: the request that asked for it is about to end, and
-// context.WithoutCancel keeps the request's values — the id a log line carries
-// — while detaching its cancellation.
+// context.WithoutCancel keeps the request's values (the id a log line carries)
+// while detaching its cancellation.
 func (j *Jobs) Submit(ctx context.Context, sub Submission) (Job, error) {
 	if j == nil {
 		return Job{}, ai.NewError(ai.CodeUnavailable, "", "AI generation is not available.", "")
@@ -228,7 +222,6 @@ func (j *Jobs) Submit(ctx context.Context, sub Submission) (Job, error) {
 	j.mu.Unlock()
 
 	req := sub.Request
-	req.Kind = kind
 	runCtx, cancel := context.WithTimeout(context.WithoutCancel(ctx), svc.Limits().Timeout+jobHeadroom)
 	go func() {
 		defer cancel()
@@ -240,11 +233,8 @@ func (j *Jobs) Submit(ctx context.Context, sub Submission) (Job, error) {
 
 // Job returns the view of one job. A job that belongs to another learner is
 // reported as unknown, never as forbidden, because that is the rule the stored
-// records already follow: an id must not be probeable for existence. The
-// context is unused today and is here for the same reason every other method
-// takes one — a store-backed registry will need it.
-func (j *Jobs) Job(ctx context.Context, ownerID, id string) (JobView, bool, error) {
-	_ = ctx
+// records already follow: an id must not be probeable for existence.
+func (j *Jobs) Job(ownerID, id string) (JobView, bool, error) {
 	if j == nil || id == "" {
 		return JobView{}, false, nil
 	}
@@ -259,10 +249,10 @@ func (j *Jobs) Job(ctx context.Context, ownerID, id string) (JobView, bool, erro
 
 // DiscardCourse ends the job that was waiting on a course, so a poller is told
 // why the run it was watching will never continue. It is called when the
-// learner discards the stored course: the run itself really did stop at
+// learner discards the stored course: the run itself stopped at
 // awaiting_approval (that is what its transcript records), and this is the
-// later fact that the course it named is gone. Only a paused job is touched —
-// a running job is never rewritten, and a job that already reached a terminal
+// later fact that the course it named is gone. Only a paused job is touched. A
+// running job is never rewritten, and a job that already reached a terminal
 // status keeps it.
 func (j *Jobs) DiscardCourse(ownerID, courseID string) {
 	if j == nil || courseID == "" {
@@ -287,8 +277,8 @@ func (j *Jobs) DiscardCourse(ownerID, courseID string) {
 // A panic here is recovered rather than left to the runtime: this goroutine has
 // no net/http recovery above it, so an unrecovered panic in a provider would
 // take the whole gateway down and every other learner's session with it. The
-// job reports the bug as its own failure instead — with no stage evidence
-// invented for it — and the process stays up to serve the next request.
+// job reports the bug as its own failure instead, invents no stage evidence for
+// it, and keeps the process up to serve the next request.
 func (j *Jobs) run(ctx context.Context, svc *ai.Service, kind string, req schema.GenerationRequest, buildCourseID string, jb *job) (out schema.Outcome) {
 	defer func() {
 		if r := recover(); r != nil {
@@ -343,7 +333,7 @@ func (j *Jobs) evictLocked(ownerID string) {
 			finished++
 		}
 	}
-	for finished > j.maxFinished {
+	for finished > maxFinishedJobsPerOwner {
 		oldest := ""
 		var oldestAt time.Time
 		for id, jb := range j.jobs {

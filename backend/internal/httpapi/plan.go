@@ -2,6 +2,7 @@ package httpapi
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"net/http"
 	"strings"
@@ -12,7 +13,7 @@ import (
 	"github.com/querycraft/sqlquery/backend/internal/perf"
 )
 
-/* POST /explain — the M5 plan surface (design §14).
+/* POST /explain: the M5 plan surface (design section 14).
  *
  * A plan is captured under the same deadline, semaphore and row/byte caps as a
  * query, because EXPLAIN ANALYZE executes the learner's statement and a runaway
@@ -26,18 +27,17 @@ import (
  *     invents a plan.
  *
  * The body may carry the exercise's PerfContract. The gateway does not grade it
- * — the browser and backend/internal/perf both read PlanBundle.summary and must
- * agree (M5 step 5) — but it does read the dialect the exercise was authored
- * for, so a SQLite chapter is refused with an actionable message instead of
- * being graded against PostgreSQL facts.
+ * (the browser and backend/internal/perf both read PlanBundle.summary and must
+ * agree, M5 step 5), but it does read the dialect the exercise was authored
+ * for. A SQLite chapter is refused with an actionable message instead of being
+ * graded against PostgreSQL facts.
  */
 
 // planRequest is the POST /explain body.
 type planRequest struct {
+	statementRequest
 	SQL      string        `json:"sql"`
 	Analyze  bool          `json:"analyze"`
-	Dialect  string        `json:"dialect"`
-	Dataset  string        `json:"dataset"`
 	Exercise *planExercise `json:"exercise"`
 	Limits   engine.Limits `json:"limits"`
 }
@@ -62,22 +62,22 @@ func (s *Server) handleExplain(w http.ResponseWriter, r *http.Request) {
 	if !admitted {
 		bundle := s.refusedPlan(ctx, start, req.SQL, engine.CodeTimeout, s.busyResult(ctx, start).Error.Message, "")
 		s.recordPlan(bundle, req.Analyze)
-		writeJSON(w, http.StatusBadRequest, bundle)
+		writePlan(w, http.StatusBadRequest, bundle)
 		return
 	}
 	defer release()
 
 	// The plan lab is PostgreSQL-only (ADR 0004: SQLite has neither
 	// EXPLAIN ANALYZE nor a cost model of this shape), so a request for another
-	// dialect is refused with a sentence that names the one that works —
+	// dialect is refused with a sentence that names the one that works.
 	// DIALECT_MISMATCH is in QueryResult's enum, not this contract's, so the
 	// refusal is EVALUATION_ERROR, the same code a chapter authored for another
-	// dialect already got.
+	// dialect gets.
 	if dialect := requestedDialect(req.Dialect); dialect != engine.DialectPostgres {
 		bundle := s.refusedPlan(ctx, start, req.SQL, engine.CodeEvaluationError,
 			s.planDialectRefusal(dialect), "")
 		s.recordPlan(bundle, req.Analyze)
-		writeJSON(w, http.StatusBadRequest, bundle)
+		writePlan(w, http.StatusBadRequest, bundle)
 		return
 	}
 
@@ -86,7 +86,7 @@ func (s *Server) handleExplain(w http.ResponseWriter, r *http.Request) {
 			bundle := s.refusedPlan(ctx, start, req.SQL, engine.CodeEvaluationError,
 				s.planDialectRefusal(dialect), "")
 			s.recordPlan(bundle, req.Analyze)
-			writeJSON(w, http.StatusBadRequest, bundle)
+			writePlan(w, http.StatusBadRequest, bundle)
 			return
 		}
 	}
@@ -102,11 +102,11 @@ func (s *Server) handleExplain(w http.ResponseWriter, r *http.Request) {
 		bundle := s.refusedPlan(ctx, start, req.SQL, engine.CodeEnvironmentUnavailable,
 			reason, engine.RedactSecrets(err.Error()))
 		s.recordPlan(bundle, req.Analyze)
-		writeJSON(w, http.StatusBadRequest, bundle)
+		writePlan(w, http.StatusBadRequest, bundle)
 		return
 	}
 
-	bundle, err := perf.Explain(ctx, exec, req.SQL, perf.ExplainOptions{
+	bundle := perf.Explain(ctx, exec, req.SQL, perf.ExplainOptions{
 		Analyze: req.Analyze,
 		Limits:  limits,
 		Dataset: datasetID,
@@ -114,16 +114,12 @@ func (s *Server) handleExplain(w http.ResponseWriter, r *http.Request) {
 		// what tells a learner how much data a plan was chosen against.
 		ScaleFactor: dataset.FactRowCount(datasetID),
 	})
-	if err != nil {
-		bundle = s.refusedPlan(ctx, start, req.SQL, engine.CodeEnvironmentUnavailable,
-			"The plan could not be captured.", engine.RedactSecrets(err.Error()))
-	}
 	s.recordPlan(bundle, req.Analyze)
 	status := http.StatusOK
 	if bundle.Status != perf.StatusSucceeded {
 		status = http.StatusBadRequest
 	}
-	writeJSON(w, status, bundle)
+	writePlan(w, status, bundle)
 }
 
 // planExecutor returns the executor the plan must be captured on.
@@ -131,11 +127,11 @@ func (s *Server) handleExplain(w http.ResponseWriter, r *http.Request) {
 // The perf dataset exists only as a per-account writable environment (the
 // lessons ask the learner to CREATE INDEX), and EXPLAIN ANALYZE executes the
 // statement, so both need a workspace. A plain EXPLAIN still plans, so an
-// anonymous caller may plan the shared read-only dataset — but not analyze it.
+// anonymous caller may plan the shared read-only dataset, but not analyze it.
 // The first return is the executor; the second is the learner-facing sentence a
 // refusal shows (the error's own text is the machine detail underneath it).
 func (s *Server) planExecutor(ctx context.Context, r *http.Request, datasetID string, analyze bool) (engine.Executor, string, error) {
-	u, signedIn := userFrom(r.Context())
+	_, signedIn := userFrom(r.Context())
 
 	const needsWorkspace = "EXPLAIN ANALYZE executes the statement, so it needs a writable learner environment. Sign in to analyze; a plain EXPLAIN still works anonymously."
 
@@ -157,21 +153,37 @@ func (s *Server) planExecutor(ctx context.Context, r *http.Request, datasetID st
 		return exec, "", nil
 
 	case dataset.PerfDatasetID:
-		if !signedIn {
-			return nil, perfSignInRefusal, fmt.Errorf("%w: anonymous caller has no perf environment", engine.ErrEnvironmentUnavailable)
-		}
-		if s.envs == nil {
-			return nil, "No writable workspace manager is configured, so the perf dataset cannot be provided.", fmt.Errorf("%w: no writable workspace manager is configured", engine.ErrEnvironmentUnavailable)
-		}
-		exec, err := s.envs.EnsurePerf(ctx, u.ID)
+		exec, err := s.perfWorkspace(ctx, r)
 		if err != nil {
-			return nil, "The perf environment could not be prepared.", err
+			return nil, planPerfMessage(err), err
 		}
 		return exec, "", nil
 
 	default:
 		return nil, unknownDatasetMessage(datasetID), fmt.Errorf("%w: unknown dataset %q", engine.ErrEnvironmentUnavailable, datasetID)
 	}
+}
+
+// planPerfMessage keeps the plan route's own sentence for each way the perf
+// workspace can be missing; the resolver owns only the resolution.
+func planPerfMessage(err error) string {
+	switch {
+	case errors.Is(err, errPerfAnonymous):
+		return perfSignInRefusal
+	case errors.Is(err, errPerfNoManager):
+		return "No writable workspace manager is configured, so the perf dataset cannot be provided."
+	default:
+		return "The perf environment could not be prepared."
+	}
+}
+
+// writePlan writes a plan bundle and, when the capture failed, names the
+// bundle's error code for the access log.
+func writePlan(w http.ResponseWriter, status int, bundle *perf.PlanBundle) {
+	if bundle != nil && bundle.Error != nil {
+		noteError(w, bundle.Error.Code)
+	}
+	writeJSON(w, status, bundle)
 }
 
 // refusedPlan builds the honest refusal: no plan, no numbers, one stable code

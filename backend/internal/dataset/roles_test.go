@@ -123,9 +123,9 @@ func TestLearnerRoleCannotEscapeTheSandbox(t *testing.T) {
 		{name: "password view", sql: "SELECT count(*) FROM pg_shadow"},
 		{name: "file read", sql: "SELECT pg_read_file('/etc/hostname')"},
 		{name: "directoy list", sql: "SELECT pg_ls_dir('/')"},
-		{name: "escalate to owner", sql: "SET ROLE " + quoteIdent(owner)},
-		{name: "assume owner session", sql: "SET SESSION AUTHORIZATION " + quoteIdent(owner)},
-		{name: "write access", sql: "CREATE TABLE " + quoteIdent(SchemaName) + ".learner_wrote (id int)"},
+		{name: "escalate to owner", sql: "SET ROLE " + QuoteIdent(owner)},
+		{name: "assume owner session", sql: "SET SESSION AUTHORIZATION " + QuoteIdent(owner)},
+		{name: "write access", sql: "CREATE TABLE " + QuoteIdent(SchemaName) + ".learner_wrote (id int)"},
 	} {
 		_, err := learner.Exec(ctx, probe.sql)
 		if err == nil {

@@ -11,14 +11,14 @@ import (
 // The policy gate. A generated bundle is untrusted input: every field is
 // bounded, the reference solution must be a single read-only statement, and the
 // setup plan may only build scratch objects. The rules live here, in one place,
-// because both the pipeline stage and the test table call the same functions —
-// a rule that is only asserted in a test is a rule the pipeline does not have.
+// because both the pipeline stage and the test table call the same functions. A
+// rule that is only asserted in a test is a rule the pipeline does not have.
 //
 // This is deliberately a tokenizer and allowlist, not a SQL parser. A parser
 // would have to agree with PostgreSQL's grammar to be useful, and a
-// near-parser that disagrees in one corner is worse than an honest, slightly
-// over-strict gate: a false rejection costs one re-generation, a false
-// acceptance runs generated SQL in a shared environment.
+// near-parser that disagrees in one corner is worse than a slightly over-strict
+// gate: a false rejection costs one re-generation, a false acceptance runs
+// generated SQL in a shared environment.
 
 /* ---------- request validation ---------- */
 
@@ -27,16 +27,12 @@ import (
 const (
 	maxTopics      = 16
 	maxConstraints = 16
-	maxSteps       = 40
 	maxTopicChars  = 200
 )
 
 // validateRequest checks the learner's ask before any provider call. It returns
 // an envelope error naming the offending field in Detail, or nil.
 func validateRequest(req schema.GenerationRequest, l Limits) *schema.Error {
-	if req.Kind != "" && req.Kind != "challenge" && req.Kind != "course" {
-		return reqError("kind", fmt.Sprintf("unknown kind %q", req.Kind))
-	}
 	// The count is checked before "is there anything to generate from", so an
 	// oversized request is refused for the reason that actually applies rather
 	// than for a missing title it does not have.
@@ -57,18 +53,15 @@ func validateRequest(req schema.GenerationRequest, l Limits) *schema.Error {
 	if len(req.Constraints) > maxConstraints {
 		return reqError("constraints", fmt.Sprintf("%d constraints exceeds the limit of %d", len(req.Constraints), maxConstraints))
 	}
-	if len(req.Steps) > maxSteps {
-		return reqError("steps", fmt.Sprintf("%d steps exceeds the limit of %d", len(req.Steps), maxSteps))
-	}
-	for field, value := range map[string]string{
-		"title":    req.Title,
-		"scenario": req.Scenario,
+	for _, f := range []struct{ field, value string }{
+		{"title", req.Title},
+		{"scenario", req.Scenario},
 	} {
-		if utf8.RuneCountInString(value) > l.MaxPromptChars {
-			return reqError(field, fmt.Sprintf("%d characters exceeds the limit of %d", utf8.RuneCountInString(value), l.MaxPromptChars))
+		if utf8.RuneCountInString(f.value) > l.MaxPromptChars {
+			return reqError(f.field, fmt.Sprintf("%d characters exceeds the limit of %d", utf8.RuneCountInString(f.value), l.MaxPromptChars))
 		}
 	}
-	for i, s := range append(append([]string{}, req.Steps...), req.Constraints...) {
+	for i, s := range req.Constraints {
 		if utf8.RuneCountInString(s) > l.MaxPromptChars {
 			return reqError("steps", fmt.Sprintf("entry %d is longer than %d characters", i, l.MaxPromptChars))
 		}
@@ -164,13 +157,13 @@ func validateArtifact(a schema.Artifact, l Limits) *schema.Error {
 			return artifactError("result_contract.columns", fmt.Sprintf("column %d is empty", i))
 		}
 	}
-	for field, value := range map[string]string{
-		"result_contract.column_order": a.ResultContract.ColumnOrder,
-		"result_contract.row_order":    a.ResultContract.RowOrder,
-		"result_contract.duplicates":   a.ResultContract.Duplicates,
+	for _, f := range []struct{ field, value string }{
+		{"result_contract.column_order", a.ResultContract.ColumnOrder},
+		{"result_contract.row_order", a.ResultContract.RowOrder},
+		{"result_contract.duplicates", a.ResultContract.Duplicates},
 	} {
-		if value != "" && !validContractEnum(field, value) {
-			return artifactError(field, fmt.Sprintf("unknown value %q", value))
+		if f.value != "" && !validContractEnum(f.field, f.value) {
+			return artifactError(f.field, fmt.Sprintf("unknown value %q", f.value))
 		}
 	}
 	if err := validateReference(a.ReferenceSolution); err != nil {
@@ -184,10 +177,10 @@ func validateArtifact(a schema.Artifact, l Limits) *schema.Error {
 	}
 	for i, stmt := range a.Setup.Statements {
 		if err := validateSetupStatement(stmt); err != nil {
-			/* The helper already names the field; repeating it here produced
-			   "setup.statements: statement 0: setup.statements: the statement is
-			   empty", which is what the repair pass then had to read — a repair
-			   is only as good as the sentence describing the fault. */
+			/* The helper already names the field; repeating it here would
+			   produce "setup.statements: statement 0: setup.statements: the
+			   statement is empty". A repair is only as good as the sentence
+			   describing the fault. */
 			return artifactError("setup.statements", fmt.Sprintf("statement %d: %s", i, strings.TrimPrefix(err.Detail, "setup.statements: ")))
 		}
 	}
@@ -301,6 +294,9 @@ func isIdentPart(c byte) bool {
 	return isIdentStart(c) || (c >= '0' && c <= '9') || c == '$'
 }
 
+// skipBlockComment skips a block comment from its opening marker. It tracks
+// nesting because PostgreSQL allows block comments to nest, so a naive scan to
+// the first closing marker would end the comment too early.
 func skipBlockComment(sql string, i int) int {
 	depth := 0
 	for i < len(sql) {
@@ -422,6 +418,9 @@ func validateReference(sql string) *schema.Error {
 	return nil
 }
 
+// referencesCatalog reports whether an identifier reaches the system catalog.
+// A generated solution must not read it: the catalog describes the whole
+// server, not the exercise.
 func referencesCatalog(ident string) bool {
 	lower := strings.ToLower(ident)
 	if strings.HasPrefix(lower, "pg_") {

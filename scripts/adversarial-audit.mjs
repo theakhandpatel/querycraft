@@ -356,7 +356,16 @@ async function caseConnectionExhaustion(maxConcurrent, token) {
 
   const after = await getText(`${base}/metrics`);
   const poolMax = (seriesValue(after.body, 'querycraft_pool_max_connections') ?? 0);
-  const acquired = (seriesValue(after.body, 'querycraft_pool_connections', { state: 'acquired' }) ?? 0);
+  // The pool drains a beat after the last response is written, and on a loaded
+  // machine that beat can outlast this check. Poll for the drain it must reach
+  // rather than racing it; the assertion below is unchanged.
+  let acquired = (seriesValue(after.body, 'querycraft_pool_connections', { state: 'acquired' }) ?? 0);
+  const drainBy = Date.now() + 5_000;
+  while (acquired !== 0 && Date.now() < drainBy) {
+    await new Promise((done) => setTimeout(done, 100));
+    const sample = await getText(`${base}/metrics`);
+    acquired = (seriesValue(sample.body, 'querycraft_pool_connections', { state: 'acquired' }) ?? 0);
+  }
   r.check('the pool is drained afterwards', acquired === 0, acquired);
   r.check('the pool never grew past its maximum', poolMax > 0 && acquired <= poolMax, { poolMax, acquired });
 

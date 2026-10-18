@@ -1,3 +1,7 @@
+// The committed seed for the commerce dataset and its renderer. RenderSeedSQL
+// writes seed.sql from the generated rows, and TestSeedSQLUpToDate holds the
+// committed file to the output. SchemaSQL and SeedSQL return the embedded pair
+// that the template loader (template.go) and the PGlite adapter read.
 package dataset
 
 import (
@@ -34,7 +38,7 @@ func RenderSeedSQL(ds Dataset) string {
 	b.WriteString("BEGIN;\n\n")
 	for _, t := range ds.Tables {
 		b.WriteString("-- " + t.Name + " (" + strconv.Itoa(len(t.Rows)) + " rows)\n")
-		b.WriteString("INSERT INTO " + quoteIdent(SchemaName) + "." + quoteIdent(t.Name) + " (" + columnList(t) + ") VALUES\n")
+		b.WriteString("INSERT INTO " + QuoteIdent(SchemaName) + "." + QuoteIdent(t.Name) + " (" + columnList(t) + ") VALUES\n")
 		for i, row := range t.Rows {
 			b.WriteString("\t(")
 			for j, v := range row {
@@ -60,7 +64,7 @@ func RenderSeedSQL(ds Dataset) string {
 func columnList(t TableSpec) string {
 	names := make([]string, len(t.Columns))
 	for i, c := range t.Columns {
-		names[i] = quoteIdent(c.Name)
+		names[i] = QuoteIdent(c.Name)
 	}
 	return strings.Join(names, ", ")
 }

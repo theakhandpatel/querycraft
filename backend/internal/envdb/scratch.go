@@ -1,3 +1,9 @@
+// Throwaway environments for the question-generation pipeline. Scratch
+// implements the pipeline's runner interface over the Manager (manager.go) by
+// handing it an ordinary per-account environment, and Drop removes that copy.
+// Validation therefore runs under the same isolation a learner gets, on a
+// database copied from the sealed template, and never on the shared dataset or
+// the administrative connection.
 package envdb
 
 import (
@@ -5,14 +11,12 @@ import (
 	"errors"
 	"strings"
 
-	"github.com/querycraft/sqlquery/backend/internal/dataset"
 	"github.com/querycraft/sqlquery/backend/internal/engine"
 )
 
-// ScratchPrefix namespaces the throwaway environments the M4 generation
-// pipeline validates against. The colon keeps them out of the space of real
-// account ids, so a scratch environment can never collide with a learner's
-// workspace.
+// ScratchPrefix namespaces the throwaway environments the generation pipeline
+// validates against. The colon keeps them out of the space of real account ids,
+// so a scratch environment can never collide with a learner's workspace.
 const ScratchPrefix = "gen:"
 
 // Scratch implements ai.Runner: it hands the generation pipeline a throwaway
@@ -68,7 +72,7 @@ func (m *Manager) Drop(ctx context.Context, accountID string) error {
 		e.exec.Close()
 		delete(m.envs, key)
 	}
-	if err := dataset.DropDatabase(ctx, m.admin, database); err != nil {
+	if err := DropDatabase(ctx, m.admin, database); err != nil {
 		return envErr(err)
 	}
 	m.publishActiveLocked()

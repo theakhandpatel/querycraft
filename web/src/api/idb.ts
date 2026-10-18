@@ -12,7 +12,7 @@
    open that never resolves is not an acceptable outcome, so the open is raced
    against a timeout. */
 
-export const IDB_NAME = 'querycraft';
+const IDB_NAME = 'querycraft';
 /** Bumped to 2 when the offline layout was aligned with design 8.1. */
 export const IDB_VERSION = 2;
 
@@ -51,7 +51,7 @@ const OPEN_TIMEOUT_MS = 4000;
     (contracts/query-result.schema.json). It was PERSISTENCE_UNAVAILABLE, a
     client-only code outside the closed enum, which made errors.ts's claim that a
     code is "a stable contract code" false. One concept, one name. */
-export class IdbError extends Error {
+class IdbError extends Error {
   readonly code = 'PERSISTENCE_FAILED' as const;
 
   constructor(message: string, options?: { cause?: unknown }) {
@@ -207,26 +207,3 @@ export async function idbPutMany(
   });
 }
 
-export async function idbDelete(store: string, key: string): Promise<void> {
-  await run<undefined>(store, 'readwrite', (s) => s.delete(key));
-}
-
-/** Every key/value pair in a store, ordered by key. */
-export async function idbEntries<T>(store: string): Promise<Array<[string, T]>> {
-  const db = await openDatabase();
-  return new Promise<Array<[string, T]>>((resolve, reject) => {
-    let tx: IDBTransaction;
-    try {
-      tx = db.transaction(store, 'readonly');
-    } catch (cause) {
-      reject(new IdbError(`The local database could not open the "${store}" store.`, { cause }));
-      return;
-    }
-    const objectStore = tx.objectStore(store);
-    const keys = objectStore.getAllKeys();
-    const values = objectStore.getAll();
-    tx.oncomplete = () => resolve(keys.result.map((key, i) => [String(key), values.result[i] as T] as [string, T]));
-    tx.onerror = () => reject(new IdbError(`Reading the local "${store}" store failed.`, { cause: tx.error }));
-    tx.onabort = () => reject(new IdbError(`Reading the local "${store}" store was aborted.`, { cause: tx.error }));
-  });
-}

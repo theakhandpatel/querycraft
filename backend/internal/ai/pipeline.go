@@ -8,20 +8,54 @@ import (
 
 	"github.com/querycraft/sqlquery/backend/internal/ai/provider"
 	"github.com/querycraft/sqlquery/backend/internal/ai/transcript"
-	"github.com/querycraft/sqlquery/backend/internal/dataset"
 	"github.com/querycraft/sqlquery/backend/internal/engine"
 	"github.com/querycraft/sqlquery/backend/internal/eval"
 	"github.com/querycraft/sqlquery/backend/internal/schema"
 )
 
-// The §11.1 pipeline. Nothing becomes visible to a learner before activate, and
-// activate is only reached after every stage passed against a real engine.
-//
-// Stage reporting policy: the outcome always lists all nine stages in order,
-// whatever happened, and every one carries a non-empty Detail. A stage the run
-// never reached is reported as "skipped" with the reason, never omitted, so a
-// reader can tell "this check did not run" from "this check ran and passed" —
-// the two look identical in an empty list.
+/* pipeline.go runs the §11.1 generation pipeline: the policy that turns one
+ * GenerationRequest into an active artifact, or into an honest refusal.
+ *
+ * The model is an untrusted content generator. Each stage proves a property of
+ * the candidate, or stops the run with an envelope error that names the stage.
+ * The stages, in order:
+ *
+ *   1. validate_request    the learner's ask is usable (validateRequest).
+ *   2. request_bundle      one provider call returns a candidate bundle.
+ *   3. validate_artifact   the bundle obeys the policy gate (validateArtifact).
+ *   4. scratch_environment a throwaway database is created, the setup plan is
+ *                          applied, and the named dataset is checked.
+ *   5. reference_contract  the reference solution runs and satisfies its own
+ *                          result contract. The engine's rows become the
+ *                          expected result, so the grader and the verifier
+ *                          share one answer.
+ *   6. cross_check         a second, independently produced solution returns
+ *                          the same result under the same contract.
+ *   7. adversarial_fixtures deliberately wrong queries must all be rejected,
+ *                          so a passing answer cannot be a false positive.
+ *   8. repair              on a content failure, one more provider call rewrites
+ *                          the bundle, up to Limits.MaxRepairs.
+ *   9. activate            provenance is stamped, the artifact is stored as
+ *                          active, and only then is it returned.
+ *
+ * Nothing becomes visible to a learner before activate, and activate is reached
+ * only after every SQL-executing stage passed against a real engine.
+ *
+ * The run records evidence as it goes in pipeline.evidence: the scratch
+ * database name, the reference and cross-check row counts, and the fixture
+ * tally. Callers read it to audit a rejected run.
+ *
+ * Collaborators: Service owns the run and its transcript; provider.Provider
+ * supplies candidates; engine.Executor runs SQL; eval grades results;
+ * schema.Depot stores the active artifact; Runner hands out scratch
+ * environments.
+ *
+ * Stage reporting policy: a run that starts lists all nine stages in order, and
+ * every one carries a non-empty Detail. A stage the run never reached is
+ * reported as "skipped" with the reason, never omitted, so a reader can tell
+ * "this check did not run" from "this check ran and passed". The two look
+ * identical in an empty list.
+ */
 
 // stageOrder is the pipeline's fixed sequence. The repair stage sits at its
 // declared position but runs whenever a stage fails, which is why the reported
@@ -83,8 +117,8 @@ type pipeline struct {
 	currentChapter string
 	courseID       string
 	// report, when set, receives a live snapshot on every transition. It is the
-	// only reason a run can be watched at all; a pipeline with no report is the
-	// pipeline that existed before jobs did.
+	// only reason a run can be watched at all. A blocking caller attaches none,
+	// and notify() then does nothing.
 	report func(Progress)
 	// chapters is the course agent's resolved chapter report so far, in the
 	// course's order. A challenge run never sets it and publishes an empty list.
@@ -111,7 +145,7 @@ type Progress struct {
 	Attempts []schema.Attempt
 	// Planned is how many chapters the outline planned, Verified how many have
 	// passed, and Current the chapter the gateway started verifying most
-	// recently — it keeps that name until the next chapter is handed in, so a
+	// recently. It keeps that name until the next chapter is handed in, so a
 	// poller reads which chapter the run is on rather than a blank.
 	Planned        int
 	Verified       int
@@ -174,7 +208,7 @@ func (p *pipeline) watch(ctx context.Context) {
 // p.stages alone: a stage that is merely in flight has not passed or failed
 // anything, and finalize() reads that slice to write the run's final prose. If
 // begin wrote into it, a run that died mid-stage would report a stage as
-// "running" forever — a claim about a stage that never finished.
+// "running" forever, which is a claim about a stage that never finished.
 func (p *pipeline) begin(name string) {
 	if _, ok := p.index[name]; !ok {
 		return
@@ -188,12 +222,6 @@ func (p *pipeline) begin(name string) {
 // can name it rather than showing a stage called "request_bundle" for minutes.
 func (p *pipeline) setChapter(id string) {
 	p.currentChapter = id
-	p.notify()
-}
-
-// setVerified records how many chapters have verified so far.
-func (p *pipeline) setVerified(n int) {
-	p.verified = n
 	p.notify()
 }
 
@@ -224,8 +252,8 @@ func (p *pipeline) notify() {
 			stages[i].MS = engine.RoundMS(time.Since(p.currentStart))
 		case stages[i].State == schema.StateSkipped && stages[i].Detail == "":
 			// Not reached yet: the run has not stopped before this stage, it
-			// simply has not got there. "skipped" would be a lie a poller would
-			// read as a final verdict.
+			// simply has not got there. A poller would read "skipped" as a
+			// final verdict, so report the stage as queued instead.
 			stages[i].State = schema.StateQueued
 			stages[i].Detail = "queued"
 		}
@@ -255,12 +283,9 @@ func (p *pipeline) timed(name, state, detail string, start time.Time) {
 
 func (p *pipeline) outcome(status string, artifact *schema.Artifact, err *schema.Error) schema.Outcome {
 	p.finalize()
-	// An empty slice, never nil: contracts/ai.schema.json requires `stages` and
-	// `attempts` to be arrays, and encoding/json writes a nil slice as `null`.
-	stages := p.stages
-	if stages == nil {
-		stages = []schema.Stage{}
-	}
+	// An empty slice, never nil: contracts/ai.schema.json requires `attempts` to
+	// be an array, and encoding/json writes a nil slice as `null`. `stages` is
+	// always built by newPipeline, so it needs no guard.
 	attempts := p.attempts
 	if attempts == nil {
 		attempts = []schema.Attempt{}
@@ -269,7 +294,7 @@ func (p *pipeline) outcome(status string, artifact *schema.Artifact, err *schema
 		Status:   status,
 		Kind:     p.req.Kind,
 		Artifact: artifact,
-		Stages:   stages,
+		Stages:   p.stages,
 		Attempts: attempts,
 		Evidence: p.evidence,
 		Error:    err,
@@ -282,7 +307,7 @@ func (p *pipeline) outcome(status string, artifact *schema.Artifact, err *schema
 // so out loud rather than looking like a check that found nothing.
 //
 // Policy, stated once: a stage is "done" when it ran and passed, "failed" when
-// it ran and refused, and "skipped" when the run stopped before reaching it —
+// it ran and refused, and "skipped" when the run stopped before reaching it,
 // either because an earlier stage failed or because a repair was never needed.
 func (p *pipeline) finalize() {
 	stopped := ""
@@ -367,7 +392,7 @@ func (s *Service) generateRecorded(ctx context.Context, req schema.GenerationReq
 	if req.Kind == "course" {
 		return s.generateCourse(ctx, req)
 	}
-	limits := s.cfg.Limits.Merge(DefaultLimits())
+	limits := s.cfg.Limits
 	runCtx, cancel := context.WithTimeout(ctx, limits.Timeout)
 	defer cancel()
 
@@ -484,21 +509,17 @@ func (s *Service) complete(ctx context.Context, req provider.ProviderRequest) (s
 	return resp.Text, nil
 }
 
-// agentTimeout is the run-level timeout as an error, so the course agent can
-// hand it back up and the run publishes it through the same failedOutcome the
-// challenge path uses. It says the same thing timeout() says.
-func (p *pipeline) agentTimeout(last *schema.Error) *schema.Error {
+// timeout is the run-level timeout as an error, so the course agent can hand it
+// back up and the run publishes it through the same failedOutcome the challenge
+// path uses.
+func (p *pipeline) timeout(last *schema.Error) schema.Outcome {
 	stage := schema.StageRequestBundle
 	if last != nil {
 		stage = last.Stage
 	}
-	return NewError(CodeUnavailable, stage,
+	return p.failedOutcome(schema.StatusFailed, NewError(CodeUnavailable, stage,
 		fmt.Sprintf("Generation exceeded the %s time limit.", p.limits.Timeout),
-		"the run was stopped before it could finish; nothing was activated")
-}
-
-func (p *pipeline) timeout(last *schema.Error) schema.Outcome {
-	return p.failedOutcome(schema.StatusFailed, p.agentTimeout(last))
+		"the run was stopped before it could finish; nothing was activated"))
 }
 
 // exhausted turns the last content failure into the rejected outcome. The code
@@ -509,11 +530,8 @@ func (p *pipeline) timeout(last *schema.Error) schema.Outcome {
 // refused and why, so a human can act on it.
 func (p *pipeline) exhausted(last *schema.Error) schema.Outcome {
 	code := CodeRepairExhausted
-	switch last.Stage {
-	case schema.StageCrossCheck:
-		code = CodeCrossCheckFailed
-	case schema.StageReferenceContract:
-		code = CodeReferenceFailed
+	if mapped, ok := codeForStage(last.Stage); ok {
+		code = mapped
 	}
 	e := NewError(code, last.Stage,
 		fmt.Sprintf("Repairs exhausted after %d attempt(s); the challenge was rejected at the %s stage: %s",
@@ -521,6 +539,19 @@ func (p *pipeline) exhausted(last *schema.Error) schema.Outcome {
 		last.Detail)
 	p.evidence.Repairs = p.repairs
 	return p.failedOutcome(schema.StatusRejected, e)
+}
+
+// codeForStage names the envelope code for the two stages whose failure means
+// the same thing on both the challenge and the course path. A caller that maps
+// a stage differently keeps its own arm and falls back to its own code.
+func codeForStage(stage string) (string, bool) {
+	switch stage {
+	case schema.StageCrossCheck:
+		return CodeCrossCheckFailed, true
+	case schema.StageReferenceContract:
+		return CodeReferenceFailed, true
+	}
+	return "", false
 }
 
 // decodeBundle parses one provider reply. Provider output is untrusted input,
@@ -578,15 +609,14 @@ func (p *pipeline) verify(ctx context.Context, art schema.Artifact) *schema.Erro
 	return p.verifyInEnv(ctx, ex, art)
 }
 
-// verifyInEnv runs the three stages that execute SQL — reference contract,
-// cross-check, adversarial fixtures — against an environment the caller owns,
+// verifyInEnv runs the three stages that execute SQL (reference contract,
+// cross-check, adversarial fixtures) against an environment the caller owns,
 // and records what they measured in p.evidence. It is split out of verify
 // because a course verifies many exercises in one environment: the challenge
 // path creates that environment, and the course path creates it once.
 func (p *pipeline) verifyInEnv(ctx context.Context, ex engine.Executor, art schema.Artifact) *schema.Error {
-	start := time.Now()
 	contract := evalContract(art.ResultContract)
-	start = time.Now()
+	start := time.Now()
 	p.begin(schema.StageReferenceContract)
 	refQR, refErr := p.runReference(ctx, ex, art)
 	if refErr != nil {
@@ -731,18 +761,12 @@ func (p *pipeline) runStatement(ctx context.Context, ex engine.Executor, sql, st
 // reason to keep it.
 func (p *pipeline) fixtures(ctx context.Context, ex engine.Executor, art schema.Artifact, expected eval.ExpectedResult, contract eval.Contract) *schema.Error {
 	fixtures := p.defaultFixtures(art, expected)
-	if p.svc.cfg.AdversarialFixtures != nil {
-		if custom := p.svc.cfg.AdversarialFixtures(art); len(custom) > 0 {
-			fixtures = custom
-		}
-	}
 	p.evidence.FixturesTotal = len(fixtures)
 	p.evidence.FixturesRejected = 0
 	for _, fx := range fixtures {
 		resp := eval.Evaluate(ctx, ex, eval.Request{
 			SQL: fx.SQL,
 			Exercise: eval.Exercise{
-				Prompt:   art.Prompt,
 				Contract: contract,
 				Result:   &expected,
 			},
@@ -765,8 +789,8 @@ func (p *pipeline) fixtures(ctx context.Context, ex engine.Executor, art schema.
 // reject. They are composed here, from the contract and the reference text,
 // because a wrong query that depends on the bundle's own wording would not be a
 // property of the evaluator.
-func (p *pipeline) defaultFixtures(art schema.Artifact, expected eval.ExpectedResult) []Fixture {
-	fixtures := []Fixture{
+func (p *pipeline) defaultFixtures(art schema.Artifact, expected eval.ExpectedResult) []fixture {
+	fixtures := []fixture{
 		{Name: "wrong_columns", SQL: `SELECT 1 AS "ai_fixture_wrong_column"`},
 		{Name: "constant_answer", SQL: constantFixture(art.ResultContract.Columns)},
 	}
@@ -775,7 +799,7 @@ func (p *pipeline) defaultFixtures(art schema.Artifact, expected eval.ExpectedRe
 	// for it would be the fixture's bug, not the bundle's.
 	if len(expected.Rows) > 1 {
 		if body := trimTrailingSemicolon(art.ReferenceSolution); body != "" {
-			fixtures = append(fixtures, Fixture{
+			fixtures = append(fixtures, fixture{
 				Name: "limit_one",
 				SQL:  "SELECT * FROM (" + body + ") AS ai_fixture LIMIT 1",
 			})
@@ -826,14 +850,7 @@ func (p *pipeline) activate(ctx context.Context, art schema.Artifact) schema.Out
 	if art.Type == "" {
 		art.Type = "write"
 	}
-	datasetVersion := p.svc.cfg.DatasetVersion
-	if datasetVersion < 1 {
-		// The config field exists so this package need not import the dataset;
-		// when the caller leaves it zero the artifact's own claim is the most
-		// honest number available, and validateArtifact has already bounded it.
-		datasetVersion = art.Setup.SchemaVersion
-	}
-	art.Provenance = provenance(desc, datasetVersion, p.repairs)
+	art.Provenance = provenance(desc, p.svc.cfg.DatasetVersion, p.repairs)
 	p.evidence.Repairs = p.repairs
 
 	out := p.outcome(schema.StatusActive, &art, nil)
@@ -850,170 +867,4 @@ func (p *pipeline) activate(ctx context.Context, art schema.Artifact) schema.Out
 	}
 	p.timed(schema.StageActivate, schema.StateDone, "stored as active", start)
 	return out
-}
-
-/* ---------- request rendering ---------- */
-
-// requestPrompt renders the validated request for a provider. It is plain text
-// on purpose: the provider interface has no structured request, and a
-// human-readable brief is the same thing a person would be handed.
-func requestPrompt(req schema.GenerationRequest) string {
-	var b strings.Builder
-	fmt.Fprintf(&b, "Kind: %s\n", kindOrChallenge(req.Kind))
-	if req.Title != "" {
-		fmt.Fprintf(&b, "Title: %s\n", req.Title)
-	}
-	if len(req.Topics) > 0 {
-		fmt.Fprintf(&b, "Topics: %s\n", strings.Join(nonEmpty(req.Topics), ", "))
-	}
-	fmt.Fprintf(&b, "Difficulty: %s\n", req.Difficulty)
-	if req.Scenario != "" {
-		fmt.Fprintf(&b, "Scenario: %s\n", req.Scenario)
-	}
-	for _, c := range req.Constraints {
-		fmt.Fprintf(&b, "Constraint: %s\n", c)
-	}
-	fmt.Fprintf(&b, "Exercises: %d\n", req.ExerciseCount)
-	b.WriteString("Design one exercise with a reference solution, an independent cross-check solution, and a result contract.")
-	/* What the exercise will actually run against. The environment loads the
-	   dataset before a single setup statement is applied, so a model that is not
-	   told this writes `CREATE TABLE customers` and the run dies on "relation
-	   already exists" — measured, after a repair had already been spent. The
-	   allowed shapes are exactly what validateSetupStatement accepts, so the
-	   model is not being asked to guess at a rule the gate will then apply. */
-	b.WriteString(datasetBrief())
-	b.WriteString("Do not create, alter or drop these tables.")
-	b.WriteString("\nsetup.statements may only contain single CREATE TABLE or INSERT INTO statements that add extra scratch objects your exercise needs. Use an empty list when the dataset alone is enough. Do not use DROP, ALTER, UPDATE, DELETE or SET anywhere in them.")
-	return b.String()
-}
-
-// datasetBrief names the tables and columns an exercise will run against,
-// rendered from the shipped dataset rather than from a hand-written list.
-//
-// The brief used to say only "the commerce dataset", and a real model then wrote
-// `o.order_id` for a column that is `o.id`: the run passed validate_artifact and
-// the scratch environment and died at reference_contract, with the repair budget
-// already spent. A model asked to write SQL against a schema has to be handed
-// the schema; describing it here also keeps the two from drifting, since the
-// column list comes from the same source of truth the evaluator runs against.
-func datasetBrief() string {
-	tables, ok := dataset.Tables("commerce")
-	if !ok || len(tables.Tables) == 0 {
-		return ""
-	}
-	var b strings.Builder
-	b.WriteString("\n\nThe exercise runs against the commerce dataset, already loaded. Write the reference and cross-check solutions with exactly these tables and column names:\n")
-	for _, t := range tables.Tables {
-		fmt.Fprintf(&b, "  %s(", t.Name)
-		for i, c := range t.Cols {
-			if i > 0 {
-				b.WriteString(", ")
-			}
-			b.WriteString(strings.Join(nonEmpty(c), " "))
-		}
-		fmt.Fprintf(&b, ") — %d rows\n", t.Rows)
-	}
-	return b.String()
-}
-
-func requestSummary(req schema.GenerationRequest) string {
-	if req.Title != "" {
-		return fmt.Sprintf("%s (%s, %d exercises)", req.Title, req.Difficulty, req.ExerciseCount)
-	}
-	return fmt.Sprintf("%s (%s, %d exercises)", strings.Join(nonEmpty(req.Topics), ", "), req.Difficulty, req.ExerciseCount)
-}
-
-func kindOrChallenge(kind string) string {
-	if kind == "" {
-		return "challenge"
-	}
-	return kind
-}
-
-func systemPrompt() string {
-	return "You design SQL exercises over a fixed PostgreSQL commerce dataset. Reply with one JSON object and no prose. Solutions must be single read-only SELECT or WITH statements."
-}
-
-func scratchName(art schema.Artifact) string {
-	return fmt.Sprintf("ai_%016x", hashPrompt(art.ReferenceSolution))
-}
-
-func evalContract(rc schema.ResultContract) eval.Contract {
-	return eval.Contract{
-		Columns:          rc.Columns,
-		ColumnOrder:      rc.ColumnOrder,
-		RowOrder:         rc.RowOrder,
-		Duplicates:       rc.Duplicates,
-		NumericTolerance: rc.NumericTolerance,
-	}
-}
-
-func queryErrorText(res engine.QueryResult) string {
-	if res.Error == nil {
-		return res.Status
-	}
-	text := res.Error.Message
-	if res.Error.Detail != nil && *res.Error.Detail != "" {
-		text += " (" + *res.Error.Detail + ")"
-	}
-	return text
-}
-
-func trimTrailingSemicolon(sql string) string {
-	return strings.TrimRight(strings.TrimSpace(sql), ";")
-}
-
-// quoteIdent quotes a PostgreSQL identifier. It is used only for identifiers
-// that came from the server's own catalog or from our own contract, never for a
-// value; values are always passed as bind parameters.
-func quoteIdent(name string) string {
-	return `"` + strings.ReplaceAll(name, `"`, `""`) + `"`
-}
-
-// probeStrings runs one parameterised read-only probe and returns the first
-// column's values as strings. engine.Execute has no argument support, and
-// interpolating a provider-supplied dataset name into SQL would be an
-// injection, so this is a small dedicated helper. Values are formatted with
-// fmt rather than a type switch because the only probes here return integers
-// and text.
-func probeStrings(ctx context.Context, ex engine.Executor, sql string, args ...any) ([]string, error) {
-	rows, err := ex.Query(ctx, sql, args...)
-	if err != nil {
-		return nil, err
-	}
-	if rows == nil {
-		return nil, nil
-	}
-	defer rows.Close()
-	var out []string
-	for rows.Next() {
-		if len(out) >= 1024 {
-			break
-		}
-		vals, verr := rows.Values()
-		if verr != nil {
-			return nil, verr
-		}
-		if len(vals) == 0 {
-			continue
-		}
-		out = append(out, valueString(vals[0]))
-	}
-	if rerr := rows.Err(); rerr != nil {
-		return nil, rerr
-	}
-	return out, nil
-}
-
-func valueString(v any) string {
-	switch t := v.(type) {
-	case nil:
-		return ""
-	case string:
-		return t
-	case []byte:
-		return string(t)
-	default:
-		return fmt.Sprintf("%v", t)
-	}
 }

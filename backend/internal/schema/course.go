@@ -2,6 +2,13 @@ package schema
 
 import "time"
 
+/* Course plans and their persistence record. The generation pipeline writes a
+ * CoursePlan (chapters of markdown and exercises); CourseRecord pairs that plan
+ * with the outcome that admitted it, the way Record does for a challenge.
+ * ChapterResult and ExerciseResult are the verification report the pipeline
+ * returns, and ExpectedResult is the engine's own answer kept per exercise.
+ */
+
 /* ---------- the course plan ---------- */
 
 // CoursePlan is a whole course as the service will store it. ID, Version and
@@ -77,8 +84,8 @@ type ExpectedResult struct {
 // Status is the chapter's own verdict and is not the same statement as its
 // exercises': a chapter is verified only when every exercise in it passed,
 // dropped when it could not be repaired, and skipped when the run ended before
-// it was written. A chapter is never partly verified — verification is what
-// decides whether it is kept at all.
+// it was written. A chapter is never partly verified: verification decides
+// whether it is kept at all.
 type ChapterResult struct {
 	ID        string           `json:"id"`
 	Title     string           `json:"title"`

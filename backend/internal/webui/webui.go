@@ -19,9 +19,10 @@ import (
 //go:embed all:dist
 var dist embed.FS
 
-// sub is the embedded tree rooted at dist/. It is nil if the embed layout is
-// somehow unreadable, which Available and the handlers treat as "no SPA".
-var sub, subErr = fs.Sub(dist, "dist")
+// sub is the embedded tree rooted at dist/. The committed .gitkeep keeps the
+// directory present so fs.Sub cannot fail; a binary built without a frontend
+// has no index.html, which Available reports as "no SPA".
+var sub, _ = fs.Sub(dist, "dist")
 
 // indexFile is the SPA entry point inside the embedded tree.
 const indexFile = "index.html"
@@ -84,12 +85,8 @@ func Placeholder() http.Handler {
 	})
 }
 
-// distFS returns the embedded subtree, or an empty FS if the embed is broken
-// so http.FileServer can be constructed safely.
+// distFS returns the embedded subtree rooted at dist/.
 func distFS() fs.FS {
-	if subErr != nil || sub == nil {
-		return emptyFS{}
-	}
 	return sub
 }
 
@@ -119,10 +116,6 @@ func cleanPath(p string) (string, bool) {
 	}
 	return path.Clean("/" + p), true
 }
-
-type emptyFS struct{}
-
-func (emptyFS) Open(string) (fs.File, error) { return nil, fs.ErrNotExist }
 
 const placeholderHTML = `<!DOCTYPE html>
 <html lang="en">

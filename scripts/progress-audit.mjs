@@ -12,7 +12,7 @@
  */
 import { createRequire } from 'node:module';
 const require = createRequire('/tmp/');
-const p = require('/tmp/progress.cjs');
+const p = require('/tmp/progress-for-progress.cjs');
 
 let failed = 0;
 function check(name, cond, detail) {

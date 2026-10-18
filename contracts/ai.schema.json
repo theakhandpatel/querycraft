@@ -101,7 +101,6 @@
       "properties": {
         "id": { "type": "string" },
         "version": { "type": "integer", "minimum": 1 },
-        "lesson_id": { "type": "string" },
         "dialect": { "enum": ["postgresql"] },
         "type": { "enum": ["complete", "write", "modify", "predict", "fix", "combine", "solve"] },
         "title": { "type": "string" },
@@ -174,7 +173,6 @@
         "scenario": { "type": "string" },
         "constraints": { "type": "array", "items": { "type": "string" } },
         "exercise_count": { "type": "integer", "minimum": 1, "maximum": 40 },
-        "steps": { "type": "array", "items": { "type": "string" } },
         "require_approval": { "type": "boolean" }
       }
     },

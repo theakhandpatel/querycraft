@@ -18,7 +18,7 @@
  */
 import type { ContentSection } from '../types';
 
-export interface ContentRow {
+interface ContentRow {
   course_id: string;
   module_id: string;
   ordinal: number;
@@ -29,7 +29,7 @@ export interface ContentRow {
 /** Key in `app.content_meta` holding the fingerprint of the seeded bundle. */
 export const CONTENT_FINGERPRINT_KEY = 'content_fingerprint';
 
-export interface StoredContent {
+interface StoredContent {
   /** The fingerprint recorded when the rows were last written, or null. */
   fingerprint: string | null;
   /** The module ids the database currently holds. */
@@ -100,7 +100,7 @@ export function contentFingerprint(bundled: Record<string, ContentSection[]>): s
 }
 
 /** Every row the bundle should produce. */
-export function contentRows(bundled: Record<string, ContentSection[]>): ContentRow[] {
+function contentRows(bundled: Record<string, ContentSection[]>): ContentRow[] {
   const rows: ContentRow[] = [];
   for (const moduleId of Object.keys(bundled).sort()) {
     const courseId = courseForModule(moduleId);

@@ -23,25 +23,25 @@ import Ajv2020 from 'ajv/dist/2020';
 import exportSchema from '../../../contracts/export.schema.json';
 import type { EventKind, NoteItem, Progress, ProgressEvent, SavedItem } from '../types';
 import { EXPORT_FORMAT_VERSION, type ExportBundle } from './exportBundle';
-import { PROGRESS_VERSION, attemptKey, emptyProgress } from './progress';
+import { PROGRESS_VERSION, attemptKey } from './progress';
 
 /* ---------- validation ---------- */
 
-export type ImportErrorCode =
+type ImportErrorCode =
   | 'INVALID_JSON'
   | 'NOT_A_DOCUMENT'
   | 'UNKNOWN_FORMAT_VERSION'
   | 'UNSUPPORTED_PROGRESS_VERSION'
   | 'MALFORMED_DOCUMENT';
 
-export interface ImportFailure {
+interface ImportFailure {
   ok: false;
   code: ImportErrorCode;
   /** Written for a person: says what was wrong and what this build accepts. */
   message: string;
 }
 
-export interface ImportCounts {
+interface ImportCounts {
   attempts: number;
   notes: number;
   bookmarks: number;
@@ -51,7 +51,7 @@ export interface ImportCounts {
   alreadyPresent: number;
 }
 
-export interface ImportSuccess {
+interface ImportSuccess {
   ok: true;
   progress: Progress;
   drafts: Record<string, string>;
@@ -133,7 +133,7 @@ export function readImport(text: string): { ok: true; bundle: ExportBundle } | I
 const ATTEMPT_KINDS: ReadonlySet<EventKind> = new Set<EventKind>(['passed', 'failed', 'accepted', 'error']);
 
 /** Nothing the learner produced: the merge of an import into it is the import. */
-export function isEmptyProgress(p: Progress): boolean {
+function isEmptyProgress(p: Progress): boolean {
   return (
     p.events.length === 0 &&
     p.notes.length === 0 &&
@@ -179,7 +179,7 @@ function unionDays(a: number[], b: number[]): number[] {
   return out;
 }
 
-export interface MergeResult {
+interface MergeResult {
   progress: Progress;
   counts: ImportCounts;
 }
@@ -192,7 +192,7 @@ export interface MergeResult {
  * per workbook item and per saved query. Nothing is overwritten and nothing is
  * removed, so the operation is commutative in effect and idempotent in practice.
  */
-export function mergeProgress(current: Progress, incoming: Progress): MergeResult {
+function mergeProgress(current: Progress, incoming: Progress): MergeResult {
   const fresh = isEmptyProgress(current);
 
   const seenEvents = new Set(current.events.map(attemptKey));
@@ -265,7 +265,7 @@ export function mergeProgress(current: Progress, incoming: Progress): MergeResul
  * screen right now is the learner's latest, so an import only fills cells that
  * have no draft yet.
  */
-export function mergeDrafts(
+function mergeDrafts(
   current: Record<string, string>,
   incoming: Record<string, string>,
 ): { drafts: Record<string, string>; filled: number } {
@@ -303,9 +303,4 @@ export function describeImport(result: ImportSuccess): string {
   }
   const skipped = result.counts.alreadyPresent ? `, ${result.counts.alreadyPresent} already present` : '';
   return `Imported ${parts.join(', ')}${skipped}. Nothing was overwritten.`;
-}
-
-/** The workbook's empty-state text, kept next to the counts it describes. */
-export function emptyImportState(): Progress {
-  return emptyProgress();
 }

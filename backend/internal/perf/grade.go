@@ -64,7 +64,7 @@ type Verdict struct {
 
 // Grade decides whether a captured plan does the work the contract asked for.
 //
-// Every assertion below reads Summary — node types, relations, index names and
+// Every assertion below reads Summary: node types, relations, index names and
 // the planner's own row estimate. Nothing here reads actual_time_ms,
 // duration_ms or any other timing, because M5 reports timings honestly and
 // ungraded (docs/m5-implementation-plan.md, "Why evaluation comes before
@@ -196,6 +196,8 @@ func nodeMatches(node *PlanNode, want PerfRequireNode) bool {
 	return true
 }
 
+// engineName names the bundle's engine in a failure label, so a mismatch reads
+// "Runs on postgresql (got an unknown engine)" when the bundle left it blank.
 func engineName(engine string) string {
 	if engine == "" {
 		return "an unknown engine"
@@ -203,6 +205,8 @@ func engineName(engine string) string {
 	return engine
 }
 
+// relationClause appends " on <relation>" to a label, or nothing when the
+// assertion names no relation.
 func relationClause(relation *string) string {
 	if relation == nil {
 		return ""
@@ -210,6 +214,8 @@ func relationClause(relation *string) string {
 	return " on " + *relation
 }
 
+// requireLabel is the human sentence for a missing node, preferring the
+// contract's own label when it sets one.
 func requireLabel(want PerfRequireNode) string {
 	if want.Label != nil {
 		return *want.Label
@@ -217,6 +223,8 @@ func requireLabel(want PerfRequireNode) string {
 	return "Plan contains a " + want.NodeType + " node" + relationClause(want.Relation)
 }
 
+// forbidLabel is the human sentence for a forbidden node, preferring the
+// contract's own label and naming the threshold when it sets one.
 func forbidLabel(forbid PerfForbidNode, threshold float64) string {
 	if forbid.Label != nil {
 		return *forbid.Label

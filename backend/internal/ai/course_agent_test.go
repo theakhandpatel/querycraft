@@ -3,10 +3,15 @@ package ai
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"strings"
+	"sync"
 	"testing"
 	"time"
+
+	"github.com/sky-valley/pi/agent"
+	"github.com/sky-valley/pi/ai"
 
 	"github.com/querycraft/sqlquery/backend/internal/ai/provider"
 	"github.com/querycraft/sqlquery/backend/internal/schema"
@@ -25,14 +30,17 @@ import (
  * nothing verified is refused and stores nothing, and a model that loops is
  * bounded by the round budget. */
 
-// scriptedAgent answers the outline call and then replays a queue of scripted
-// turns, one per tool-calling request. It records every request, which is how a
-// test reads the conversation the gateway actually had — including the tool
-// results it sent back.
+// scriptedAgent answers the outline call through provider.Provider and scripts
+// the chapter conversation for pi's loop. The conversation requests are
+// recorded, which is how a test reads the conversation the gateway actually
+// had — including the tool results it sent back.
 type scriptedAgent struct {
 	outline string
 	steps   []provider.ProviderResponse
 	calls   []provider.ProviderRequest
+
+	mu     sync.Mutex
+	stream []ai.TranscriptContext
 }
 
 func (a *scriptedAgent) Descriptor() provider.ProviderDescriptor {
@@ -41,40 +49,130 @@ func (a *scriptedAgent) Descriptor() provider.ProviderDescriptor {
 
 func (a *scriptedAgent) Complete(_ context.Context, req provider.ProviderRequest) (provider.ProviderResponse, error) {
 	a.calls = append(a.calls, req)
-	if len(req.Tools) == 0 {
-		return provider.ProviderResponse{Text: a.outline, Provider: "scripted", Model: "scripted-agent-v1", FinishReason: "stop"}, nil
-	}
-	if len(a.steps) == 0 {
-		// Nothing scripted left: a plain reply, which the loop answers with a
-		// nudge rather than by inventing a tool call.
-		return provider.ProviderResponse{Text: "I am done.", Provider: "scripted", Model: "scripted-agent-v1", FinishReason: "stop"}, nil
-	}
-	step := a.steps[0]
-	a.steps = a.steps[1:]
-	step.Provider, step.Model = "scripted", "scripted-agent-v1"
-	return step, nil
+	// Only the outline phase still speaks provider.Provider: the outline is one
+	// structured answer with no tool calls in it.
+	return provider.ProviderResponse{Text: a.outline}, nil
 }
 
-// agentCalls is every tool-calling request the provider saw, in order.
-func (a *scriptedAgent) agentCalls() []provider.ProviderRequest {
-	var out []provider.ProviderRequest
-	for _, req := range a.calls {
-		if len(req.Tools) > 0 {
-			out = append(out, req)
+// streamedProvider serves a scripted course stream in place of the wrapped
+// provider's own: tests that observe or interrupt the conversation use it.
+type streamedProvider struct {
+	provider.Provider
+	stream agent.StreamFn
+}
+
+func (p streamedProvider) Course() provider.CourseCapability {
+	return provider.CourseCapability{
+		Model:    &ai.Model{ID: "scripted-agent-v1", Name: "scripted-agent-v1", Provider: "scripted"},
+		Key:      func(string) string { return "" },
+		StreamFn: p.stream,
+	}
+}
+
+// Course implements provider.CourseProvider: the scripted agent serves its
+// own chapter stream, so tests need no side-channel wiring.
+func (a *scriptedAgent) Course() provider.CourseCapability {
+	return provider.CourseCapability{
+		Model:    &ai.Model{ID: "scripted-agent-v1", Name: "scripted-agent-v1", Provider: "scripted"},
+		Key:      func(string) string { return "" },
+		StreamFn: a.streamFn(),
+	}
+}
+
+// streamFn scripts the chapter conversation: each scripted step becomes one
+// assistant turn, and after the steps are spent the model answers with a plain
+// closing turn, which the agent's own turn policy answers with a bounded nudge
+// rather than by inventing a tool call.
+func (a *scriptedAgent) streamFn() agent.StreamFn {
+	msgs := make([]*ai.AssistantMessage, 0, len(a.steps)+1)
+	for _, step := range a.steps {
+		content := ai.ContentList{}
+		for _, tc := range step.ToolCalls {
+			var args map[string]any
+			_ = json.Unmarshal([]byte(tc.Function.Arguments), &args)
+			content = append(content, ai.ToolCall{
+				ID:        tc.ID,
+				Name:      tc.Function.Name,
+				Arguments: args,
+			})
 		}
+		if step.Text != "" {
+			content = append(content, ai.TextContent{Text: step.Text})
+		}
+		reason := ai.StopToolUse
+		if len(step.ToolCalls) == 0 {
+			reason = ai.StopStop
+		}
+		msgs = append(msgs, &ai.AssistantMessage{Content: content, StopReason: reason, Model: "scripted-agent-v1"})
 	}
-	return out
+	msgs = append(msgs, &ai.AssistantMessage{
+		Content:    ai.ContentList{ai.TextContent{Text: "I am done."}},
+		StopReason: ai.StopStop,
+		Model:      "scripted-agent-v1",
+	})
+	idx := 0
+	return func(ctx context.Context, model *ai.Model, req ai.TranscriptContext, opts *ai.SimpleStreamOptions) *ai.AssistantMessageEventStream {
+		if err := ctx.Err(); err != nil {
+			// The run budget ended: abort the way a real provider does.
+			return ai.ErrorStream(model, err)
+		}
+		a.mu.Lock()
+		a.stream = append(a.stream, req)
+		var msg *ai.AssistantMessage
+		if idx < len(msgs) {
+			msg = msgs[idx]
+			idx++
+		} else {
+			msg = msgs[len(msgs)-1]
+		}
+		a.mu.Unlock()
+		s := ai.NewAssistantMessageEventStream()
+		go func() {
+			s.Push(ai.AssistantMessageEvent{Type: ai.EventStart, Partial: &ai.AssistantMessage{}})
+			s.Push(ai.AssistantMessageEvent{Type: ai.EventDone, Reason: msg.StopReason, Message: msg})
+			s.End()
+		}()
+		return s
+	}
 }
 
-// lastToolMessages is the tool results the gateway sent on one turn.
-func lastToolMessages(req provider.ProviderRequest) []string {
+// agentCalls is every chapter-conversation request pi's loop made, in order.
+func (a *scriptedAgent) agentCalls() []ai.TranscriptContext {
+	a.mu.Lock()
+	defer a.mu.Unlock()
+	return append([]ai.TranscriptContext(nil), a.stream...)
+}
+
+// lastToolMessages is the tool results the gateway sent on one turn: the
+// verdicts the model writes its next turn against.
+func lastToolMessages(req ai.TranscriptContext) []string {
 	var out []string
 	for _, m := range req.Messages {
-		if m.Role == "tool" && m.ToolCallID != "" {
-			out = append(out, m.Content)
+		if tr, ok := m.(ai.ToolResultMessage); ok {
+			out = append(out, textFromContent(tr.Content))
 		}
 	}
 	return out
+}
+
+// joinMessageText is every message's text, in order, for assertions that read
+// the whole conversation.
+func joinMessageText(req ai.TranscriptContext) string {
+	var b strings.Builder
+	for _, m := range req.Messages {
+		switch msg := m.(type) {
+		case ai.UserMessage:
+			b.WriteString(textFromContent(msg.Content))
+		case ai.AssistantMessage:
+			b.WriteString(textFromContent(msg.Content))
+		case ai.ToolResultMessage:
+			b.WriteString(textFromContent(msg.Content))
+		case ai.SystemMessage:
+			b.WriteString(textFromContent(msg.Content))
+		}
+		b.WriteString("\n")
+	}
+	return b.String()
 }
 
 // saveChapterCall scripts one save_chapter turn.
@@ -87,10 +185,8 @@ func saveChapterCall(t *testing.T, ch schema.CourseChapter) provider.ProviderRes
 	return provider.ProviderResponse{
 		ToolCalls: []provider.ToolCall{{
 			ID:       "call_" + ch.ID,
-			Type:     "function",
 			Function: provider.ToolCallFunction{Name: toolSaveChapter, Arguments: string(args)},
 		}},
-		FinishReason: "tool_calls",
 	}
 }
 
@@ -100,10 +196,8 @@ func saveChapterArgs(id, args string) provider.ProviderResponse {
 	return provider.ProviderResponse{
 		ToolCalls: []provider.ToolCall{{
 			ID:       "call_" + id,
-			Type:     "function",
 			Function: provider.ToolCallFunction{Name: toolSaveChapter, Arguments: args},
 		}},
-		FinishReason: "tool_calls",
 	}
 }
 
@@ -111,10 +205,8 @@ func finishCourseCall() provider.ProviderResponse {
 	return provider.ProviderResponse{
 		ToolCalls: []provider.ToolCall{{
 			ID:       "call_finish_course",
-			Type:     "function",
 			Function: provider.ToolCallFunction{Name: toolFinishCourse, Arguments: `{"summary":"done"}`},
 		}},
-		FinishReason: "tool_calls",
 	}
 }
 
@@ -514,7 +606,6 @@ func TestACourseIsStoredWhileItsLaterChaptersAreStillBeingWritten(t *testing.T) 
 		outline: outlineFor(t, plan),
 		steps:   []provider.ProviderResponse{saveChapterCall(t, plan.Chapters[0]), saveChapterCall(t, plan.Chapters[1]), finishCourseCall()},
 	}
-	svc := testService(agent, depot, ex)
 
 	// A closure that reads the store at the moment the second chapter is being
 	// handed in — that is the moment the first chapter is on disk and the
@@ -524,7 +615,7 @@ func TestACourseIsStoredWhileItsLaterChaptersAreStillBeingWritten(t *testing.T) 
 		seenFound bool
 		seenAt    int
 	)
-	svc.cfg.Provider = &observingAgent{inner: agent, onTurn: func(turn int) {
+	watched := streamedProvider{Provider: agent, stream: observingStream(agent.streamFn(), func(turn int) {
 		if turn != 2 {
 			return
 		}
@@ -535,7 +626,8 @@ func TestACourseIsStoredWhileItsLaterChaptersAreStillBeingWritten(t *testing.T) 
 		seen = recs[0]
 		seenFound = true
 		seenAt = turn
-	}}
+	})}
+	svc := testService(watched, depot, ex)
 
 	out := svc.GenerateCourse(ctx, exerciseTitleRequest("A course written while you watch"))
 	if out.Status != schema.StatusActive {
@@ -619,11 +711,15 @@ func TestAChapterThatNeverVerifiesIsDroppedAndTheRestIsKept(t *testing.T) {
 		t.Fatalf("the dropped chapter names no failing exercise: %+v", dropped.Exercises)
 	}
 	// The model was told the chapter was dropped, not asked to repair it
-	// again: the verdict on the third write is a drop, and the turn after it
-	// carries that drop rather than another refusal.
+	// again: the last verdict the model saw before it closed is the drop. The
+	// close itself ends the run (finish_course terminates the loop), so the
+	// close request is the last one the conversation ever made.
 	turns := agent.agentCalls()
-	last := turns[len(turns)-1]
-	told := lastToolMessages(last)[len(lastToolMessages(last))-1]
+	if len(turns) == 0 {
+		t.Fatal("the conversation never entered the chapter loop")
+	}
+	saw := lastToolMessages(turns[len(turns)-1])
+	told := saw[len(saw)-1]
 	if !strings.Contains(told, `"status":"dropped"`) {
 		t.Fatalf("the model was never told the chapter was dropped: %s", told)
 	}
@@ -680,8 +776,8 @@ func TestACourseWithNoVerifiedChapterIsRefusedAndNothingIsStored(t *testing.T) {
 }
 
 // TestTheRunBudgetEndsAStuckLoop: a model that never writes a chapter it was
-// asked for ends the run at the round budget instead of looping forever. The
-// course is refused because nothing verified, and nothing is stored.
+// asked for ends the run at the run budget instead of looping forever. The run
+// failed, nothing verified, so the row is removed rather than left behind.
 func TestTheRunBudgetEndsAStuckLoop(t *testing.T) {
 	ex := bootPG(t)
 	ctx := testContext(t)
@@ -689,16 +785,54 @@ func TestTheRunBudgetEndsAStuckLoop(t *testing.T) {
 	plan := coursePlanFixture()
 	agent := &scriptedAgent{outline: outlineFor(t, plan)}
 	// Every turn asks to save a chapter the outline never named. Nothing is
-	// ever verified, so only the round budget can end this.
+	// ever verified, so only the run budget can end this.
 	agent.steps = nil
-	svc := testService(&loopingAgent{scriptedAgent: agent}, depot, ex)
+	svc := NewService(Config{
+		Provider: streamedProvider{Provider: agent, stream: func(ctx context.Context, model *ai.Model, req ai.TranscriptContext, opts *ai.SimpleStreamOptions) *ai.AssistantMessageEventStream {
+			if err := ctx.Err(); err != nil {
+				// The run budget ended: abort the way a real provider does.
+				return ai.ErrorStream(model, err)
+			}
+			agent.mu.Lock()
+			agent.stream = append(agent.stream, req)
+			agent.mu.Unlock()
+			msg := &ai.AssistantMessage{
+				Content: ai.ContentList{ai.ToolCall{
+					ID:   "call_loop",
+					Name: toolSaveChapter,
+					Arguments: map[string]any{
+						"id": "not-in-the-outline",
+					},
+				}},
+				StopReason: ai.StopToolUse,
+				Model:      "scripted-agent-v1",
+			}
+			s := ai.NewAssistantMessageEventStream()
+			go func() {
+				s.Push(ai.AssistantMessageEvent{Type: ai.EventStart, Partial: &ai.AssistantMessage{}})
+				s.Push(ai.AssistantMessageEvent{Type: ai.EventDone, Reason: msg.StopReason, Message: msg})
+				s.End()
+			}()
+			return s
+		}},
+		Depot:          depot,
+		Runner:         providedRunner{exec: ex},
+		DatasetVersion: 1,
+		// pi owns the turn count; the run budget is the clock. A half-second
+		// budget is many turns for a scripted loop that costs nothing, and the
+		// deadline, not the loop, is what ends it.
+		Limits: Limits{Timeout: 500 * time.Millisecond},
+	})
 
 	out := svc.GenerateCourse(ctx, exerciseTitleRequest("A model that will not write a chapter"))
-	if out.Status != schema.StatusRejected {
-		t.Fatalf("status = %q, want %q (error = %+v)", out.Status, schema.StatusRejected, out.Error)
+	if out.Status != schema.StatusFailed {
+		t.Fatalf("status = %q, want %q (error = %+v)", out.Status, schema.StatusFailed, out.Error)
 	}
-	if got := len(agent.agentCalls()); got != maxAgentRounds {
-		t.Fatalf("tool-calling turns = %d, want the budget of %d", got, maxAgentRounds)
+	if out.Error == nil || out.Error.Code != CodeUnavailable {
+		t.Fatalf("the spent budget must name the run ending: %+v", out.Error)
+	}
+	if got := len(agent.agentCalls()); got < 2 {
+		t.Fatalf("tool-calling turns = %d, want the loop to have run at least twice before the budget ended it", got)
 	}
 	if n := depot.courseCount(); n != 0 {
 		t.Fatalf("a run that verified nothing left %d record(s) stored", n)
@@ -712,7 +846,9 @@ func TestTheRunBudgetEndsAStuckLoop(t *testing.T) {
 
 // TestASaveChapterWithUnusableArgumentsIsAnsweredNotCrashing: provider output is
 // untrusted input, so a call the gateway cannot read is a tool result the model
-// can repair against rather than a panic or an empty turn.
+// can repair against rather than a panic or an empty turn. The schema gate now
+// sits in pi's loop, which answers before our tool ever runs; the promise is
+// the same.
 func TestASaveChapterWithUnusableArgumentsIsAnsweredNotCrashing(t *testing.T) {
 	ex := bootPG(t)
 	ctx := testContext(t)
@@ -720,7 +856,7 @@ func TestASaveChapterWithUnusableArgumentsIsAnsweredNotCrashing(t *testing.T) {
 	agent := &scriptedAgent{
 		outline: outlineFor(t, plan),
 		steps: []provider.ProviderResponse{
-			saveChapterArgs("garbage", "this is not json"),
+			saveChapterArgs("garbage", `{"id":"gen.ch1","sections":42,"exercises":[]}`),
 			saveChapterCall(t, plan.Chapters[0]),
 			finishCourseCall(),
 		},
@@ -733,8 +869,8 @@ func TestASaveChapterWithUnusableArgumentsIsAnsweredNotCrashing(t *testing.T) {
 		t.Fatal("the gateway never entered the chapter conversation")
 	}
 	answered := strings.Join(lastToolMessages(turns[1]), "\n")
-	if !strings.Contains(answered, `"status":"invalid"`) {
-		t.Fatalf("unreadable arguments were not reported back as invalid: %s", answered)
+	if !strings.Contains(answered, "save_chapter") || !strings.Contains(answered, "Validation failed") {
+		t.Fatalf("unreadable arguments were not answered with the tool's own validation error: %s", answered)
 	}
 	if out.Status != schema.StatusActive {
 		t.Fatalf("status = %q, want the course to continue after the bad call (%+v)", out.Status, out.Error)
@@ -749,43 +885,17 @@ func exerciseTitleRequest(title string) schema.GenerationRequest {
 	return schema.GenerationRequest{Title: title, Difficulty: schema.Intermediate}
 }
 
-// observingAgent wraps a scripted agent and calls onTurn before each
-// tool-calling request, which is how a test reads the store mid-run.
-type observingAgent struct {
-	inner  provider.Provider
-	onTurn func(turn int)
-	turn   int
-}
-
-func (a *observingAgent) Descriptor() provider.ProviderDescriptor { return a.inner.Descriptor() }
-
-func (a *observingAgent) Complete(ctx context.Context, req provider.ProviderRequest) (provider.ProviderResponse, error) {
-	if len(req.Tools) > 0 {
-		a.turn++
-		if a.onTurn != nil {
-			a.onTurn(a.turn)
+// observingStream wraps a StreamFn and calls onTurn before each turn's
+// request, which is how a test reads the store mid-run.
+func observingStream(inner agent.StreamFn, onTurn func(turn int)) agent.StreamFn {
+	turn := 0
+	return func(ctx context.Context, model *ai.Model, req ai.TranscriptContext, opts *ai.SimpleStreamOptions) *ai.AssistantMessageEventStream {
+		turn++
+		if onTurn != nil {
+			onTurn(turn)
 		}
+		return inner(ctx, model, req, opts)
 	}
-	return a.inner.Complete(ctx, req)
-}
-
-// loopingAgent always asks to save a chapter the outline never named, so no
-// chapter is ever resolved.
-type loopingAgent struct{ *scriptedAgent }
-
-func (a *loopingAgent) Complete(_ context.Context, req provider.ProviderRequest) (provider.ProviderResponse, error) {
-	a.calls = append(a.calls, req)
-	if len(req.Tools) == 0 {
-		return provider.ProviderResponse{Text: a.outline, FinishReason: "stop"}, nil
-	}
-	return provider.ProviderResponse{
-		ToolCalls: []provider.ToolCall{{
-			ID:       "call_unknown",
-			Type:     "function",
-			Function: provider.ToolCallFunction{Name: toolSaveChapter, Arguments: `{"id":"not-in-the-outline"}`},
-		}},
-		FinishReason: "tool_calls",
-	}, nil
 }
 
 // chapterIDsOf names the chapters of a plan, for a failure message.
@@ -833,13 +943,15 @@ func TestTheOutlinePhaseStopsAwaitingApproval(t *testing.T) {
 		t.Fatalf("provider calls = %d, want exactly the outline ask", len(agent.calls))
 	}
 
-	// The stored row is a building course carrying the outline's chapters.
+	// The stored row is a paused course carrying the outline's chapters. It is
+	// not `building`: a pause must be distinguishable from a live run and from
+	// a crash, or a reload cannot tell what happened.
 	rec, found, err := depot.Course(testContext(t), out.Plan.ID)
 	if err != nil || !found {
 		t.Fatalf("the paused run stored nothing: found = %v err = %v", found, err)
 	}
-	if rec.Status != schema.StatusBuilding {
-		t.Fatalf("the stored course is %q, want %q", rec.Status, schema.StatusBuilding)
+	if rec.Status != schema.StatusAwaitingApproval {
+		t.Fatalf("the stored course is %q, want %q", rec.Status, schema.StatusAwaitingApproval)
 	}
 	if len(rec.Plan.Chapters) != len(plan.Chapters) {
 		t.Fatalf("the stored course has %d chapters, want the %d the outline planned", len(rec.Plan.Chapters), len(plan.Chapters))
@@ -899,7 +1011,7 @@ func TestApprovingAPausedCourseRunsTheChapterPhase(t *testing.T) {
 	if len(turns) == 0 {
 		t.Fatal("approving the course never entered the chapter conversation")
 	}
-	if !strings.Contains(turns[0].Messages[1].Content, req.Title) {
+	if um, ok := turns[0].Messages[1].(ai.UserMessage); !ok || !strings.Contains(textFromContent(um.Content), req.Title) {
 		t.Errorf("the resumed prompt does not carry the learner's goal %q", req.Title)
 	}
 	// Every stored chapter carries its measured rows.
@@ -969,10 +1081,7 @@ func TestAnAlreadyVerifiedChapterIsNotAskedForAgain(t *testing.T) {
 	}
 	// The opening turn names the already-stored chapter so the model does not
 	// write it again.
-	joined := ""
-	for _, m := range calls[0].Messages {
-		joined += m.Content
-	}
+	joined := joinMessageText(calls[0])
 	if !strings.Contains(joined, verified.ID) {
 		t.Errorf("the resumed conversation does not say chapter %s is already stored", verified.ID)
 	}
@@ -1010,53 +1119,140 @@ func TestBuildRefusesAnUnknownCourse(t *testing.T) {
 	}
 }
 
-// TestALegacyRecordWithoutARequestIsStillBuildable: a course stored before the
-// request was persisted has none, and the resume must still work — the goal is
-// recovered from the plan's title and the rest is left at its defaults rather
-// than invented.
-func TestALegacyRecordWithoutARequestIsStillBuildable(t *testing.T) {
+// TestAHardFailureWithNoChapterRemovesTheRow: a run that dies before anything
+// is written leaves no row behind. The outline it stored is deleted, the same
+// rule a refusal follows, so the library cannot keep listing a ghost.
+func TestAHardFailureWithNoChapterRemovesTheRow(t *testing.T) {
+	ctx := testContext(t)
+	depot := newTestDepot()
+	agent := &scriptedAgent{outline: outlineFor(t, coursePlanFixture())}
+	// The scratch environment cannot be opened, so the chapter phase dies
+	// before it writes anything.
+	svc := NewService(Config{
+		Provider:       agent,
+		Depot:          depot,
+		Runner:         failingRunner{},
+		DatasetVersion: 1,
+	})
+
+	out := svc.GenerateCourse(ctx, exerciseTitleRequest("A course whose database never came up"))
+	if out.Status != schema.StatusFailed {
+		t.Fatalf("status = %q, want %q (error = %+v)", out.Status, schema.StatusFailed, out.Error)
+	}
+	if n := depot.courseCount(); n != 0 {
+		t.Fatalf("a run that wrote nothing left %d course(s) stored", n)
+	}
+}
+
+// TestAHardFailureAfterAChapterKeepsItInterrupted: the chapters that verified
+// are real work, so the row survives as `interrupted`, the state the build
+// route resumes, rather than a `building` ghost that looks live forever.
+func TestAHardFailureAfterAChapterKeepsItInterrupted(t *testing.T) {
 	ex := bootPG(t)
 	ctx := testContext(t)
 	depot := newTestDepot()
 	plan := coursePlanFixture()
-	plan.ID = "course-legacy-no-request"
-	rec := schema.CourseRecord{
-		Plan:      plan,
-		Status:    schema.StatusBuilding,
-		CreatedAt: time.Now().UTC(),
-		Outcome:   schema.Outcome{Status: schema.StatusBuilding, Kind: "course", Plan: &plan, Chapters: []schema.ChapterResult{}},
+	agent := &scriptedAgent{
+		outline: outlineFor(t, plan),
+		steps:   []provider.ProviderResponse{saveChapterCall(t, plan.Chapters[0])},
 	}
-	if err := depot.SaveCourse(ctx, rec); err != nil {
-		t.Fatalf("seed the legacy course: %v", err)
-	}
-	steps := make([]provider.ProviderResponse, 0, len(plan.Chapters)+1)
-	for _, ch := range plan.Chapters {
-		steps = append(steps, saveChapterCall(t, ch))
-	}
-	steps = append(steps, finishCourseCall())
-	agent := &scriptedAgent{steps: steps}
-	svc := testService(agent, depot, ex)
+	// The first turn delivers the first chapter; the next one dies, which is
+	// the shape of a provider connection that drops mid-run.
+	inner := agent.streamFn()
+	turns := 0
+	dying := streamedProvider{Provider: agent, stream: func(ctx context.Context, model *ai.Model, req ai.TranscriptContext, opts *ai.SimpleStreamOptions) *ai.AssistantMessageEventStream {
+		turns++
+		if turns > 1 {
+			return ai.ErrorStream(model, errors.New("the provider connection dropped"))
+		}
+		return inner(ctx, model, req, opts)
+	}}
+	svc := testService(dying, depot, ex)
 
-	built := svc.BuildCourse(ctx, plan.ID)
-	if built.Status != schema.StatusActive {
-		t.Fatalf("status = %q, want %q (error = %+v)", built.Status, schema.StatusActive, built.Error)
+	out := svc.GenerateCourse(ctx, exerciseTitleRequest("A course cut off mid-write"))
+	if out.Status != schema.StatusFailed {
+		t.Fatalf("status = %q, want %q (error = %+v)", out.Status, schema.StatusFailed, out.Error)
 	}
-	req := requestFromRecord(rec)
-	if req.Title != plan.Title {
-		t.Errorf("a legacy record's goal = %q, want the plan title %q", req.Title, plan.Title)
+	recs, err := depot.Courses(ctx)
+	if err != nil || len(recs) != 1 {
+		t.Fatalf("stored courses = %d (err = %v), want the one interrupted row", len(recs), err)
 	}
-	if req.Kind != "course" {
-		t.Errorf("recovered kind = %q, want course", req.Kind)
+	rec := recs[0]
+	if rec.Status != schema.StatusInterrupted {
+		t.Fatalf("the stored course is %q, want %q", rec.Status, schema.StatusInterrupted)
 	}
-	if req.Difficulty != schema.Intermediate {
-		t.Errorf("recovered difficulty = %q, want the default %q", req.Difficulty, schema.Intermediate)
+	if rec.Outcome.Status != schema.StatusInterrupted {
+		t.Fatalf("the stored outcome is %q, want %q", rec.Outcome.Status, schema.StatusInterrupted)
 	}
-	// The exercise budget is the one thing the plan can speak to: it counts the
-	// exercises the stored chapters carry. Nothing else is invented.
-	if req.ExerciseCount != exerciseCount(&plan) {
-		t.Errorf("recovered exercise count = %d, want the plan's own %d", req.ExerciseCount, exerciseCount(&plan))
+	written := 0
+	for _, ch := range rec.Plan.Chapters {
+		if len(ch.Sections) > 0 {
+			written++
+		}
 	}
-	if req.Scenario != "" || len(req.Topics) != 0 {
-		t.Errorf("recovered request = %+v, want the fields the plan cannot know left empty", req)
+	if written != 1 {
+		t.Fatalf("the interrupted row carries %d written chapter(s), want the 1 that verified", written)
+	}
+}
+
+// TestTheBootSweepInterruptsWhatVerifiedAndRemovesTheRest: at boot, a
+// `building` row has no live writer. The sweep keeps rows with a written
+// chapter as `interrupted` and removes the rows that never got one; paused
+// and active rows are untouched.
+func TestTheBootSweepInterruptsWhatVerifiedAndRemovesTheRest(t *testing.T) {
+	ctx := testContext(t)
+	depot := newTestDepot()
+	plan := coursePlanFixture()
+
+	written := plan
+	written.ID = "course-written"
+	skeleton := plan
+	skeleton.ID = "course-skeleton"
+	skeleton.Chapters = make([]schema.CourseChapter, len(plan.Chapters))
+	for i, ch := range plan.Chapters {
+		ch.Sections, ch.Exercises = []schema.CourseSection{}, []schema.CourseExercise{}
+		skeleton.Chapters[i] = ch
+	}
+	active := plan
+	active.ID = "course-active"
+	paused := plan
+	paused.ID = "course-paused"
+	paused.Chapters = skeleton.Chapters
+
+	for _, rec := range []schema.CourseRecord{
+		{Plan: written, Status: schema.StatusBuilding, Outcome: schema.Outcome{Status: schema.StatusBuilding}},
+		{Plan: skeleton, Status: schema.StatusBuilding, Outcome: schema.Outcome{Status: schema.StatusBuilding}},
+		{Plan: active, Status: schema.StatusActive, Outcome: schema.Outcome{Status: schema.StatusActive}},
+		{Plan: paused, Status: schema.StatusAwaitingApproval, Outcome: schema.Outcome{Status: schema.StatusAwaitingApproval}},
+	} {
+		if err := depot.SaveCourse(ctx, rec); err != nil {
+			t.Fatalf("seed %s: %v", rec.Plan.ID, err)
+		}
+	}
+
+	svc := testService(&scriptedAgent{}, depot, nil)
+	kept, removed, err := svc.RecoverInterruptedBuilds(ctx)
+	if err != nil {
+		t.Fatalf("sweep: %v", err)
+	}
+	if kept != 1 || removed != 1 {
+		t.Fatalf("swept kept=%d removed=%d, want the written row kept and the skeleton row removed", kept, removed)
+	}
+
+	writtenRow, found, err := depot.Course(ctx, "course-written")
+	if err != nil || !found {
+		t.Fatalf("the written row was removed: found = %v err = %v", found, err)
+	}
+	if writtenRow.Status != schema.StatusInterrupted || writtenRow.Outcome.Status != schema.StatusInterrupted {
+		t.Fatalf("the written row is %q/%q, want interrupted/interrupted", writtenRow.Status, writtenRow.Outcome.Status)
+	}
+	if _, found, _ := depot.Course(ctx, "course-skeleton"); found {
+		t.Fatal("a row with no written chapter survived the sweep")
+	}
+	if rec, found, _ := depot.Course(ctx, "course-active"); !found || rec.Status != schema.StatusActive {
+		t.Fatalf("the sweep touched the active row: found = %v rec = %+v", found, rec)
+	}
+	if rec, found, _ := depot.Course(ctx, "course-paused"); !found || rec.Status != schema.StatusAwaitingApproval {
+		t.Fatalf("the sweep touched the paused row: found = %v rec = %+v", found, rec)
 	}
 }

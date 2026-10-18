@@ -5,22 +5,25 @@ import (
 	"strings"
 )
 
-/* The metadata schema, in its final shape, described once for both backends.
- *
- * This is greenfield: there is no pre-accounts layout to migrate from. A
- * database created before this shape existed is simply reset (`make db-reset`),
- * which is why there is no ALTER-based upgrade path here. Progress and events
- * are keyed by the account that produced them.
+/* The metadata schema, described once for both backends.
  *
  * postgresDDL renders the tables into the app schema, which stays distinct from
- * the learner-visible dataset schema (see AppSchema). sqliteDDL renders the same
+ * the learner-visible dataset schema (see appSchema). sqliteDDL renders the same
  * tables unqualified: JSON values are TEXT there, written by this package, and
  * timestamps are canonical UTC RFC3339Nano text.
+ *
+ * The DDL is final for a new store. An existing store gains only the columns
+ * that are nullable or carry a default, by ALTER; additiveColumns is the one
+ * source of that addable set, and any other column change is a reset rather than
+ * a migration (`make db-reset`). Progress and events are keyed by the account
+ * that produced them.
  */
 
-// ddlKind is a column's type, independent of the dialect.
+// ddlKind is a column's type, independent of the dialect. Each backend maps it
+// to its own type name (see postgresType and sqliteType).
 type ddlKind int
 
+// The column kinds a table may declare. Order is not significant.
 const (
 	kindText ddlKind = iota
 	kindJSON
@@ -61,6 +64,7 @@ func (k ddlKind) sqliteType() string {
 // ddlDefault is a column's default, independent of the dialect.
 type ddlDefault int
 
+// The default kinds a column may declare. noDefault is the zero value.
 const (
 	noDefault ddlDefault = iota
 	// literalDefault writes the same SQL literal in both dialects.
@@ -279,7 +283,7 @@ var appTables = []ddlTable{
 // table that already exists.
 func postgresDDL(tables []ddlTable) string {
 	var b strings.Builder
-	b.WriteString("CREATE SCHEMA IF NOT EXISTS " + AppSchema + ";\n")
+	b.WriteString("CREATE SCHEMA IF NOT EXISTS " + appSchema + ";\n")
 	for _, t := range tables {
 		// Align each type under the longest column name in its table.
 		width := 0
@@ -288,14 +292,14 @@ func postgresDDL(tables []ddlTable) string {
 				width = len(c.name)
 			}
 		}
-		b.WriteString("\nCREATE TABLE IF NOT EXISTS " + AppSchema + "." + t.name + " (\n")
+		b.WriteString("\nCREATE TABLE IF NOT EXISTS " + appSchema + "." + t.name + " (\n")
 		b.WriteString(tableBody(t, func(c ddlColumn) string {
 			return fmt.Sprintf("%-*s %s", width, c.name,
-				columnSQL(c, c.kind.postgresType(), c.postgresDefault(), c.refsFor(AppSchema)))
+				columnSQL(c, c.kind.postgresType(), c.postgresDefault(), c.refsFor(appSchema)))
 		}))
 		b.WriteString(");\n")
 		for _, ix := range t.indexes {
-			b.WriteString(indexSQL(ix, AppSchema+"."+t.name) + "\n")
+			b.WriteString(indexSQL(ix, appSchema+"."+t.name) + "\n")
 		}
 	}
 	return b.String()
@@ -347,7 +351,7 @@ func postgresMigrations(tables []ddlTable) string {
 	var b strings.Builder
 	for _, t := range tables {
 		for _, c := range additiveColumns(t) {
-			stmt := fmt.Sprintf("ALTER TABLE %s.%s ADD COLUMN IF NOT EXISTS %s %s", AppSchema, t.name, c.name, c.kind.postgresType())
+			stmt := fmt.Sprintf("ALTER TABLE %s.%s ADD COLUMN IF NOT EXISTS %s %s", appSchema, t.name, c.name, c.kind.postgresType())
 			if c.notNull {
 				stmt += " NOT NULL"
 			}

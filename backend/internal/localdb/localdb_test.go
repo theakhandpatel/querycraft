@@ -37,11 +37,12 @@ func TestAdoptSkipsStalePIDFile(t *testing.T) {
 	}
 }
 
-// An adopted server must not be stopped: we did not start it.
-func TestStopIsNoOpForAdoptedServer(t *testing.T) {
-	srv := &Server{adopted: true, log: quiet()}
+// An adopted server carries no handle, so Stop leaves it alone: we did not
+// start it.
+func TestStopIsNoOpWithoutHandle(t *testing.T) {
+	srv := &Server{log: quiet()}
 	if err := srv.Stop(); err != nil {
-		t.Fatalf("Stop on an adopted server: %v", err)
+		t.Fatalf("Stop without a server handle: %v", err)
 	}
 }
 

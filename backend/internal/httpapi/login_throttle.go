@@ -186,9 +186,9 @@ func (t *loginThrottle) dropExpiredLocked(now time.Time) {
 }
 
 // makeRoomLocked keeps the table bounded before a new key is inserted. Expired
-// records go first; if it is still at the cap — an attacker inventing key after
-// key — the record closest to expiry is dropped so the table can never exceed
-// maxKeys. That is last-write wins: the newest source is tracked, and an old
+// records go first; if it is still at the cap, as when an attacker invents key
+// after key, the record closest to expiry is dropped so the table can never
+// exceed maxKeys. That is last-write wins: the newest source is tracked, and an old
 // counter may be lost. It is the honest bound, because the alternative to a
 // bound is a map an attacker grows until the process dies.
 func (t *loginThrottle) makeRoomLocked(now time.Time) {

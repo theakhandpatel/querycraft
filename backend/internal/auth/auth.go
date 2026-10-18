@@ -2,8 +2,8 @@
 //
 // Two deliberate choices keep this small rather than hand-rolled:
 //
-//   - Password hashing is bcrypt (golang.org/x/crypto/bcrypt), which is
-//     well-reviewed and handles salting and cost for us.
+//   - Password hashing is bcrypt (golang.org/x/crypto/bcrypt), which handles
+//     salting and cost and has been reviewed widely.
 //   - Session tokens are 256 bits from crypto/rand. A random opaque token in a
 //     table is simpler and safer here than a JWT: there is no signature key to
 //     leak, revocation is a DELETE, and the gateway already has a database to
@@ -27,18 +27,22 @@ import (
 	"github.com/querycraft/sqlquery/backend/internal/store"
 )
 
-// SessionTTL is how long a login stays valid.
-const SessionTTL = 30 * 24 * time.Hour
+// sessionTTL is how long a login stays valid.
+const sessionTTL = 30 * 24 * time.Hour
 
-// MinPasswordLen is the floor for a *new* password. Login is deliberately not
+// minPasswordLen is the floor for a *new* password. Login is deliberately not
 // held to it: the default admin ships with an empty password so a local install
 // needs no setup, and refusing to check that password would make the account
 // unreachable.
-const MinPasswordLen = 8
+const minPasswordLen = 8
 
+// Sentinel errors the credential entry points return. The sign-in and sign-up
+// screens show each message as written, so each one names the fix rather than
+// the fault. ErrInvalidCredentials deliberately covers both a missing account
+// and a wrong password, so the endpoint cannot be used to enumerate addresses.
 var (
 	ErrInvalidEmail       = errors.New("enter a valid email address")
-	ErrWeakPassword       = fmt.Errorf("password must be at least %d characters", MinPasswordLen)
+	ErrWeakPassword       = fmt.Errorf("password must be at least %d characters", minPasswordLen)
 	ErrInvalidCredentials = errors.New("email or password is incorrect")
 	ErrNameRequired       = errors.New("name is required")
 )
@@ -61,7 +65,7 @@ func ValidateEmail(email string) error {
 // here even though login accepts one, because a blank password should never be
 // something a learner can *choose*.
 func ValidatePassword(password string) error {
-	if len([]rune(password)) < MinPasswordLen {
+	if len([]rune(password)) < minPasswordLen {
 		return ErrWeakPassword
 	}
 	return nil
@@ -188,7 +192,7 @@ func StartSession(ctx context.Context, st store.Store, userID string) (string, t
 	if err != nil {
 		return "", time.Time{}, err
 	}
-	expires := time.Now().Add(SessionTTL)
+	expires := time.Now().Add(sessionTTL)
 	if err := st.CreateSession(ctx, token, userID, expires); err != nil {
 		return "", time.Time{}, fmt.Errorf("create session: %w", err)
 	}

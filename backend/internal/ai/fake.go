@@ -8,27 +8,25 @@ import (
 	"strings"
 	"time"
 
+	"github.com/sky-valley/pi/agent"
+	"github.com/sky-valley/pi/ai"
+
 	"github.com/querycraft/sqlquery/backend/internal/ai/provider"
 	"github.com/querycraft/sqlquery/backend/internal/schema"
 )
 
-// FakeProvider is the deterministic, no-network, no-key provider the lab ships
-// with (§11.2: AI is off until a provider is configured, and this one is
-// configured out of the box). It is not a mock of a model — it is a small
-// generator whose output is real SQL against the commerce dataset, so the whole
-// pipeline, the evaluator and the exit gate can be exercised with no key and no
-// network. Every reply is a pure function of the request, which is what makes
-// the pipeline's determinism testable.
+// FakeProvider is the deterministic provider the app ships as its built-in
+// provider. It needs no key and no network, so the pipeline, the evaluator and
+// the exit gate run out of the box. It is not a mock of a model: its output is
+// real SQL against the commerce dataset (backend/internal/dataset/schema.sql),
+// so every stage that runs its SQL runs the same statements a learner would.
+// Every reply is a pure function of the request, which is what makes the
+// pipeline's determinism testable.
 //
 // It imports no network package, on purpose: a deterministic provider that
-// could dial out would make "no key, no network" a claim rather than a fact.
-type FakeProvider struct {
-	// Delay is how long each reply takes. It exists for tests that have to
-	// observe a run while it is happening — a job's stages are only meaningful
-	// while the run is in flight — and it is zero for every other caller, which
-	// is what makes the shipping provider instantaneous.
-	Delay time.Duration
-}
+// could dial out would turn "no key, no network" into a claim rather than a
+// fact.
+type FakeProvider struct{}
 
 // NewFakeProvider returns the built-in provider.
 func NewFakeProvider() *FakeProvider { return &FakeProvider{} }
@@ -50,17 +48,7 @@ func (f *FakeProvider) Complete(ctx context.Context, req provider.ProviderReques
 	if err := ctx.Err(); err != nil {
 		return provider.ProviderResponse{}, err
 	}
-	if f.Delay > 0 {
-		// A slow provider is still a provider that respects its deadline: the
-		// wait ends when the run does, not after it.
-		select {
-		case <-time.After(f.Delay):
-		case <-ctx.Done():
-			return provider.ProviderResponse{}, ctx.Err()
-		}
-	}
 	start := time.Now()
-	desc := f.Descriptor()
 
 	var (
 		text string
@@ -76,13 +64,8 @@ func (f *FakeProvider) Complete(ctx context.Context, req provider.ProviderReques
 		// generator runs, so the same rule that produced the plan is the rule
 		// that re-produces it.
 		//
-		// A request that advertises tools is the course agent's chapter loop,
-		// and the answer is a tool call rather than a JSON reply — the same
-		// protocol a real model speaks, so the loop is what the built-in
-		// provider exercises.
-		if len(req.Tools) > 0 {
-			return f.agentTurn(req, desc, start)
-		}
+		// The chapter conversation does not come through here: it speaks
+		// pi's loop through CourseStreamFn.
 		if req.Kind == "course" || strings.Contains(req.Prompt, coursePromptMarker) {
 			text, err = f.courseOutline(req.Prompt)
 		} else {
@@ -103,10 +86,6 @@ func (f *FakeProvider) Complete(ctx context.Context, req provider.ProviderReques
 	}
 	return provider.ProviderResponse{
 		Text:      text,
-		Provider:  desc.Name,
-		Model:     desc.Model,
-		TokensIn:  len(req.Prompt) / 4,
-		TokensOut: len(text) / 4,
 		LatencyMS: float64(time.Since(start).Microseconds()) / 1000,
 	}, nil
 }
@@ -196,14 +175,14 @@ type fakeTopic struct {
 }
 
 // fakeTopics is the generator's whole content. The SQL is real: the tables and
-// columns are the commerce dataset's (dataset/schema.sql), so a stage that runs
-// these statements is running the same SQL a learner would.
+// columns are the commerce dataset's (backend/internal/dataset/schema.sql), so a
+// stage that runs these statements is running the same SQL a learner would.
 var fakeTopics = []fakeTopic{
 	{
 		name:     "joins",
 		keywords: []string{"join", "relationship", "foreign key"},
 		title:    "Customers and how many orders they placed",
-		prompt:   "List each customer who has placed at least one order, with their name and their number of orders, most orders first. Break ties by customer name.",
+		prompt:   "List each customer who has placed at least one order, with their name and their number of orders, most orders first. Break ties by customer name. Name the columns customer_name and order_count.",
 		reference: `SELECT c.name AS customer_name, count(o.id) AS order_count
 FROM "dataset"."customers" c
 JOIN "dataset"."orders" o ON o.customer_id = c.id
@@ -226,7 +205,7 @@ ORDER BY order_count DESC, customer_name ASC`,
 		name:     "aggregation",
 		keywords: []string{"aggregat", "group by", "group", "count", "average", "avg", "sum"},
 		title:    "Products per category and their average price",
-		prompt:   "For each product category, return the category, how many products it contains, and the average price rounded to two decimals, highest average price first. Break ties by category name.",
+		prompt:   "For each product category, return the category, how many products it contains, and the average price rounded to two decimals, highest average price first. Break ties by category name. Name the columns category, product_count and avg_price.",
 		reference: `SELECT p.category AS category, count(*) AS product_count, round(avg(p.price), 2) AS avg_price
 FROM "dataset"."products" p
 GROUP BY p.category
@@ -248,7 +227,7 @@ ORDER BY avg_price DESC, category ASC`,
 		name:     "windows",
 		keywords: []string{"window", "rank", "partition by", "dense_rank", "row_number"},
 		title:    "Rank customers by total order value",
-		prompt:   "Rank each customer who has ordered by the total value of their orders (quantity times unit price), highest first. Show the customer name, the total, and the rank, breaking ties by name.",
+		prompt:   "Rank each customer who has ordered by the total value of their orders (quantity times unit price), highest first. Show the customer name, the total, and the rank, breaking ties by name. Name the columns customer_name, total_value and value_rank.",
 		reference: `SELECT t.customer_name,
        t.total_value,
        rank() OVER (ORDER BY t.total_value DESC) AS value_rank
@@ -285,7 +264,7 @@ ORDER BY total_value DESC, customer_name ASC`,
 		name:     "ctes",
 		keywords: []string{"cte", "common table", "with clause", "with statement"},
 		title:    "The three highest-value orders",
-		prompt:   "Using a common table expression, return the three orders with the largest total value (quantity times unit price), with the order id, the customer name and the order total. Break ties by order id.",
+		prompt:   "Using a common table expression, return the three orders with the largest total value (quantity times unit price), with the order id, the customer name and the order total. Break ties by order id. Name the columns order_id, customer_name and order_total.",
 		reference: `WITH order_totals AS (
     SELECT o.id AS order_id, c.name AS customer_name,
            sum(oi.quantity * oi.unit_price) AS order_total
@@ -343,15 +322,7 @@ func pickTopic(prompt string, seed uint64) fakeTopic {
 // tutorText is a plain-text hint. It never contains SQL from the request other
 // than the learner's own, and it has no access to a reference solution.
 func tutorText(req provider.ProviderRequest) string {
-	level := 1
-	if strings.Contains(req.Prompt, "hint_level: 0") {
-		level = 0
-	} else if strings.Contains(req.Prompt, "hint_level: 2") {
-		level = 2
-	} else if strings.Contains(req.Prompt, "hint_level: 3") {
-		level = 3
-	}
-	switch level {
+	switch parseHintLevel(req.Prompt) {
 	case 0:
 		return "Read the prompt again and name, in words, the single table that holds the fact you need. No SQL yet."
 	case 1:
@@ -378,17 +349,16 @@ func critiqueText(req provider.ProviderRequest) string {
 // never the gate.
 //
 // The bounds are part of the hint. Without minLength a model may satisfy the
-// schema with `"statements": [""]` and the bundle is only refused later, by
-// validateArtifact, after the repair budget has been spent re-asking the same
-// question — measured against a live provider, twice. A schema that cannot
-// describe an empty statement removes that round trip, and a provider that
-// enforces json_schema removes the possibility.
+// schema with `"statements": [""]`, and validateArtifact refuses the bundle only
+// later, after the repair budget has been spent re-asking the same question. A
+// schema that cannot describe an empty statement removes that round trip, and a
+// provider that enforces json_schema removes the possibility.
 //
 // `setup.statements` carries minLength on its items but no minItems: an empty
 // list is the correct answer for a challenge over the sealed dataset (see
-// SetupPlan), so demanding one entry would only push a model into inventing a
-// statement the environment already provides — measured as `CREATE TABLE
-// customers` colliding with the loaded dataset and `DROP` being refused.
+// SetupPlan). Demanding one entry would only push a model into inventing a
+// statement the environment already provides: a `CREATE TABLE customers`
+// collides with the loaded dataset, and a `DROP` is refused.
 const challengeSchema = `{
   "$schema": "https://json-schema.org/draft/2020-12/schema",
   "title": "challengeArtifact",
@@ -426,7 +396,7 @@ const challengeSchema = `{
   }
 }`
 
-/* ---------- the deterministic course (M7) ---------- */
+/* ---------- the deterministic course ---------- */
 
 // coursePlanShape is the authored course the built-in provider serves, as a
 // plan. Both the outline call and every chapter call are derived from it, so
@@ -459,50 +429,47 @@ func (f *FakeProvider) coursePlanShape(prompt string) schema.CoursePlan {
 		Setup:      schema.SetupPlan{Dataset: "commerce", SchemaVersion: 1, SeedVersion: 1, Statements: []string{}},
 	}
 	for i, t := range unique {
-		plan.Chapters = append(plan.Chapters, schema.CourseChapter{
-			ID:         fmt.Sprintf("gen.%s", t.name),
-			N:          i + 1,
-			Title:      t.title,
-			Summary:    t.prompt,
-			Kind:       "Practice",
-			Minutes:    15,
-			Objectives: t.objectives,
-			Sections: []schema.CourseSection{
-				{Title: "The shape of the question", Body: courseSectionIntro(t)},
-				{Title: "How the pieces fit", Body: courseSectionDiagram(t)},
-			},
-			Exercises: []schema.CourseExercise{{
-				ID:                 fmt.Sprintf("gen.%s.1", t.name),
-				Title:              t.title,
-				Prompt:             t.prompt + scenarioSuffix(seed),
-				Difficulty:         difficulty,
-				Type:               "write",
-				Objectives:         t.objectives,
-				Hints:              t.hints,
-				ReferenceSolution:  t.reference,
-				CrossCheckSolution: t.crossCheck,
-				ResultContract: schema.ResultContract{
-					Columns:          t.columns,
-					ColumnOrder:      "exact",
-					RowOrder:         "exact",
-					Duplicates:       "preserved",
-					NumericTolerance: 0,
-				},
-				Checks: []schema.Check{},
-			}},
-		})
+		plan.Chapters = append(plan.Chapters, fakeChapter(t, i+1, string(difficulty), seed))
 	}
 	return plan
 }
 
-// courseBundle renders the whole plan as JSON. It is the shape the whole-plan
-// gate is tested against; the agent never asks for it.
-func (f *FakeProvider) courseBundle(prompt string) (string, error) {
-	raw, err := json.Marshal(f.coursePlanShape(prompt))
-	if err != nil {
-		return "", fmt.Errorf("fake provider: encode course: %w", err)
+// fakeChapter fabricates the chapter the built-in provider writes for one
+// topic: its sections, and one exercise with a reference solution, an
+// independent cross-check, and a result contract naming the exact columns.
+func fakeChapter(t fakeTopic, n int, difficulty string, seed uint64) schema.CourseChapter {
+	return schema.CourseChapter{
+		ID:         fmt.Sprintf("gen.%s", t.name),
+		N:          n,
+		Title:      t.title,
+		Summary:    t.prompt,
+		Kind:       "Practice",
+		Minutes:    15,
+		Objectives: t.objectives,
+		Sections: []schema.CourseSection{
+			{Title: "The shape of the question", Body: courseSectionIntro(t)},
+			{Title: "How the pieces fit", Body: courseSectionDiagram(t)},
+		},
+		Exercises: []schema.CourseExercise{{
+			ID:                 fmt.Sprintf("gen.%s.1", t.name),
+			Title:              t.title,
+			Prompt:             t.prompt + scenarioSuffix(seed),
+			Difficulty:         schema.Difficulty(difficulty),
+			Type:               "write",
+			Objectives:         t.objectives,
+			Hints:              t.hints,
+			ReferenceSolution:  t.reference,
+			CrossCheckSolution: t.crossCheck,
+			ResultContract: schema.ResultContract{
+				Columns:          t.columns,
+				ColumnOrder:      "exact",
+				RowOrder:         "exact",
+				Duplicates:       "preserved",
+				NumericTolerance: 0,
+			},
+			Checks: []schema.Check{},
+		}},
 	}
-	return string(raw), nil
 }
 
 // courseOutline renders the outline the agent's first call asks for, derived
@@ -535,65 +502,163 @@ func (f *FakeProvider) courseOutline(prompt string) (string, error) {
 	return string(raw), nil
 }
 
-// agentTurn is the built-in provider's side of the chapter conversation. It
-// reads the conversation the gateway sent — the tool results name the chapters
-// that are already resolved — and answers with the next chapter, or with
-// finish_course once every chapter in its own plan is resolved. It is a pure
-// function of the messages, exactly like every other reply this provider makes,
-// so a run is reproducible from its request alone.
-func (f *FakeProvider) agentTurn(req provider.ProviderRequest, desc provider.ProviderDescriptor, start time.Time) (provider.ProviderResponse, error) {
-	plan := f.coursePlanShape(req.Prompt)
-	resolved := map[string]bool{}
-	for _, m := range req.Messages {
-		if m.Role != "tool" {
-			continue
-		}
-		var result struct {
-			Chapter string `json:"chapter"`
-			Status  string `json:"status"`
-		}
-		if json.Unmarshal([]byte(m.Content), &result) != nil {
-			continue
-		}
-		if result.Chapter != "" && (result.Status == ChapterVerified || result.Status == ChapterDropped) {
-			resolved[result.Chapter] = true
-		}
+// Course is the built-in provider's answer to the course-agent capability:
+// no key, a self-describing model record, and the chapter conversation served
+// by its own logic rather than by a network call.
+func (f *FakeProvider) Course() provider.CourseCapability {
+	return provider.CourseCapability{
+		Model:    &ai.Model{ID: "built-in", Name: "built-in", Provider: "built-in"},
+		Key:      func(string) string { return "" },
+		StreamFn: f.CourseStreamFn(),
 	}
+}
 
-	respond := func(call provider.ToolCall) (provider.ProviderResponse, error) {
-		if req.MaxOutputBytes > 0 && len(call.Function.Arguments) > req.MaxOutputBytes {
-			return provider.ProviderResponse{}, fmt.Errorf("fake provider: tool call of %d bytes exceeds the %d-byte budget", len(call.Function.Arguments), req.MaxOutputBytes)
+// CourseStreamFn serves the chapter conversation. Its policy is fixed and
+// deterministic: it reads the resolved chapters out of the tool results the
+// gateway already sent, then answers with the first outline chapter that is not
+// resolved, or with finish_course once every chapter in its own plan is
+// resolved. It is a pure function of the messages, exactly like every other
+// reply this provider makes, so a run is reproducible from its request alone
+// and needs no key.
+func (f *FakeProvider) CourseStreamFn() agent.StreamFn {
+	return func(ctx context.Context, model *ai.Model, req ai.TranscriptContext, opts *ai.SimpleStreamOptions) *ai.AssistantMessageEventStream {
+		if err := ctx.Err(); err != nil {
+			// The run budget ended: abort the way a real provider does.
+			return ai.ErrorStream(model, err)
 		}
-		return provider.ProviderResponse{
-			ToolCalls:    []provider.ToolCall{call},
-			FinishReason: "tool_calls",
-			Provider:     desc.Name,
-			Model:        desc.Model,
-			TokensIn:     len(req.Prompt) / 4,
-			TokensOut:    len(call.Function.Arguments) / 4,
-			LatencyMS:    float64(time.Since(start).Microseconds()) / 1000,
-		}, nil
+		resolved := map[string]bool{}
+		for _, m := range req.Messages {
+			if tr, ok := m.(ai.ToolResultMessage); ok {
+				var result struct {
+					Chapter string `json:"chapter"`
+					Status  string `json:"status"`
+				}
+				if json.Unmarshal([]byte(textFromContent(tr.Content)), &result) == nil {
+					if result.Chapter != "" && (result.Status == ChapterVerified || result.Status == ChapterDropped) {
+						resolved[result.Chapter] = true
+					}
+				}
+			}
+		}
+		outline, ok := outlineFromGoal(req.Messages)
+		msg := &ai.AssistantMessage{Model: "built-in"}
+		if !ok {
+			// No outline in the goal prompt: a conversation this provider does
+			// not know how to continue. A plain closing turn ends the run; the
+			// gateway reports the chapters it never received.
+			msg.Content = ai.ContentList{ai.TextContent{Text: "I cannot find the agreed outline in the goal prompt."}}
+			msg.StopReason = ai.StopStop
+		} else {
+			next := -1
+			for i, och := range outline.Chapters {
+				if !resolved[och.ID] {
+					next = i
+					break
+				}
+			}
+			if next < 0 {
+				msg.Content = ai.ContentList{ai.ToolCall{
+					ID:   "call_finish_course",
+					Name: toolFinishCourse,
+					Arguments: map[string]any{
+						"summary": "Every chapter that was written verified against the dataset.",
+					},
+				}}
+				msg.StopReason = ai.StopToolUse
+			} else {
+				och := outline.Chapters[next]
+				msg.Content = ai.ContentList{ai.ToolCall{
+					ID:        "call_" + och.ID,
+					Name:      toolSaveChapter,
+					Arguments: fakeChapterArgs(och, next+1, string(difficultyFromText(firstUserText(req.Messages)))),
+				}}
+				msg.StopReason = ai.StopToolUse
+			}
+		}
+		s := ai.NewAssistantMessageEventStream()
+		go func() {
+			s.Push(ai.AssistantMessageEvent{Type: ai.EventStart, Partial: &ai.AssistantMessage{}})
+			s.Push(ai.AssistantMessageEvent{Type: ai.EventDone, Reason: msg.StopReason, Message: msg})
+			s.End()
+		}()
+		return s
 	}
+}
 
-	for _, ch := range plan.Chapters {
-		if resolved[ch.ID] {
-			continue
+// outlineFromGoal extracts the outline JSON the goal prompt embeds.
+func outlineFromGoal(messages []ai.Message) (CourseOutline, bool) {
+	for _, m := range messages {
+		if um, ok := m.(ai.UserMessage); ok {
+			if outline, ok := outlineJSONFromGoal(textFromContent(um.Content)); ok {
+				return outline, true
+			}
 		}
-		args, err := json.Marshal(ch)
-		if err != nil {
-			return provider.ProviderResponse{}, fmt.Errorf("fake provider: encode chapter: %w", err)
-		}
-		return respond(provider.ToolCall{
-			ID:       "call_" + ch.ID,
-			Type:     "function",
-			Function: provider.ToolCallFunction{Name: toolSaveChapter, Arguments: string(args)},
-		})
 	}
-	return respond(provider.ToolCall{
-		ID:       "call_finish_course",
-		Type:     "function",
-		Function: provider.ToolCallFunction{Name: toolFinishCourse, Arguments: `{"summary":"Every chapter that was written verified against the dataset."}`},
-	})
+	return CourseOutline{}, false
+}
+
+// firstUserText returns the text of the conversation's first user message.
+func firstUserText(messages []ai.Message) string {
+	for _, m := range messages {
+		if um, ok := m.(ai.UserMessage); ok {
+			return textFromContent(um.Content)
+		}
+	}
+	return ""
+}
+
+// outlineJSONFromGoal extracts the outline JSON body and decodes it.
+func outlineJSONFromGoal(text string) (CourseOutline, bool) {
+	i := strings.Index(text, goalOutlineMarker)
+	if i < 0 {
+		return CourseOutline{}, false
+	}
+	body := text[i+len(goalOutlineMarker):]
+	j := strings.Index(body, goalOutlineEnd)
+	if j < 0 {
+		return CourseOutline{}, false
+	}
+	var outline CourseOutline
+	if json.Unmarshal([]byte(body[:j]), &outline) != nil {
+		return CourseOutline{}, false
+	}
+	return outline, true
+}
+
+// fakeChapterArgs fabricates the save_chapter arguments for one outline
+// chapter. The topic table is keyed by the chapter id's topic name, the same
+// convention the outline generator used, so the chapter content matches what
+// the outline call derived; an unknown topic still produces a chapter that
+// carries the outline's own fields.
+func fakeChapterArgs(och OutlineChapter, n int, difficulty string) map[string]any {
+	id := och.ID
+	topic, _ := strings.CutPrefix(id, "gen.")
+	var ch schema.CourseChapter
+	if t, ok := topicByName(topic); ok {
+		ch = fakeChapter(t, n, difficulty, hashPrompt(id))
+	} else {
+		ch = fakeChapter(fakeTopic{name: topic, title: och.Title, prompt: och.Summary, objectives: och.Objectives}, n, difficulty, hashPrompt(id))
+	}
+	ch.ID, ch.N, ch.Title, ch.Summary, ch.Objectives = id, n, och.Title, och.Summary, och.Objectives
+	raw, err := json.Marshal(ch)
+	if err != nil {
+		return map[string]any{"id": id}
+	}
+	var out map[string]any
+	if json.Unmarshal(raw, &out) != nil {
+		return map[string]any{"id": id}
+	}
+	return out
+}
+
+// topicByName finds the topic table entry a chapter id names.
+func topicByName(name string) (fakeTopic, bool) {
+	for _, t := range fakeTopics {
+		if t.name == name {
+			return t, true
+		}
+	}
+	return fakeTopic{}, false
 }
 
 // courseTitle names the course from the learner's own goal, so two different

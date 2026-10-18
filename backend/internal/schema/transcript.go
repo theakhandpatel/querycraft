@@ -2,6 +2,13 @@ package schema
 
 import "time"
 
+/* The stored transcript of one generation run: the audit trail. RunTranscript is
+ * what the recorder writes and schema.Depot persists; RunSummary is the same
+ * record without its entries, for the list route. MaxTranscriptEntries and
+ * MaxTranscriptBytes are the bounds the recorder enforces before a record
+ * reaches the store.
+ */
+
 /* ---------- bounds ---------- */
 
 const (

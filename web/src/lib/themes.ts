@@ -9,7 +9,7 @@
  * key text pairs does not ship.
  */
 
-export interface ThemeDef {
+interface ThemeDef {
   id: string;
   label: string;
   mode: 'light' | 'dark';
@@ -39,9 +39,3 @@ export const THEMES: ThemeDef[] = [
   { id: 'solarized-light', label: 'Solarized Light', mode: 'light', swatch: { bg: '#fdf6e3', surface: '#fffbf0', accent: '#268bd2' } },
   { id: 'github-dimmed', label: 'GitHub Dimmed', mode: 'dark', swatch: { bg: '#22272e', surface: '#1c2128', accent: '#539bf5' } },
 ];
-
-export const THEME_IDS = THEMES.map((t) => t.id);
-
-export function themeLabel(id: string): string {
-  return THEMES.find((t) => t.id === id)?.label ?? id;
-}

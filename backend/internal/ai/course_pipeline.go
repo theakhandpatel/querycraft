@@ -2,6 +2,8 @@ package ai
 
 import (
 	"context"
+	crand "crypto/rand"
+	"encoding/hex"
 	"fmt"
 	"time"
 
@@ -31,7 +33,7 @@ func (p *pipeline) openScratch(ctx context.Context, plan *schema.CoursePlan) (en
 	}
 	start := time.Now()
 	p.begin(schema.StageScratchEnvironment)
-	scratch := courseScratchName(plan)
+	scratch := courseScratchName(plan) + "-" + scratchSuffix()
 	ex, release, err := p.svc.cfg.Runner.Scratch(ctx, scratch)
 	if err != nil {
 		e := NewError(CodeEnvironmentDown, schema.StageScratchEnvironment,
@@ -117,11 +119,7 @@ func (p *pipeline) activateCourse(ctx context.Context, plan *schema.CoursePlan, 
 	if plan.Dialect == "" {
 		plan.Dialect = "postgresql"
 	}
-	datasetVersion := p.svc.cfg.DatasetVersion
-	if datasetVersion < 1 {
-		datasetVersion = plan.Setup.SchemaVersion
-	}
-	plan.Provenance = provenance(desc, datasetVersion, build.repaired)
+	plan.Provenance = provenance(desc, p.svc.cfg.DatasetVersion, build.repaired)
 	p.evidence.Repairs = build.repaired
 
 	out := p.outcome(schema.StatusActive, nil, nil)
@@ -160,8 +158,8 @@ func (p *pipeline) activateCourse(ctx context.Context, plan *schema.CoursePlan, 
 // page: an opening line that restates the heading, three items where one would
 // do, and a closing line that promises more. The shipped chapters
 // (web/src/data/content/*.md) do not read that way. One sentence here reaches
-// every chapter of every generated course, because the whole-plan path and the
-// one-chapter-at-a-time agent path share this prompt.
+// every chapter of every generated course, because the outline call and the
+// chapter conversation share this prompt.
 func courseSystemPrompt() string {
 	return "You design SQL courses over a fixed PostgreSQL commerce dataset. Reply with one JSON object and no prose. Every solution must be a single read-only SELECT or WITH statement that runs against the described dataset. The strings inside that object are what the learner reads, so write them for a beginner: short sentences, active voice, present tense, one idea each. Name the table and the column. Do not open a section with a slogan, and do not restate its heading."
 }
@@ -170,6 +168,19 @@ func courseSystemPrompt() string {
 // derived from the course's own identity — the title and the first chapter's id
 // — rather than from a chapter's content, because the environment is opened
 // before any chapter exists and has to keep the same name for all of them.
+// scratchSuffix returns a random hex tag so each chapter build targets a
+// fresh scratch environment. Without it, a continuation build reuses the
+// same database name as the outline build — and if that database survived
+// its release (a pool held it open past the drop), the copy carries no
+// dataset and checkDataset refuses the run.
+func scratchSuffix() string {
+	b := make([]byte, 4)
+	if _, err := crand.Read(b); err != nil {
+		return fmt.Sprintf("%d", time.Now().UnixNano()%0xffff)
+	}
+	return hex.EncodeToString(b)
+}
+
 func courseScratchName(plan *schema.CoursePlan) string {
 	seed := plan.Title
 	if len(plan.Chapters) > 0 {

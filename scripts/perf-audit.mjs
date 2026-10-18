@@ -141,7 +141,14 @@ async function main() {
     /* ---------- clause 2: the environment the plan came from ---------- */
     report.section('a plan reports the environment it was produced against');
     const token = await signup(gw.base, `perf-audit-${Date.now()}@example.com`);
-    const analyzed = await explain({ sql: ANALYTIC_SQL, analyze: true, dataset: 'perf' }, token);
+    /* The perf workspace is provisioned on first use: the gateway copies the
+       large perf template inside the request, and on a loaded machine that
+       first copy can miss the request deadline. The attempt still warms the
+       copy; one retry then measures the plan instead of the copy. */
+    let analyzed = await explain({ sql: ANALYTIC_SQL, analyze: true, dataset: 'perf' }, token);
+    if (analyzed.status !== 200 && /ENVIRONMENT_UNAVAILABLE/.test(analyzed.body ?? '')) {
+      analyzed = await explain({ sql: ANALYTIC_SQL, analyze: true, dataset: 'perf' }, token);
+    }
     report.check('the analyzed plan is served', analyzed.status === 200, `${analyzed.status} ${analyzed.body?.slice(0, 200)}`);
     report.check('the analyzed plan has no schema violations', violations(analyzed.json).length === 0, violations(analyzed.json));
     report.check('the analyzed plan succeeds', analyzed.json?.status === 'succeeded', analyzed.json?.error);

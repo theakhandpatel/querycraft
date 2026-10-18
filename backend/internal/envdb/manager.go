@@ -82,7 +82,7 @@ type Options struct {
 	AdminDSN         string            // owner/superuser DSN: CREATE/DROP DATABASE and the template build
 	LearnerPassword  string            // the password the existing querycraft_learner role has
 	TemplateName     string            // default dataset.TemplateDatabaseName
-	PerfTemplateName string            // default dataset.PerfTemplateDatabaseName (M5 plan environments)
+	PerfTemplateName string            // default dataset.PerfTemplateDatabaseName (plan environments)
 	MaxEnvironments  int               // default 8
 	MaxConnsPerEnv   int32             // default 2
 	IdleTTL          time.Duration     // default 15 * time.Minute
@@ -149,8 +149,8 @@ type Manager struct {
 	// resetAt records the last reset per account. It cannot live on the
 	// `environment` struct: reset drops that record and the next Ensure creates a
 	// fresh one, so a reset time stored there would be lost before Facts could
-	// read it. That is why `Facts.ResetAt` was structurally always zero — the
-	// field existed and was read but never written.
+	// read it. The map is keyed by the environment kind, so a plan reset time and
+	// a challenge reset time never overwrite each other.
 	resetAt map[string]time.Time
 	// building marks an account whose environment is being created by one
 	// goroutine, so a concurrent Ensure for the same account waits for that
@@ -209,9 +209,7 @@ func (m *Manager) EnsureTemplate(ctx context.Context) error {
 func (m *Manager) ensureTemplateLocked(ctx context.Context) error {
 	// Writable, not read-only: this template is what every challenge
 	// environment is copied from, and the copy carries its grant set.
-	return m.ensureTemplateFromLocked(ctx, m.opts.TemplateName, "challenge", func(ctx context.Context, name string) error {
-		return dataset.LoadWritableIntoTemplate(ctx, m.admin, name, m.opts.LearnerPassword)
-	})
+	return m.ensureTemplateFromLocked(ctx, m.opts.TemplateName, "challenge", challengeEnv.load(m))
 }
 
 // EnsurePerfTemplate builds and seals the perf template if it is missing, and
@@ -229,17 +227,13 @@ func (m *Manager) EnsurePerfTemplate(ctx context.Context) error {
 func (m *Manager) ensurePerfTemplateLocked(ctx context.Context) error {
 	// Writable: the plan lessons ask the learner to add the missing index
 	// and re-run the statement, which only an environment they own can do.
-	return m.ensureTemplateFromLocked(ctx, m.opts.PerfTemplateName, "perf", func(ctx context.Context, name string) error {
-		return dataset.LoadPerfIntoTemplate(ctx, m.admin, name, m.opts.LearnerPassword)
-	})
+	return m.ensureTemplateFromLocked(ctx, m.opts.PerfTemplateName, "perf", perfEnv.load(m))
 }
 
 // ensureTemplateFromLocked builds and seals one template. The challenge and perf
-// templates differ only in their name, their log label and which fixture loads
-// into them, so the create/seal body is shared rather than copied — the two had
-// already drifted once (one computed its create duration twice) and a shared
-// body cannot drift again. The loader is passed in because the fixture is the
-// only genuine difference between the two.
+// templates differ only in their name, their log label and the fixture the kind
+// loads into them, so the create/seal body is shared rather than copied. Two
+// near-copies drift; one body cannot.
 func (m *Manager) ensureTemplateFromLocked(ctx context.Context, name, label string, load func(context.Context, string) error) error {
 	var exists bool
 	if err := m.admin.QueryRow(ctx,
@@ -249,14 +243,14 @@ func (m *Manager) ensureTemplateFromLocked(ctx context.Context, name, label stri
 	}
 	if !exists {
 		m.opts.Log.Info("building "+label+" template", "template", name)
-		if err := dataset.CreateDatabase(ctx, m.admin, name); err != nil {
+		if err := CreateDatabase(ctx, m.admin, name); err != nil {
 			return envErr(err)
 		}
 		if err := load(ctx, name); err != nil {
 			return envErr(err)
 		}
 	}
-	if err := dataset.SealTemplate(ctx, m.admin, name); err != nil {
+	if err := SealTemplate(ctx, m.admin, name); err != nil {
 		return envErr(err)
 	}
 	return nil
@@ -310,14 +304,15 @@ func (m *Manager) Reset(ctx context.Context, accountID string) (time.Duration, e
 // the plan lab, a second database copied from its own sealed template so a
 // re-indexed plan lesson cannot decide the plan a challenge lesson is graded on.
 //
-// Every per-kind difference is a field here — the cache-key prefix, the template
-// to copy from, the environment database name and the log/error labels — so
-// Ensure/Reset each have exactly one body instead of two near-copies that drift
-// (they already had: the perf variant computed its create duration twice).
+// Every per-kind difference is a field here: the cache-key prefix, the template
+// to copy from, the fixture that loads into it, the environment database name and
+// the log/error labels. Ensure and Reset each have exactly one body instead of
+// two near-copies that drift.
 type envKind struct {
 	keyPrefix string
 	template  func(m *Manager) string
 	database  func(m *Manager, accountID string) string
+	load      func(m *Manager) func(context.Context, string) error
 	label     string // "challenge" or "plan", for logs and error messages
 }
 
@@ -325,7 +320,12 @@ var challengeEnv = envKind{
 	keyPrefix: "",
 	template:  func(m *Manager) string { return m.opts.TemplateName },
 	database:  func(m *Manager, accountID string) string { return m.databaseName(accountID) },
-	label:     "challenge",
+	load: func(m *Manager) func(context.Context, string) error {
+		return func(ctx context.Context, name string) error {
+			return dataset.LoadWritableIntoTemplate(ctx, m.admin, name, m.opts.LearnerPassword)
+		}
+	},
+	label: "challenge",
 }
 
 var perfEnv = envKind{
@@ -333,6 +333,11 @@ var perfEnv = envKind{
 	template:  func(m *Manager) string { return m.opts.PerfTemplateName },
 	database: func(_ *Manager, accountID string) string {
 		return dataset.EnvironmentDatabaseName("perf_" + digest(accountID)[:32])
+	},
+	load: func(m *Manager) func(context.Context, string) error {
+		return func(ctx context.Context, name string) error {
+			return dataset.LoadPerfIntoTemplate(ctx, m.admin, name, m.opts.LearnerPassword)
+		}
 	},
 	label: "plan",
 }
@@ -377,7 +382,7 @@ func (m *Manager) ensure(ctx context.Context, accountID string, kind envKind) (*
 		// create (ADR 0002 measured a first drop at ~2.9 s), so they run outside
 		// it, guarded only by this in-flight marker.
 		template := kind.template(m)
-		if err := m.ensureTemplateFromLocked(ctx, template, kind.label, m.loaderFor(template)); err != nil {
+		if err := m.ensureTemplateFromLocked(ctx, template, kind.label, kind.load(m)); err != nil {
 			m.mu.Unlock()
 			return nil, err
 		}
@@ -483,7 +488,7 @@ func (m *Manager) reset(ctx context.Context, accountID string, kind envKind) (ti
 			delete(m.envs, key)
 		}
 		template = kind.template(m)
-		if err := m.ensureTemplateFromLocked(ctx, template, kind.label, m.loaderFor(template)); err != nil {
+		if err := m.ensureTemplateFromLocked(ctx, template, kind.label, kind.load(m)); err != nil {
 			m.mu.Unlock()
 			return 0, err
 		}
@@ -534,7 +539,7 @@ func (m *Manager) resetDatabase(ctx context.Context, database, template string) 
 		return err
 	}
 	defer func() { _ = conn.Close(context.WithoutCancel(ctx)) }()
-	if err := dataset.ResetEnvironment(ctx, conn, database, template); err != nil {
+	if err := ResetEnvironment(ctx, conn, database, template); err != nil {
 		return envErr(err)
 	}
 	return nil
@@ -550,21 +555,6 @@ func (m *Manager) newAdminConn(ctx context.Context) (*pgx.Conn, error) {
 		return nil, envErr(fmt.Errorf("open a DDL connection: %w", err))
 	}
 	return conn, nil
-}
-
-// loaderFor returns the fixture loader for a template name, so the shared
-// ensure/reset bodies can load the right dataset without a second per-kind
-// switch. The perf template loads the larger plan fixture; everything else
-// loads the writable commerce fixture.
-func (m *Manager) loaderFor(template string) func(context.Context, string) error {
-	if template == m.opts.PerfTemplateName && template != m.opts.TemplateName {
-		return func(ctx context.Context, name string) error {
-			return dataset.LoadPerfIntoTemplate(ctx, m.admin, name, m.opts.LearnerPassword)
-		}
-	}
-	return func(ctx context.Context, name string) error {
-		return dataset.LoadWritableIntoTemplate(ctx, m.admin, name, m.opts.LearnerPassword)
-	}
 }
 
 // Facts reports the account's environment without creating it. Exists is read
@@ -654,7 +644,7 @@ func (m *Manager) Close() {
 		// connections anyway, but closing it makes "no pool outlives Close"
 		// true by construction.
 		e.exec.Close()
-		if err := dataset.DropDatabase(ctx, m.admin, e.database); err != nil {
+		if err := DropDatabase(ctx, m.admin, e.database); err != nil {
 			m.opts.Log.Warn("drop environment on close", "database", e.database, "error", err)
 		}
 		delete(m.envs, key)
@@ -669,9 +659,9 @@ func (m *Manager) Close() {
 /* ---------- internals ---------- */
 
 // createIfAbsentFromLocked copies one sealed template into an environment
-// database. It takes the template as an argument because the M5 plan
-// environments are copied from the perf template while every other environment
-// is copied from the challenge template.
+// database. It takes the template as an argument because the plan environments
+// are copied from the perf template while every other environment is copied from
+// the challenge template.
 func (m *Manager) createIfAbsentFromLocked(ctx context.Context, database, template string) error {
 	var exists bool
 	if err := m.admin.QueryRow(ctx,
@@ -682,7 +672,7 @@ func (m *Manager) createIfAbsentFromLocked(ctx context.Context, database, templa
 	if exists {
 		return nil
 	}
-	if err := dataset.CreateDatabaseFromTemplate(ctx, m.admin, database, template); err != nil {
+	if err := CreateDatabaseFromTemplate(ctx, m.admin, database, template); err != nil {
 		return envErr(err)
 	}
 	return nil
@@ -778,7 +768,7 @@ type AccountLister interface {
 }
 
 // ReapUnreferenced drops every environment database the store no longer
-// references — ADR 0002's orphan mitigation, now wired. An orphan is a database
+// references. It is ADR 0002's orphan mitigation. An orphan is a database
 // created for an account that was never recorded (a crash between CREATE and the
 // store write), so the recorded account ids are exactly the keep-set. It is
 // best-effort: a failure to list or drop is reported, never fatal, because a
@@ -795,7 +785,7 @@ func (m *Manager) ReapUnreferenced(ctx context.Context, store AccountLister) {
 	keep := make([]string, 0, len(ids)*2)
 	for _, id := range ids {
 		keep = append(keep, m.databaseName(id))
-		keep = append(keep, dataset.EnvironmentDatabaseName("perf_"+digest(id)[:32]))
+		keep = append(keep, perfEnv.database(m, id))
 	}
 	m.mu.Lock()
 	defer m.mu.Unlock()
@@ -806,7 +796,7 @@ func (m *Manager) ReapUnreferenced(ctx context.Context, store AccountLister) {
 	// environments, but ListEnvironmentDatabases matches the qc prefix, so they
 	// are added to the keep-set explicitly.
 	keep = append(keep, m.opts.TemplateName, m.opts.PerfTemplateName)
-	dropped, derr := dataset.ReapEnvironmentDatabases(ctx, m.admin, keep)
+	dropped, derr := ReapEnvironmentDatabases(ctx, m.admin, keep)
 	if len(dropped) > 0 {
 		m.opts.Log.Info("environment reaper dropped orphaned databases", "count", len(dropped), "names", dropped)
 	}
@@ -815,6 +805,12 @@ func (m *Manager) ReapUnreferenced(ctx context.Context, store AccountLister) {
 	}
 }
 
+// digest is a stable, filesystem-safe hash of an account id. A hash rather than
+// the id keeps a learner's email address out of database and file names, while
+// still giving two accounts two environments. The first 32 hex characters (16
+// bytes) of the 64-character digest are far more than enough to keep a single
+// deployment's accounts apart, and both the database names and the SQLite file
+// names truncate to that length.
 func digest(accountID string) string {
 	sum := sha256.Sum256([]byte(accountID))
 	return hex.EncodeToString(sum[:])
@@ -843,11 +839,10 @@ func (m *Manager) reapLoop() {
 // back instead of holding them for a learner who has gone.
 //
 // The DROP runs outside the state lock, one victim at a time, and uses a fresh
-// admin connection for the same reason reset does: a sweep used to hold the
-// lock across every database it dropped, so one idle account froze every other
-// account's Ensure and Facts for the whole sweep. Each victim is marked in
-// flight first, so an Ensure for the same account waits for the drop instead of
-// binding a pool to a database about to disappear.
+// admin connection for the same reason reset does: holding the lock across a
+// sweep would freeze every other account's Ensure and Facts for the whole sweep.
+// Each victim is marked in flight first, so an Ensure for the same account waits
+// for the drop instead of binding a pool to a database about to disappear.
 func (m *Manager) reapOnce() {
 	ctx, cancel := context.WithTimeout(context.Background(), dropTimeout)
 	defer cancel()
@@ -904,7 +899,7 @@ func (m *Manager) reapOnce() {
 	defer func() { _ = conn.Close(context.WithoutCancel(ctx)) }()
 
 	for _, v := range victims {
-		dropErr := dataset.DropDatabase(ctx, conn, v.env.database)
+		dropErr := DropDatabase(ctx, conn, v.env.database)
 
 		m.mu.Lock()
 		delete(m.building, v.key)

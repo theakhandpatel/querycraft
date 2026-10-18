@@ -282,7 +282,6 @@ func TestReachableCodesAreTheEngineOnes(t *testing.T) {
 			t.Errorf("the profile emits %q; that code belongs to the executor and must never come from the engine", code)
 		}
 	}
-	_ = sortedSet // keep the helper honest if the assertions above change shape
 }
 
 type classifyCase struct {
@@ -348,9 +347,6 @@ func TestClassifyError(t *testing.T) {
 			if got := p.ClassifyError(errors.New(c.msg)); got != c.want {
 				t.Errorf("ClassifyError(%q) = %q, want %q", c.msg, got, c.want)
 			}
-			if got := ClassifyError(errors.New(c.msg)); got != c.want {
-				t.Errorf("package ClassifyError(%q) = %q, want %q", c.msg, got, c.want)
-			}
 		})
 	}
 }
@@ -362,10 +358,11 @@ func TestClassifyError(t *testing.T) {
 //
 // The profile's patterns are sqlite3_errmsg's sentences, so the sentence
 // classifies as the contract says — "incomplete input" is a syntax error — while
-// a driver's rendering of that same sentence does not. The adapter that knows its
-// driver removes the framing before calling here (engine/sqlite.go,
-// sqliteErrorOf); this package stays a pure matcher over a language-neutral file
-// that the browser reads too.
+// a driver's rendering of that same sentence does not. The Go adapter reads the
+// raw driver's sentence (engine/sqlite_raw.go, engineError) and the browser
+// adapter strips its own driver's framing (web/src/api/sqliteFraming.ts); this
+// package stays a pure matcher over a language-neutral file that the browser
+// reads too.
 func TestClassifyErrorExpectsTheEnginesSentence(t *testing.T) {
 	p := SQLite()
 	for _, c := range []struct {

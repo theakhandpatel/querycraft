@@ -15,8 +15,3 @@ import schemaSql from '../../../backend/internal/dataset/schema.sqlite.sql?raw';
 import seedSql from '../../../backend/internal/dataset/seed.sqlite.sql?raw';
 
 export { schemaSql, seedSql };
-
-/* The version lives in the schema's own header, exactly as the PostgreSQL
-   schema carries it, so the client and the Go seed agree without a second
-   constant to keep in sync. */
-export const datasetVersion = Number(/dataset_version:\s*(\d+)/.exec(schemaSql)?.[1] ?? 1);

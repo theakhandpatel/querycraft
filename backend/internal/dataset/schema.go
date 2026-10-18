@@ -1,3 +1,7 @@
+// DDL generation for the learner-visible dataset schema. commerceTables is the
+// single source of truth for schema.sql; RenderSchemaSQL emits the file and
+// TestSchemaSQLUpToDate holds the committed copy to the output. The seed is
+// rendered by seed.go, and sqlite_dataset.go carries the SQLite mirror.
 package dataset
 
 import (
@@ -5,11 +9,13 @@ import (
 	"strings"
 )
 
-// quoteIdent renders a SQL identifier as a double-quoted string, doubling any
+// QuoteIdent renders a SQL identifier as a double-quoted string, doubling any
 // embedded double quote. Nothing in this package comes from a request today,
 // but every identifier is quoted anyway so the generated DDL/seed is provably
-// injection-free even if a generator ever takes a caller-supplied name.
-func quoteIdent(name string) string {
+// injection-free even if a generator ever takes a caller-supplied name. It is
+// exported because envdb quotes the same identifiers when it creates, seals and
+// drops environment databases.
+func QuoteIdent(name string) string {
 	return `"` + strings.ReplaceAll(name, `"`, `""`) + `"`
 }
 
@@ -66,14 +72,14 @@ var commerceTables = []schemaTable{
 	}},
 	{name: "orders", columns: []schemaColumn{
 		{"id", "integer", "PRIMARY KEY"},
-		{"customer_id", "integer", "NOT NULL REFERENCES " + quoteIdent(SchemaName) + "." + quoteIdent("customers") + "(" + quoteIdent("id") + ")"},
+		{"customer_id", "integer", "NOT NULL REFERENCES " + QuoteIdent(SchemaName) + "." + QuoteIdent("customers") + "(" + QuoteIdent("id") + ")"},
 		{"ordered_at", "timestamp", "NOT NULL"},
 		{"status", "text", "NOT NULL"},
 	}},
 	{name: "order_items", columns: []schemaColumn{
 		{"id", "integer", "PRIMARY KEY"},
-		{"order_id", "integer", "NOT NULL REFERENCES " + quoteIdent(SchemaName) + "." + quoteIdent("orders") + "(" + quoteIdent("id") + ")"},
-		{"product_id", "integer", "NOT NULL REFERENCES " + quoteIdent(SchemaName) + "." + quoteIdent("products") + "(" + quoteIdent("id") + ")"},
+		{"order_id", "integer", "NOT NULL REFERENCES " + QuoteIdent(SchemaName) + "." + QuoteIdent("orders") + "(" + QuoteIdent("id") + ")"},
+		{"product_id", "integer", "NOT NULL REFERENCES " + QuoteIdent(SchemaName) + "." + QuoteIdent("products") + "(" + QuoteIdent("id") + ")"},
 		{"quantity", "integer", "NOT NULL CHECK (quantity > 0)"},
 		{"unit_price", "numeric(10,2)", "NOT NULL"},
 	}},
@@ -101,13 +107,13 @@ func RenderSchemaSQL(ds Dataset) string {
 	b.WriteString("-- Generated dataset_version: " + strconv.Itoa(ds.Version) + ". Schema and seed share one dataset_version.\n")
 	b.WriteString("-- Rebuild with: make dataset (regenerates schema.sql and seed.sql).\n\n")
 	b.WriteString("BEGIN;\n\n")
-	b.WriteString("CREATE SCHEMA IF NOT EXISTS " + quoteIdent(SchemaName) + ";\n\n")
+	b.WriteString("CREATE SCHEMA IF NOT EXISTS " + QuoteIdent(SchemaName) + ";\n\n")
 
 	// Drop children before parents so re-running the script is always safe.
 	for i := len(commerceTables) - 1; i >= 0; i-- {
-		b.WriteString("DROP TABLE IF EXISTS " + quoteIdent(SchemaName) + "." + quoteIdent(commerceTables[i].name) + ";\n")
+		b.WriteString("DROP TABLE IF EXISTS " + QuoteIdent(SchemaName) + "." + QuoteIdent(commerceTables[i].name) + ";\n")
 	}
-	b.WriteString("DROP TABLE IF EXISTS " + quoteIdent(SchemaName) + "." + quoteIdent(metaTable.name) + ";\n\n")
+	b.WriteString("DROP TABLE IF EXISTS " + QuoteIdent(SchemaName) + "." + QuoteIdent(metaTable.name) + ";\n\n")
 
 	for _, t := range commerceTables {
 		writeCreateTable(&b, t)
@@ -117,16 +123,16 @@ func RenderSchemaSQL(ds Dataset) string {
 	for _, idx := range commerceIndexes {
 		// The index name is unqualified on purpose: PostgreSQL creates it in
 		// the schema of its parent table and rejects `schema.index`.
-		b.WriteString("CREATE INDEX " + quoteIdent(idx.name) +
-			" ON " + quoteIdent(SchemaName) + "." + quoteIdent(idx.table) + " (" + quoteIdent(idx.column) + ");\n")
+		b.WriteString("CREATE INDEX " + QuoteIdent(idx.name) +
+			" ON " + QuoteIdent(SchemaName) + "." + QuoteIdent(idx.table) + " (" + QuoteIdent(idx.column) + ");\n")
 	}
 	b.WriteString("\n")
 
 	writeCreateTable(&b, metaTable)
 	b.WriteString("\n")
 
-	b.WriteString("INSERT INTO " + quoteIdent(SchemaName) + "." + quoteIdent(metaTable.name) +
-		" (" + quoteIdent("dataset") + ", " + quoteIdent("version") + ") VALUES (" +
+	b.WriteString("INSERT INTO " + QuoteIdent(SchemaName) + "." + QuoteIdent(metaTable.name) +
+		" (" + QuoteIdent("dataset") + ", " + QuoteIdent("version") + ") VALUES (" +
 		quoteLiteral(ds.ID) + ", " + strconv.Itoa(ds.Version) + ");\n\n")
 	b.WriteString("COMMIT;\n")
 	return b.String()
@@ -136,7 +142,7 @@ func writeCreateTable(b *strings.Builder, t schemaTable) {
 	names := make([]string, len(t.columns))
 	nameWidth, typeWidth := 0, 0
 	for i, c := range t.columns {
-		names[i] = quoteIdent(c.name)
+		names[i] = QuoteIdent(c.name)
 		if len(names[i]) > nameWidth {
 			nameWidth = len(names[i])
 		}
@@ -144,7 +150,7 @@ func writeCreateTable(b *strings.Builder, t schemaTable) {
 			typeWidth = len(c.typ)
 		}
 	}
-	b.WriteString("CREATE TABLE " + quoteIdent(SchemaName) + "." + quoteIdent(t.name) + " (\n")
+	b.WriteString("CREATE TABLE " + QuoteIdent(SchemaName) + "." + QuoteIdent(t.name) + " (\n")
 	for i, c := range t.columns {
 		line := names[i] + strings.Repeat(" ", nameWidth-len(names[i])+1) + c.typ
 		if pad := typeWidth - len(c.typ); pad > 0 {

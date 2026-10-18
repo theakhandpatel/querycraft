@@ -1,4 +1,4 @@
-import { dialectFor, dialectLabel } from './dialect';
+import { dialectFor, dialectLabel, isDialect } from './dialect';
 import type { Course, CourseModule, Dialect } from '../types';
 
 /* The learner's dialect choice (M6 step 7), and the one rule for naming an
@@ -35,10 +35,6 @@ let cache: ChoiceMap | null = null;
 let version = 0;
 const listeners = new Set<() => void>();
 
-function isDialectValue(value: unknown): value is Dialect {
-  return value === 'postgresql' || value === 'sqlite';
-}
-
 /** The stored choices, decoded once. An unreadable entry is dropped rather
     than guessed at, so a hand-edited localStorage cannot put the UI on a
     dialect the app does not have. */
@@ -52,7 +48,7 @@ function load(): ChoiceMap {
         const parsed: unknown = JSON.parse(raw);
         if (parsed && typeof parsed === 'object') {
           for (const [id, value] of Object.entries(parsed as Record<string, unknown>)) {
-            if (isDialectValue(value)) map[id] = value;
+            if (isDialect(value)) map[id] = value;
           }
         }
       }
@@ -80,7 +76,7 @@ function save(next: ChoiceMap): void {
 /** The dialect the learner chose for one chapter, or null when they chose
     none. (`dialectChoice` itself is the resolver in `lib/dialect.ts`; this is
     the stored preference that resolver is given.) */
-export function storedDialectChoice(moduleId?: string | null): Dialect | null {
+function storedDialectChoice(moduleId?: string | null): Dialect | null {
   if (!moduleId) return null;
   return load()[moduleId] ?? null;
 }
@@ -144,7 +140,7 @@ export function engineLabelFor(dialect: Dialect, engine?: string | null): string
     the engine has not answered — the caller must not disable anything then. */
 export function servedDialects(caps: { dialect: Dialect; dialects?: Dialect[] } | null): Dialect[] | null {
   if (!caps) return null;
-  const advertised = (caps.dialects ?? []).filter(isDialectValue);
+  const advertised = (caps.dialects ?? []).filter(isDialect);
   return advertised.length > 0 ? advertised : [caps.dialect];
 }
 

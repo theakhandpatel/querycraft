@@ -1,3 +1,9 @@
+// Result encoding: engine and driver values into JSON-friendly Go values. The
+// contract fixes the JSON shape per type (contracts/query-result.schema.json),
+// and the browser adapter produces the same shape, so a lesson reads the same
+// over PGLite and over the gateway. PgxExecutor passes the column OID and the
+// raw bytes here through normalizeColumn; the text-form OIDs are the ones a
+// decoded Go value cannot reproduce.
 package engine
 
 import (
@@ -88,15 +94,15 @@ func uuidString(b [16]byte) string {
 //
 // The browser adapter (web/src/api/pglite.ts) returns exactly this text for the
 // same columns, and the gateway has to agree: one lesson runs against both, so
-// a price that reads "118.00" in the browser must not read 118 over HTTP. Both
-// divergences this closes were real and measured:
+// a price that reads "118.00" in the browser must not read 118 over HTTP. Two
+// divergences are why the list exists:
 //
-//   - `numeric` used to go through Float64Value, which drops the scale:
-//     118.00 arrived as 118 (a value the learner can no longer trust).
-//   - a naive `timestamp` used to be decoded into a time value and re-rendered,
-//     which moves the wall-clock time by the host's UTC offset (10:30 became
-//     05:00 under Asia/Calcutta), because a "timestamp without time zone" has
-//     no offset to preserve and any conversion invents one.
+//   - `numeric` through Float64Value drops the scale: 118.00 arrives as 118, a
+//     value the learner can no longer trust.
+//   - a `timestamp` decoded into a time value and re-rendered moves the
+//     wall-clock time by the host's UTC offset (10:30 became 05:00 under
+//     Asia/Calcutta), because a "timestamp without time zone" has no offset to
+//     preserve and any conversion invents one.
 //
 // Everything else keeps its decoded Go value, because the browser adapter
 // produces the same shape: int4/float8 are JSON numbers, bool is a JSON

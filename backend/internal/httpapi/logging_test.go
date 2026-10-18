@@ -20,16 +20,25 @@ func captureServer(t *testing.T, exec engine.Executor) (*Server, *bytes.Buffer) 
 	return New(exec, store.NewMemory(), Config{MaxRows: 100, TimeoutMS: 1000, MaxConcurrent: 2}, log), &buf
 }
 
-// requestLogLine returns the access-log line that names operation=<op>.
-func requestLogLine(t *testing.T, buf *bytes.Buffer, op string) string {
+// requestLogLines returns every access-log line that names operation=<op>.
+func requestLogLines(t *testing.T, buf *bytes.Buffer, op string) []string {
 	t.Helper()
+	var out []string
 	for _, line := range strings.Split(buf.String(), "\n") {
 		if strings.Contains(line, "msg=request") && strings.Contains(line, "operation="+op) {
-			return line
+			out = append(out, line)
 		}
 	}
-	t.Fatalf("no access log line for operation %q in:\n%s", op, buf.String())
-	return ""
+	if len(out) == 0 {
+		t.Fatalf("no access log line for operation %q in:\n%s", op, buf.String())
+	}
+	return out
+}
+
+// requestLogLine returns the first access-log line that names operation=<op>.
+func requestLogLine(t *testing.T, buf *bytes.Buffer, op string) string {
+	t.Helper()
+	return requestLogLines(t, buf, op)[0]
 }
 
 // The access log is how an operator finds out what the gateway did. §13.1 asks
@@ -62,6 +71,33 @@ func TestAccessLogCarriesOperationDurationStatusAndErrorCode(t *testing.T) {
 	}
 	if strings.Contains(healthy, "error_code=") {
 		t.Errorf("a successful request carries an error_code: %s", healthy)
+	}
+}
+
+// An AI route's failures used to log no error code at all: writeAIError writes
+// the code inside a *schema.Error, a shape the old body-inspecting switch never
+// knew, and an outcome's error is another shape it never knew. The writers now
+// name the code, so an AI refusal is filterable like a statement refusal.
+func TestAccessLogNamesTheAICode(t *testing.T) {
+	s, buf := captureServer(t, &fakeExecutor{})
+	token := signupUser(t, s, "log-ai@example.test")
+
+	// No generation service is configured: /courses/{id}/build refuses through
+	// writeAIError, whose body is an *schema.Error.
+	doAs(t, s, token, http.MethodPost, "/courses/course-1/build", "")
+	refusal := requestLogLines(t, buf, "build_course")[0]
+	for _, want := range []string{"status=503", "error_code=AI_UNAVAILABLE"} {
+		if !strings.Contains(refusal, want) {
+			t.Errorf("access log line missing %q: %s", want, refusal)
+		}
+	}
+
+	// An unreadable body on an AI route keeps the AI vocabulary from the route
+	// table, not the query one.
+	doAs(t, s, token, http.MethodPost, "/courses/generate", `{"goal":`)
+	malformed := requestLogLines(t, buf, "generate_course")[0]
+	if !strings.Contains(malformed, "error_code=AI_INVALID_REQUEST") {
+		t.Errorf("the unreadable AI body is not named: %s", malformed)
 	}
 }
 

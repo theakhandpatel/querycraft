@@ -26,6 +26,7 @@ import {
   ExecutionService,
   clearAuthToken,
   nowMs,
+  offlineDraft,
   readAuthToken,
   writeAuthToken,
   writeAuthUser,
@@ -502,14 +503,8 @@ const service: ExecutionServiceShape = {
        effect of the offline evidence run and leave an artifact behind that the
        learner never asked for. So the gateway adapter drafts locally, exactly
        like the offline ones. */
-    draftCourse: (req) =>
-      Effect.sync(() => ({
-        title: req.title,
-        chapters: (req.steps ?? []).length,
-        exercises: req.exercises,
-        datasetVersion: 1,
-      })),
-    draftChallenge: () => Effect.succeed({ ok: true }),
+    draftCourse: (req) => Effect.sync(() => offlineDraft(req).course),
+    draftChallenge: (req) => Effect.succeed(offlineDraft(req).challenge),
   };
   return Layer.succeed(ExecutionService, service);
 }

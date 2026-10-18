@@ -113,8 +113,16 @@ make audit-metrics     # /metrics and /diagnostics
 ```
 
 `make test` runs the type check, the linter, every audit above except the load
-test and parity, and `go test ./...`. The load test and the parity audit start
-their own gateway, so they are separate targets.
+test, and `go test ./...`. It fans the checks out with a sub-make, up to
+`TEST_JOBS` at once (default 8). Every audit binds free ports and stages its
+own files, so the checks share no state. One green run takes about a minute.
+
+The Go suite boots a PostgreSQL cluster for every test that needs one, and the
+first run also builds a golden cluster at `backend/.data/pg/golden`: initdb and
+the dataset run once, and each test copies the result (about 0.2 s) and starts a
+server on it. A new PostgreSQL binary or a changed dataset rebuilds it;
+`make db-reset` removes it. The load test and the parity audit start their own
+gateway, so they are separate targets.
 
 `make verify` starts the freshly built binary on `127.0.0.1:18080` against a
 throwaway cluster in `backend/.data/smoke`. It wipes and recreates that

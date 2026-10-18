@@ -4,7 +4,7 @@ import { useStore } from '../../state/store';
 import { activeModules, courseExerciseIds, coursePassed, exerciseIdsOfModule, courseShort, findExercise } from '../../lib/model';
 import { attemptsByDay, WEEKDAY_LABELS, whenLabel, formatDuration, isEarlierVersion, stampFor } from '../../lib/progress';
 import { datasetVersion } from '../../api/dataset';
-import type { EventKind } from '../../types';
+import type { EventKind, ProgressEvent } from '../../types';
 
 /** One wording for one outcome, shared by the recent list and the history. */
 function outcomeLabel(kind: EventKind): string {
@@ -19,6 +19,13 @@ function outcomeLabel(kind: EventKind): string {
 
 function outcomeClass(kind: EventKind): string {
   return kind === 'passed' ? 'pass' : kind === 'failed' ? 'warn' : 'muted';
+}
+
+/** §7.3: an attempt against content that has since changed is not re-graded or
+    hidden — it is labelled. One evaluation per attempt, so the recent list and
+    the per-exercise history cannot disagree about the same row. */
+function staleFor(e: ProgressEvent): boolean {
+  return isEarlierVersion(e, stampFor(findExercise(e.id)?.block, datasetVersion));
 }
 
 export default function ProgressScreen() {
@@ -88,9 +95,7 @@ export default function ProgressScreen() {
             recent.map((e, i) => {
               const label = outcomeLabel(e.kind);
               const cls = outcomeClass(e.kind);
-              /* §7.3: an attempt against content that has since changed is not
-                 re-graded or hidden — it is labelled. */
-              const stale = isEarlierVersion(e, stampFor(findExercise(e.id)?.block, datasetVersion));
+              const stale = staleFor(e);
               return (
                 <div className="reportrow" key={i}>
                   <span><span className={`recdot ${cls}`}></span><span className="mono" style={{ fontSize: 12 }}>{e.id}</span> · {e.title}</span>
@@ -136,7 +141,7 @@ export default function ProgressScreen() {
                     ) : (
                       <span className="pill subtle" title="This attempt predates version stamps">unversioned</span>
                     )}
-                    {isEarlierVersion(e, stampFor(findExercise(e.id)?.block, datasetVersion)) ? (
+                    {staleFor(e) ? (
                       <span className="pill subtle" title="The exercise or the dataset changed after this attempt">solved on an earlier version</span>
                     ) : null}
                     {' '}{outcomeLabel(e.kind)}

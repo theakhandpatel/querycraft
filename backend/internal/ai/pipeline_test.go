@@ -80,7 +80,6 @@ func TestPipelineActivatesAPersistedChallenge(t *testing.T) {
 	// The real evaluator grades it: the reference passes and a plausible wrong
 	// answer fails.
 	exercise := eval.Exercise{
-		Prompt:            out.Artifact.Prompt,
 		Contract:          evalContract(out.Artifact.ResultContract),
 		ReferenceSolution: out.Artifact.ReferenceSolution,
 	}

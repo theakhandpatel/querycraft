@@ -3,7 +3,7 @@
  * `contracts/perf-contract.schema.json`.
  *
  * This module is the one JavaScript vocabulary for a captured plan. Both the
- * browser adapter (`./pglite`) and the gateway adapter (`./execution`) hand
+ * browser adapter (`./pglite`) and the gateway adapter (`./execution/http`) hand
  * whatever the engine produced through `buildPlanBundle`, so the two can never
  * describe the same plan with two different `summary` shapes. The Go engine
  * writes the same shape in `backend/internal/perf/plan.go`; the JSON Schemas in
@@ -25,14 +25,14 @@ import type { DatasetId } from '../types';
 
 /* ---------- bundle ---------- */
 
-export type PlanStatus = 'succeeded' | 'failed';
+type PlanStatus = 'succeeded' | 'failed';
 
 /** What the numbers beside a plan are worth. `analyze`: the statement ran, so
     per-node timings are measured. `estimate`: the planner's cost model only, no
     timings exist. `none`: the request failed, so there is nothing to show. */
 export type TimingPrecision = 'analyze' | 'estimate' | 'none';
 
-export type PlanEngine = 'postgresql' | (string & {});
+type PlanEngine = 'postgresql' | (string & {});
 
 /** One node of the flat, depth-first walk the viewer renders. `actual_*` are
     null unless `timing_precision` is `analyze`. */
@@ -56,19 +56,19 @@ export interface PlanNode {
   warnings: string[];
 }
 
-export interface PlanSeqScan {
+interface PlanSeqScan {
   relation: string;
   plan_rows: number;
 }
 
-export interface PlanIndexScan {
+interface PlanIndexScan {
   relation: string;
   index: string;
   node_type: string;
 }
 
 /** The deterministic, gradeable facts. Everything `gradePlan` reads lives here. */
-export interface PlanSummary {
+interface PlanSummary {
   node_count: number;
   node_types: string[];
   relations: string[];
@@ -81,7 +81,7 @@ export interface PlanSummary {
   nodes: PlanNode[];
 }
 
-export interface PlanIndex {
+interface PlanIndex {
   relation: string;
   name: string;
   definition?: string | null;
@@ -99,7 +99,7 @@ export interface PlanEnvironment {
   settings: Record<string, string>;
 }
 
-export type PlanWarningCode =
+type PlanWarningCode =
   | 'PLAN_SEQ_SCAN_LARGE_TABLE'
   | 'PLAN_ESTIMATE_OFF_BY_ORDERS_OF_MAGNITUDE'
   | 'PLAN_NODE_CAP_REACHED'
@@ -107,7 +107,7 @@ export type PlanWarningCode =
   | 'PLAN_SETTINGS_NON_DEFAULT'
   | 'PLAN_ANALYZE_SKIPPED_NO_ENVIRONMENT';
 
-export interface PlanWarning {
+interface PlanWarning {
   code: PlanWarningCode;
   message: string;
   relation?: string | null;
@@ -115,14 +115,14 @@ export interface PlanWarning {
 }
 
 /** The same envelope as `QueryResult`, so one error taxonomy serves both. */
-export interface PlanErrorShape {
+interface PlanErrorShape {
   code: string;
   message: string;
   detail?: string | null;
 }
 
 /** The raw engine plan node, verbatim and untrusted. */
-export type PlanRawNode = Record<string, unknown>;
+type PlanRawNode = Record<string, unknown>;
 
 export interface PlanBundle {
   status: PlanStatus;
@@ -144,14 +144,14 @@ export interface PlanBundle {
 
 /* ---------- the perf contract ---------- */
 
-export interface PerfRequireNode {
+interface PerfRequireNode {
   node_type: string;
   relation?: string | null;
   index?: string | null;
   label?: string | null;
 }
 
-export interface PerfForbidNode {
+interface PerfForbidNode {
   node_type: string;
   relation: string;
   above_plan_rows?: number;
@@ -192,7 +192,7 @@ export interface ExplainRequest {
 
 /** Thrown by `validatePlanBundle` when a body is not a `PlanBundle`. Typed, so
     a caller can tell "the gateway is broken" apart from "the gateway is down". */
-export class PlanContractError extends Error {
+class PlanContractError extends Error {
   readonly code = 'PLAN_CONTRACT_INVALID';
   readonly issues: string[];
   constructor(issues: string[]) {
@@ -277,7 +277,7 @@ const PlanErrorSchema = Schema.Struct({
   detail: Schema.optional(Schema.NullOr(Schema.String)),
 });
 
-export const PlanBundleSchema = Schema.Struct({
+const PlanBundleSchema = Schema.Struct({
   status: Schema.Literals(['succeeded', 'failed']),
   analyze: Schema.Boolean,
   timing_precision: Schema.Literals(['analyze', 'estimate', 'none']),
@@ -361,7 +361,7 @@ function str(node: Record<string, unknown>, ...keys: string[]): string | null {
  * as-is, so a caller that stored the unwrapped node still works. Anything else
  * is not a plan and reads as null rather than inventing one.
  */
-export function planRootOf(raw: unknown): PlanRawNode | null {
+function planRootOf(raw: unknown): PlanRawNode | null {
   let doc: unknown = raw;
   if (Array.isArray(doc)) doc = doc[0];
   if (!isRecord(doc)) return null;
@@ -372,7 +372,7 @@ export function planRootOf(raw: unknown): PlanRawNode | null {
 
 /** Parse the engine's JSON when it arrived as text (a `json` column that was not
     auto-decoded, or a body read as a string). */
-export function parsePlanJson(value: unknown): unknown {
+function parsePlanJson(value: unknown): unknown {
   if (typeof value !== 'string') return value;
   try {
     return JSON.parse(value);
@@ -485,7 +485,7 @@ export function summarizePlan(planRoot: unknown): PlanSummary {
 
 /** The warnings the summary itself justifies, computed the same way on both
     engines. Callers may add engine-specific ones, but never remove these. */
-export function deriveWarnings(summary: PlanSummary, precision: TimingPrecision): PlanWarning[] {
+function deriveWarnings(summary: PlanSummary, precision: TimingPrecision): PlanWarning[] {
   const warnings: PlanWarning[] = [];
   const large = summary.seq_scans.filter((s) => s.plan_rows >= SEQ_SCAN_LARGE_ROWS);
   if (large.length) {
@@ -503,7 +503,7 @@ export function deriveWarnings(summary: PlanSummary, precision: TimingPrecision)
   return warnings;
 }
 
-export interface PlanCaptureInput {
+interface PlanCaptureInput {
   /** The engine's EXPLAIN output, either raw JSON or the JSON text of it. */
   plan: unknown;
   analyze: boolean;
@@ -580,15 +580,6 @@ export function emptyEnvironment(engine: string): PlanEnvironment {
 
 /* ---------- grading (structural only) ---------- */
 
-/** The stable codes the Go grader emits (`backend/internal/perf/grade.go`).
-    One vocabulary for both languages, like the result-contract codes. */
-export type PerfCode =
-  | 'PERF_NODE_MISSING'
-  | 'PERF_NODE_FORBIDDEN'
-  | 'PERF_INDEX_NOT_USED'
-  | 'PERF_PLAN_ROWS_EXCEEDED'
-  | 'PERF_DIALECT_MISMATCH';
-
 /** Structurally identical to `CheckResult` in ../types (which cannot be imported
     here without a cycle: types imports this module). */
 export interface PlanCheck {
@@ -597,7 +588,7 @@ export interface PlanCheck {
   ok: boolean;
 }
 
-export interface PlanVerdict {
+interface PlanVerdict {
   passed: boolean;
   checks: PlanCheck[];
 }

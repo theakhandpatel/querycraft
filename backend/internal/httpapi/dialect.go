@@ -13,13 +13,13 @@ import (
 /* Dialect routing (M6 step 4).
  *
  * POST /query, POST /explain and POST /answers/evaluate all take an optional
- * top-level `dialect`. Absent means PostgreSQL — the default dialect (ADR 0004)
- * — so every existing client keeps the behaviour it already had. A request for
- * a dialect this gateway serves is routed to that dialect's executor; a request
- * for one it does not serve is refused with DIALECT_MISMATCH naming the
- * dialects it *can* serve, because "switch the chapter, or switch the gateway"
- * is the whole fix and a silent fallback to the default engine would grade the
- * wrong language.
+ * top-level `dialect`. Absent means PostgreSQL, the default dialect (ADR 0004),
+ * so every existing client keeps the behaviour it already had. A request for a
+ * dialect this gateway serves routes to that dialect's executor. A request for
+ * one it does not serve is refused with DIALECT_MISMATCH naming the dialects it
+ * *can* serve, because "switch the chapter, or switch the gateway" is the whole
+ * fix, and a silent fallback to the default engine would grade the wrong
+ * language.
  */
 
 // requestedDialect normalises the request field. The zero value is the default
@@ -95,8 +95,8 @@ func (s *Server) statementExecutorOnDialect(ctx context.Context, r *http.Request
 }
 
 // sqliteExecutor picks the shared read-only fixture for an anonymous caller and
-// the learner's own writable file for a signed-in one — ADR 0003's split, with
-// a file in place of a copied database.
+// the learner's own writable file for a signed-in one. This is ADR 0003's
+// split, with a file in place of a copied database.
 func (s *Server) sqliteExecutor(ctx context.Context, r *http.Request) (engine.Executor, error) {
 	if u, ok := userFrom(r.Context()); ok {
 		return s.sqlite.ForAccount(ctx, u.ID)
@@ -106,8 +106,8 @@ func (s *Server) sqliteExecutor(ctx context.Context, r *http.Request) (engine.Ex
 
 // refusingDialect builds the DIALECT_MISMATCH result. The message names both
 // sides: the dialect the request asked for, and the dialects this gateway
-// actually serves, because the pair is the whole fix and neither half alone
-// tells the learner what to do.
+// serves, because the pair is the whole fix and neither half alone tells the
+// learner what to do.
 func (s *Server) refusingDialect(ctx context.Context, requested string) engine.QueryResult {
 	served := s.Dialects()
 	running := engine.DialectPostgres

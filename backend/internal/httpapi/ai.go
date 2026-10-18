@@ -11,6 +11,7 @@ import (
 	"github.com/querycraft/sqlquery/backend/internal/ai/jobs"
 	"github.com/querycraft/sqlquery/backend/internal/metrics"
 	"github.com/querycraft/sqlquery/backend/internal/schema"
+	"github.com/querycraft/sqlquery/backend/internal/store"
 )
 
 /* The M4 generation surface.
@@ -51,7 +52,7 @@ func (s *Server) setAIConfig(cfg ai.Config) {
 // file's provider, and PUT /admin/ai applies what the manage surface sends.
 // Requests and jobs submitted after the swap build their services from the new
 // configuration; a job already running keeps the provider it started with,
-// which is the honest semantics — a run half-completed by one provider is not
+// which is the honest semantics: a run half-completed by one provider is not
 // handed to another.
 func (s *Server) SetAIConfig(cfg ai.Config) {
 	s.setAIConfig(cfg)
@@ -94,18 +95,12 @@ func (s *Server) aiAvailability() ai.Availability {
 		// The run budget belongs to the pipeline, not to the provider, so a
 		// gateway with no generation service attached still advertises it. A
 		// client that cached the budget keeps a sane deadline across a gateway
-		// that happens to be AI-off right now, instead of falling back on its
-		// own guess.
+		// that is AI-off, instead of falling back on its own guess.
 		av := ai.NewService(ai.Config{}).Available()
-		av.Reason = "AI is off: no generation service is configured."
+		av.Reason = aiOffMessage
 		return av
 	}
-	cfg, ok := s.currentAI()
-	if !ok {
-		av := ai.NewService(ai.Config{}).Available()
-		av.Reason = "AI is off: no generation service is configured."
-		return av
-	}
+	cfg, _ := s.currentAI()
 	return ai.NewService(cfg).Available()
 }
 
@@ -120,6 +115,41 @@ func (s *Server) aiServiceFor(ownerID string) *ai.Service {
 		cfg.Depot = ownerScopedDepot{Depot: cfg.Depot, owner: ownerID}
 	}
 	return ai.NewService(cfg)
+}
+
+// requireAI resolves the caller and their owner-scoped generation service, or
+// writes the one AI-off refusal and reports failure: 503 with
+// AI_UNAVAILABLE and aiOffMessage. It is the service half of the AI-off
+// family. The depot routes use requireCourseDepot, and the outcome routes build
+// their own unavailable shape.
+func (s *Server) requireAI(w http.ResponseWriter, r *http.Request) (store.User, *ai.Service, bool) {
+	u, ok := s.requireUser(w, r)
+	if !ok {
+		return store.User{}, nil, false
+	}
+	svc := s.aiServiceFor(u.ID)
+	if svc == nil {
+		writeAIError(w, &schema.Error{Code: ai.CodeUnavailable, Message: aiOffMessage})
+		return store.User{}, nil, false
+	}
+	return u, svc, true
+}
+
+// requireCourseDepot resolves the caller and the configured course depot, or
+// writes the same 503 AI_UNAVAILABLE refusal and reports failure. The stored
+// course and run reads use the depot directly rather than the owner-scoped
+// wrapper, which scopes writes only.
+func (s *Server) requireCourseDepot(w http.ResponseWriter, r *http.Request) (store.User, schema.Depot, bool) {
+	u, ok := s.requireUser(w, r)
+	if !ok {
+		return store.User{}, nil, false
+	}
+	depot := s.aiCourseDepot()
+	if depot == nil {
+		writeAIError(w, &schema.Error{Code: ai.CodeUnavailable, Message: aiOffMessage})
+		return store.User{}, nil, false
+	}
+	return u, depot, true
 }
 
 // ownerScopedDepot records who asked for a challenge without letting the
@@ -189,9 +219,9 @@ func (s *Server) runGeneration(w http.ResponseWriter, r *http.Request, kind stri
 
 	svc := s.aiServiceFor(u.ID)
 	if svc == nil {
-		out := unavailableOutcome(kind, "AI is off: no generation service is configured.")
+		out := unavailableOutcome(kind, aiOffMessage)
 		s.recordGeneration(out)
-		writeJSON(w, http.StatusServiceUnavailable, out)
+		writeOutcome(w, http.StatusServiceUnavailable, out)
 		return
 	}
 
@@ -207,19 +237,8 @@ func (s *Server) runGeneration(w http.ResponseWriter, r *http.Request, kind stri
 	// Generation runs real SQL in a throwaway environment, so it spends the
 	// same statement budget as a query. A gateway at capacity refuses rather
 	// than queueing a second generation behind the first.
-	// The pipeline owns its own deadline; the transport gives it headroom so a
-	// pipeline that stops on time reports its own timeout rather than being
-	// cut off by the request context.
-	cfg, _ := s.currentAI()
-	timeout := cfg.Limits.Merge(ai.DefaultLimits()).Timeout + 5*time.Second
-	ctx, cancel := context.WithTimeout(r.Context(), timeout)
-	defer cancel()
-	release, admitted := s.enter(ctx)
-	if !admitted {
-		out := unavailableOutcome(kind, "The gateway is at its concurrency limit; try again shortly.")
-		out.Error.Code = ai.CodeEnvironmentDown
-		s.recordGeneration(out)
-		writeJSON(w, http.StatusServiceUnavailable, out)
+	ctx, release, ok := s.admitGeneration(w, r, kind)
+	if !ok {
 		return
 	}
 	defer release()
@@ -232,7 +251,29 @@ func (s *Server) runGeneration(w http.ResponseWriter, r *http.Request, kind stri
 	}
 	out.Kind = kind
 	s.recordGeneration(out)
-	writeJSON(w, statusForOutcome(out), out)
+	writeOutcome(w, statusForOutcome(out), out)
+}
+
+// admitGeneration spends the statement budget for a generation: it gives the
+// pipeline its own deadline, waits for the semaphore, and refuses with the
+// environment-down outcome when the gateway is at capacity. The pipeline owns
+// its own deadline; the transport gives it headroom so a pipeline that stops on
+// time reports its own timeout rather than being cut off by the request
+// context. The returned release must be called.
+func (s *Server) admitGeneration(w http.ResponseWriter, r *http.Request, kind string) (context.Context, func(), bool) {
+	cfg, _ := s.currentAI()
+	timeout := cfg.Limits.Merge(ai.DefaultLimits()).Timeout + 5*time.Second
+	ctx, cancel := context.WithTimeout(r.Context(), timeout)
+	release, admitted := s.enter(ctx)
+	if !admitted {
+		cancel()
+		out := unavailableOutcome(kind, "The gateway is at its concurrency limit; try again shortly.")
+		out.Error.Code = ai.CodeEnvironmentDown
+		s.recordGeneration(out)
+		writeOutcome(w, http.StatusServiceUnavailable, out)
+		return nil, nil, false
+	}
+	return ctx, func() { release(); cancel() }, true
 }
 
 // asyncRequested reports whether the caller wants a job rather than an answer.
@@ -253,24 +294,26 @@ func asyncRequested(r *http.Request) bool {
 }
 
 // submitGenerationJob answers POST /courses/generate?async=1 with the id to
-// poll. The registry refuses a submission it cannot start — AI is off, the
-// gateway is already at its generation limit — and that refusal is reported in
-// the same envelope the blocking route uses, so a client has one shape to read
-// either way.
+// poll. The submission's kind is the route's, and the registry's refusal is the
+// one the blocking route reports.
 func (s *Server) submitGenerationJob(w http.ResponseWriter, r *http.Request, ownerID, kind string, req schema.GenerationRequest) {
-	job, err := s.jobs.Submit(r.Context(), jobs.Submission{
-		OwnerID:  ownerID,
-		Kind:     kind,
-		Request:  req,
-		OnFinish: s.recordJob,
-	})
+	s.submitJob(w, r, jobs.Submission{OwnerID: ownerID, Kind: kind, Request: req})
+}
+
+// submitJob hands a submission to the registry. The registry refuses one it
+// cannot start (AI is off, or the gateway is already at its generation limit),
+// and that refusal is reported in the same envelope the blocking route uses, so
+// a client has one shape to read either way.
+func (s *Server) submitJob(w http.ResponseWriter, r *http.Request, sub jobs.Submission) {
+	sub.OnFinish = s.recordJob
+	job, err := s.jobs.Submit(r.Context(), sub)
 	if err != nil {
 		var aiErr *schema.Error
 		if errors.As(err, &aiErr) {
-			out := unavailableOutcome(kind, aiErr.Message)
+			out := unavailableOutcome(sub.Kind, aiErr.Message)
 			out.Error.Code = aiErr.Code
 			s.recordGeneration(out)
-			writeJSON(w, statusForOutcome(out), out)
+			writeOutcome(w, statusForOutcome(out), out)
 			return
 		}
 		writeAIError(w, err)
@@ -292,13 +335,10 @@ func (s *Server) handleGenerationJob(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	if s.jobs == nil {
-		writeJSON(w, http.StatusServiceUnavailable, map[string]any{
-			"ok": false, "job": nil,
-			"error": map[string]string{"code": ai.CodeUnavailable, "message": "AI is off: no generation service is configured."},
-		})
+		aiOff(w, "job", nil)
 		return
 	}
-	view, found, err := s.jobs.Job(r.Context(), u.ID, r.PathValue("id"))
+	view, found, err := s.jobs.Job(u.ID, r.PathValue("id"))
 	if err != nil {
 		writeAIError(w, err)
 		return
@@ -309,6 +349,10 @@ func (s *Server) handleGenerationJob(w http.ResponseWriter, r *http.Request) {
 	}
 	writeJSON(w, http.StatusOK, map[string]any{"ok": true, "job": view})
 }
+
+// aiOffMessage is the one sentence every "generation is off" refusal carries:
+// the capability view, the list routes and every service-gated handler.
+const aiOffMessage = "AI is off: no generation service is configured."
 
 // unavailableOutcome is the shape every "AI is off" answer takes.
 func unavailableOutcome(kind, message string) schema.Outcome {
@@ -344,37 +388,71 @@ func statusForOutcome(o schema.Outcome) int {
 
 /* ---------- stored challenges ---------- */
 
-// handleListChallenges implements GET /challenges.
-func (s *Server) handleListChallenges(w http.ResponseWriter, r *http.Request) {
-	u, ok := s.requireUser(w, r)
+// listSpec is the one shape the owner-scoped list routes share: resolve the
+// caller, resolve the store, fetch, map each row through the client's view,
+// apply the row bound, and write {"ok": true, "<key>": [...]}. The store
+// resolution and its AI-off refusal live in fetch, because the challenge list
+// reads the generation service while the other three read the depot.
+//
+// view maps a stored row to the client's shape: a learner list blanks the owner
+// id, an admin list keeps it. A nil view returns the row unchanged. limit
+// bounds the rows written; zero means every row.
+type listSpec[T any] struct {
+	require func(http.ResponseWriter, *http.Request) (store.User, bool)
+	fetch   func(store.User) ([]T, bool)
+	key     string
+	view    func(T) T
+	limit   int
+}
+
+// list runs one list route. A change to the list envelope is one edit, not four.
+func list[T any](w http.ResponseWriter, r *http.Request, spec listSpec[T]) {
+	u, ok := spec.require(w, r)
 	if !ok {
 		return
 	}
-	svc := s.aiServiceFor(u.ID)
-	if svc == nil {
-		writeJSON(w, http.StatusServiceUnavailable, map[string]any{
-			"ok": false, "challenges": []schema.Record{},
-			"error": map[string]string{"code": ai.CodeUnavailable, "message": "AI is off: no generation service is configured."},
-		})
+	rows, ok := spec.fetch(u)
+	if !ok {
 		return
 	}
-	recs, err := svc.ChallengesFor(r.Context(), u.ID)
-	if err != nil {
-		writeAIError(w, err)
-		return
+	out := make([]T, 0, len(rows))
+	for _, row := range rows {
+		if spec.view != nil {
+			row = spec.view(row)
+		}
+		out = append(out, row)
+		if spec.limit > 0 && len(out) >= spec.limit {
+			break
+		}
 	}
-	writeJSON(w, http.StatusOK, map[string]any{"ok": true, "challenges": recs})
+	writeJSON(w, http.StatusOK, map[string]any{"ok": true, spec.key: out})
+}
+
+// handleListChallenges implements GET /challenges.
+func (s *Server) handleListChallenges(w http.ResponseWriter, r *http.Request) {
+	list(w, r, listSpec[schema.Record]{
+		require: s.requireUser,
+		key:     "challenges",
+		fetch: func(u store.User) ([]schema.Record, bool) {
+			svc := s.aiServiceFor(u.ID)
+			if svc == nil {
+				aiOff(w, "challenges", []schema.Record{})
+				return nil, false
+			}
+			recs, err := svc.ChallengesFor(r.Context(), u.ID)
+			if err != nil {
+				writeAIError(w, err)
+				return nil, false
+			}
+			return recs, true
+		},
+	})
 }
 
 // handleGetChallenge implements GET /challenges/{id}.
 func (s *Server) handleGetChallenge(w http.ResponseWriter, r *http.Request) {
-	u, ok := s.requireUser(w, r)
+	_, svc, ok := s.requireAI(w, r)
 	if !ok {
-		return
-	}
-	svc := s.aiServiceFor(u.ID)
-	if svc == nil {
-		writeAIError(w, &schema.Error{Code: ai.CodeUnavailable, Message: "AI is off: no generation service is configured."})
 		return
 	}
 	rec, found, err := svc.Challenge(r.Context(), r.PathValue("id"))
@@ -386,21 +464,16 @@ func (s *Server) handleGetChallenge(w http.ResponseWriter, r *http.Request) {
 		notFound(w, "unknown challenge: "+r.PathValue("id"))
 		return
 	}
-	// The {ok, challenge} envelope, matching GET /courses/{id}'s {ok, course}.
-	// The two resource reads differed here for no reason; one shape is the rule.
+	// The {ok, challenge} envelope, matching GET /courses/{id}'s {ok, course},
+	// so both resource reads share one shape.
 	writeJSON(w, http.StatusOK, map[string]any{"ok": true, "challenge": rec})
 }
 
 // handleResetChallenge implements POST /challenges/{id}/reset. It removes the
 // generated definition; learner attempts are the learner's data and stay.
 func (s *Server) handleResetChallenge(w http.ResponseWriter, r *http.Request) {
-	u, ok := s.requireUser(w, r)
+	_, svc, ok := s.requireAI(w, r)
 	if !ok {
-		return
-	}
-	svc := s.aiServiceFor(u.ID)
-	if svc == nil {
-		writeAIError(w, &schema.Error{Code: ai.CodeUnavailable, Message: "AI is off: no generation service is configured."})
 		return
 	}
 	if err := svc.Reset(r.Context(), r.PathValue("id")); err != nil {
@@ -433,56 +506,52 @@ func courseView(rec schema.CourseRecord) schema.CourseRecord {
 
 // handleListCourses implements GET /courses.
 func (s *Server) handleListCourses(w http.ResponseWriter, r *http.Request) {
-	u, ok := s.requireUser(w, r)
-	if !ok {
-		return
-	}
-	depot := s.aiCourseDepot()
-	if depot == nil {
-		writeJSON(w, http.StatusServiceUnavailable, map[string]any{
-			"ok": false, "courses": []schema.CourseRecord{},
-			"error": map[string]string{"code": ai.CodeUnavailable, "message": "AI is off: no generation service is configured."},
-		})
-		return
-	}
-	recs, err := depot.CoursesFor(r.Context(), u.ID)
-	if err != nil {
-		writeAIError(w, err)
-		return
-	}
-	/* The store filters by owner in SQL; nothing another learner owns is loaded
-	   only to be discarded. */
-	mine := make([]schema.CourseRecord, 0, len(recs))
-	for _, rec := range recs {
-		mine = append(mine, courseView(rec))
-	}
-	writeJSON(w, http.StatusOK, map[string]any{"ok": true, "courses": mine})
+	list(w, r, listSpec[schema.CourseRecord]{
+		require: s.requireUser,
+		key:     "courses",
+		view:    courseView,
+		fetch: func(u store.User) ([]schema.CourseRecord, bool) {
+			depot := s.aiCourseDepot()
+			if depot == nil {
+				aiOff(w, "courses", []schema.CourseRecord{})
+				return nil, false
+			}
+			recs, err := depot.CoursesFor(r.Context(), u.ID)
+			if err != nil {
+				writeAIError(w, err)
+				return nil, false
+			}
+			/* The store filters by owner in SQL; nothing another learner owns is
+			   loaded only to be discarded. */
+			return recs, true
+		},
+	})
 }
 
 // handleAdminCourses implements GET /admin/courses: every stored course, every
-// owner, with the owner id kept in the body — an inventory an administrator can
-// act on, not a learner view. A learner is refused with 403; the owner-scoped
-// GET /courses stays the learner's own list. A course that is not the caller's
-// stays 404 on the detail routes, so an id still cannot be probed for
-// existence from here.
+// owner, with the owner id kept in the body. It is an inventory an administrator
+// can act on, not a learner view. A learner is refused with 403; the
+// owner-scoped GET /courses stays the learner's own list. A course that is not
+// the caller's stays 404 on the detail routes, so an id still cannot be probed
+// for existence from here.
 func (s *Server) handleAdminCourses(w http.ResponseWriter, r *http.Request) {
-	if _, ok := s.requireAdmin(w, r); !ok {
-		return
-	}
-	depot := s.aiCourseDepot()
-	if depot == nil {
-		writeJSON(w, http.StatusServiceUnavailable, map[string]any{
-			"ok": false, "courses": []schema.CourseRecord{},
-			"error": map[string]string{"code": ai.CodeUnavailable, "message": "AI is off: no generation service is configured."},
-		})
-		return
-	}
-	recs, err := depot.Courses(r.Context())
-	if err != nil {
-		writeAIError(w, err)
-		return
-	}
-	writeJSON(w, http.StatusOK, map[string]any{"ok": true, "courses": recs})
+	list(w, r, listSpec[schema.CourseRecord]{
+		require: s.requireAdmin,
+		key:     "courses",
+		fetch: func(store.User) ([]schema.CourseRecord, bool) {
+			depot := s.aiCourseDepot()
+			if depot == nil {
+				aiOff(w, "courses", []schema.CourseRecord{})
+				return nil, false
+			}
+			recs, err := depot.Courses(r.Context())
+			if err != nil {
+				writeAIError(w, err)
+				return nil, false
+			}
+			return recs, true
+		},
+	})
 }
 
 // ownedCourse fetches a course by id and enforces the owner rule: a course that
@@ -502,13 +571,8 @@ func ownedCourse(ctx context.Context, depot schema.Depot, ownerID, id string) (s
 
 // handleGetCourse implements GET /courses/{id}.
 func (s *Server) handleGetCourse(w http.ResponseWriter, r *http.Request) {
-	u, ok := s.requireUser(w, r)
+	u, depot, ok := s.requireCourseDepot(w, r)
 	if !ok {
-		return
-	}
-	depot := s.aiCourseDepot()
-	if depot == nil {
-		writeAIError(w, &schema.Error{Code: ai.CodeUnavailable, Message: "AI is off: no generation service is configured."})
 		return
 	}
 	rec, owned, err := ownedCourse(r.Context(), depot, u.ID, r.PathValue("id"))
@@ -526,13 +590,8 @@ func (s *Server) handleGetCourse(w http.ResponseWriter, r *http.Request) {
 // handleDeleteCourse implements DELETE /courses/{id}. It removes the generated
 // plan; learner attempts and progress are the learner's data and stay.
 func (s *Server) handleDeleteCourse(w http.ResponseWriter, r *http.Request) {
-	u, ok := s.requireUser(w, r)
+	u, depot, ok := s.requireCourseDepot(w, r)
 	if !ok {
-		return
-	}
-	depot := s.aiCourseDepot()
-	if depot == nil {
-		writeAIError(w, &schema.Error{Code: ai.CodeUnavailable, Message: "AI is off: no generation service is configured."})
 		return
 	}
 	id := r.PathValue("id")
@@ -559,18 +618,15 @@ func (s *Server) handleDeleteCourse(w http.ResponseWriter, r *http.Request) {
 }
 
 // handleBuildCourse implements POST /courses/{id}/build: the approval that
-// continues a paused course into its chapter phase. It is owner-scoped exactly
-// like the read and delete routes — another account's course is 404, never 403,
-// because an id must not be probeable for existence — and it refuses a course
-// that is not waiting for approval rather than silently re-running chapters.
+// continues a paused course into its chapter phase, and the resume that
+// continues a course an interrupted build left behind. It is owner-scoped
+// exactly like the read and delete routes. Another account's course is 404,
+// never 403, because an id must not be probeable for existence. It refuses a
+// course that is not waiting for approval rather than silently re-running
+// chapters.
 func (s *Server) handleBuildCourse(w http.ResponseWriter, r *http.Request) {
-	u, ok := s.requireUser(w, r)
+	u, depot, ok := s.requireCourseDepot(w, r)
 	if !ok {
-		return
-	}
-	depot := s.aiCourseDepot()
-	if depot == nil {
-		writeAIError(w, &schema.Error{Code: ai.CodeUnavailable, Message: "AI is off: no generation service is configured."})
 		return
 	}
 	id := r.PathValue("id")
@@ -583,13 +639,15 @@ func (s *Server) handleBuildCourse(w http.ResponseWriter, r *http.Request) {
 		notFound(w, "unknown course: "+id)
 		return
 	}
-	// Only a course that is still being built can be continued. A finished
-	// course is not re-run, and a course refused earlier has no row at all.
-	if rec.Status != schema.StatusBuilding && rec.Status != schema.StatusAwaitingApproval {
+	// Only a course that is still being built, waiting for approval, or
+	// interrupted can be continued. A finished course is not re-run, and a
+	// course refused earlier has no row at all.
+	if rec.Status != schema.StatusBuilding && rec.Status != schema.StatusAwaitingApproval && rec.Status != schema.StatusInterrupted {
+		noteError(w, ai.CodeInvalidRequest)
 		writeJSON(w, http.StatusConflict, map[string]any{
 			"error": map[string]string{
 				"code":    ai.CodeInvalidRequest,
-				"message": "That course is not awaiting approval: only a course that is still being built can be continued.",
+				"message": "That course is not awaiting approval: only a course that is still being built, waiting for approval, or interrupted can be continued.",
 			},
 		})
 		return
@@ -603,74 +661,42 @@ func (s *Server) handleBuildCourse(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	cfg, _ := s.currentAI()
-	timeout := cfg.Limits.Merge(ai.DefaultLimits()).Timeout + 5*time.Second
-	ctx, cancel := context.WithTimeout(r.Context(), timeout)
-	defer cancel()
-	release, admitted := s.enter(ctx)
-	if !admitted {
-		out := unavailableOutcome("course", "The gateway is at its concurrency limit; try again shortly.")
-		out.Error.Code = ai.CodeEnvironmentDown
-		s.recordGeneration(out)
-		writeJSON(w, http.StatusServiceUnavailable, out)
+	ctx, release, ok := s.admitGeneration(w, r, "course")
+	if !ok {
 		return
 	}
 	defer release()
 
 	svc := s.aiServiceFor(u.ID)
 	if svc == nil {
-		out := unavailableOutcome("course", "AI is off: no generation service is configured.")
+		out := unavailableOutcome("course", aiOffMessage)
 		s.recordGeneration(out)
-		writeJSON(w, http.StatusServiceUnavailable, out)
+		writeOutcome(w, http.StatusServiceUnavailable, out)
 		return
 	}
 	out := svc.BuildCourse(ctx, id)
 	out.Kind = "course"
 	s.recordGeneration(out)
-	writeJSON(w, statusForOutcome(out), out)
+	writeOutcome(w, statusForOutcome(out), out)
 }
 
 // submitCourseBuild answers POST /courses/{id}/build?async=1 with the id of the
 // continuation to poll. It mirrors submitGenerationJob: a refusal the registry
 // cannot start is reported in the same envelope the blocking route uses.
 func (s *Server) submitCourseBuild(w http.ResponseWriter, r *http.Request, ownerID, courseID string) {
-	job, err := s.jobs.Submit(r.Context(), jobs.Submission{
-		OwnerID:       ownerID,
-		Kind:          "course",
-		BuildCourseID: courseID,
-		OnFinish:      s.recordJob,
-	})
-	if err != nil {
-		var aiErr *schema.Error
-		if errors.As(err, &aiErr) {
-			out := unavailableOutcome("course", aiErr.Message)
-			out.Error.Code = aiErr.Code
-			s.recordGeneration(out)
-			writeJSON(w, statusForOutcome(out), out)
-			return
-		}
-		writeAIError(w, err)
-		return
-	}
-	s.metrics.Set(metricGenerationJobs, metrics.Labels{"state": "running"}, float64(s.jobs.Running()), helpGenerationJobs)
-	writeJSON(w, http.StatusAccepted, map[string]any{"ok": true, "job": job})
+	s.submitJob(w, r, jobs.Submission{OwnerID: ownerID, Kind: "course", BuildCourseID: courseID})
 }
 
 /* ---------- tutoring, critique, defects ---------- */
 
 // handleTutor implements POST /tutor.
 func (s *Server) handleTutor(w http.ResponseWriter, r *http.Request) {
-	u, ok := s.requireUser(w, r)
-	if !ok {
-		return
-	}
 	var req ai.TutorRequest
 	if !readJSON(w, r, &req) {
 		return
 	}
-	svc := s.aiServiceFor(u.ID)
-	if svc == nil {
-		writeAIError(w, &schema.Error{Code: ai.CodeUnavailable, Message: "AI is off: no generation service is configured."})
+	_, svc, ok := s.requireAI(w, r)
+	if !ok {
 		return
 	}
 	resp, err := svc.Tutor(r.Context(), req)
@@ -683,19 +709,14 @@ func (s *Server) handleTutor(w http.ResponseWriter, r *http.Request) {
 
 // handleCritique implements POST /challenges/{id}/critique.
 func (s *Server) handleCritique(w http.ResponseWriter, r *http.Request) {
-	u, ok := s.requireUser(w, r)
-	if !ok {
-		return
-	}
 	var req ai.CritiqueRequest
 	if !readJSON(w, r, &req) {
 		return
 	}
 	// The path names the challenge; a body that disagrees is ignored.
 	req.ChallengeID = r.PathValue("id")
-	svc := s.aiServiceFor(u.ID)
-	if svc == nil {
-		writeAIError(w, &schema.Error{Code: ai.CodeUnavailable, Message: "AI is off: no generation service is configured."})
+	_, svc, ok := s.requireAI(w, r)
+	if !ok {
 		return
 	}
 	resp, err := svc.Critique(r.Context(), req)
@@ -709,18 +730,13 @@ func (s *Server) handleCritique(w http.ResponseWriter, r *http.Request) {
 // handleReportDefect implements POST /challenges/{id}/report. A defect is only
 // ever "verified" after the service has reproduced it by execution.
 func (s *Server) handleReportDefect(w http.ResponseWriter, r *http.Request) {
-	u, ok := s.requireUser(w, r)
-	if !ok {
-		return
-	}
 	var rep ai.DefectReport
 	if !readJSON(w, r, &rep) {
 		return
 	}
 	rep.ChallengeID = r.PathValue("id")
-	svc := s.aiServiceFor(u.ID)
-	if svc == nil {
-		writeAIError(w, &schema.Error{Code: ai.CodeUnavailable, Message: "AI is off: no generation service is configured."})
+	_, svc, ok := s.requireAI(w, r)
+	if !ok {
 		return
 	}
 	verdict, err := svc.ReportDefect(r.Context(), rep)
@@ -735,10 +751,6 @@ func (s *Server) handleReportDefect(w http.ResponseWriter, r *http.Request) {
 // of the patch comes from the path and the approval from the body, and the
 // service refuses an unapproved or unverified patch on its own.
 func (s *Server) handlePatch(w http.ResponseWriter, r *http.Request) {
-	u, ok := s.requireUser(w, r)
-	if !ok {
-		return
-	}
 	var dec ai.PatchDecision
 	if !readJSON(w, r, &dec) {
 		return
@@ -748,13 +760,12 @@ func (s *Server) handlePatch(w http.ResponseWriter, r *http.Request) {
 	// patch that belongs to a different one, so an approval cannot be redirected
 	// by pairing a valid patch id with another challenge's route.
 	dec.ChallengeID = r.PathValue("id")
-	// The approver is the authenticated account, never a name the body chose.
-	dec.ApprovedBy = u.Email
-	svc := s.aiServiceFor(u.ID)
-	if svc == nil {
-		writeAIError(w, &schema.Error{Code: ai.CodeUnavailable, Message: "AI is off: no generation service is configured."})
+	u, svc, ok := s.requireAI(w, r)
+	if !ok {
 		return
 	}
+	// The approver is the authenticated account, never a name the body chose.
+	dec.ApprovedBy = u.Email
 	res, err := svc.ApplyPatch(r.Context(), dec)
 	if err != nil {
 		writeAIError(w, err)
@@ -770,6 +781,7 @@ func (s *Server) handlePatch(w http.ResponseWriter, r *http.Request) {
 func writeAIError(w http.ResponseWriter, err error) {
 	var aiErr *schema.Error
 	if !errors.As(err, &aiErr) {
+		noteError(w, "EVALUATION_ERROR")
 		writeJSON(w, http.StatusInternalServerError, map[string]any{
 			"error": map[string]string{"code": "EVALUATION_ERROR", "message": err.Error()},
 		})
@@ -791,7 +803,30 @@ func writeAIError(w http.ResponseWriter, err error) {
 	default:
 		status = http.StatusInternalServerError
 	}
+	noteError(w, aiErr.Code)
 	writeJSON(w, status, map[string]any{"error": aiErr})
+}
+
+// aiOff writes the standard "no generation service is configured" refusal:
+// 503, the route's own empty collection, and the AI error enum. The four list
+// routes share it so their bodies cannot drift apart.
+func aiOff(w http.ResponseWriter, key string, empty any) {
+	noteError(w, ai.CodeUnavailable)
+	writeJSON(w, http.StatusServiceUnavailable, map[string]any{
+		"ok": false, key: empty,
+		"error": errorObject(ai.CodeUnavailable, aiOffMessage, ""),
+	})
+}
+
+// writeOutcome writes a generation outcome and, when the run failed, names its
+// error code for the access log. The outcome is the contract shape the client
+// reads; the code is what an operator filters on, so the writer that knows the
+// shape says the code instead of a reader guessing where in the body it lives.
+func writeOutcome(w http.ResponseWriter, status int, out schema.Outcome) {
+	if out.Error != nil {
+		noteError(w, out.Error.Code)
+	}
+	writeJSON(w, status, out)
 }
 
 // metricGenerations counts generation runs by outcome, so "AI is on but every

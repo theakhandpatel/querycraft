@@ -1,5 +1,11 @@
 package schema
 
+/* The status and state vocabulary shared by the generation pipeline, the store
+ * and the clients. State* names one step of a run; Status* names how a run ended
+ * or how a stored course stands. Only StatusActive puts an artifact or a course
+ * in front of learners.
+ */
+
 /* ---------- stored status and state vocabulary ---------- */
 
 // StageStates. Done, failed and skipped are final: they are what a finished run
@@ -36,6 +42,13 @@ const (
 	// learners, so nothing appears in a learner's library as a result of this
 	// status alone — the building row the outline stored is all that exists.
 	StatusAwaitingApproval = "awaiting_approval"
+	// StatusInterrupted is a stored-record status: a build that stopped
+	// without finishing, because the process died or the run failed after it
+	// had written something. The chapters that verified are kept, and
+	// POST /courses/{id}/build continues from them; DELETE removes the row.
+	// A build that stopped having written nothing is removed outright: a
+	// course with no chapters is not a course.
+	StatusInterrupted = "interrupted"
 	// StatusDiscarded is a job-view status, not an outcome one. It says the
 	// course a paused run was waiting on was removed, so a poller is told why
 	// the run it was watching will never continue. The run's own transcript

@@ -12,7 +12,7 @@
 // value_encoding.date), so the gateway is the side that must change, and the
 // conversion is not reachable to disable: the driver's connection type is
 // unexported, there is no result-time hook, and `_time_format` is write-side
-// only. Hence a driver of our own.
+// only. This package therefore carries its own driver.
 //
 // What this driver is:
 //
@@ -64,10 +64,8 @@
 //     is exactly the text the profile's rules were written against — "no such
 //     table: customers", "incomplete input", "attempt to write a readonly
 //     database" — so nothing has to be un-framed here; modernc's
-//     "<errstr>: <msg> (<rc>)" rendering is the driver artefact this path does
-//     not produce (sqliteErrorOf in sqlite.go still strips it, because that
-//     framing belongs to whichever driver produced an error and a caller may
-//     still hand us one of modernc's from the write path).
+//     "<errstr>: <msg> (<rc>)" rendering is a driver artefact this path does
+//     not produce.
 //
 // The flags are the ones modernc opens with — READWRITE|CREATE for a writable
 // file, READONLY for the shared dataset, FULLMUTEX because the interrupt
@@ -82,7 +80,6 @@ import (
 	"errors"
 	"fmt"
 	"io"
-	"net/url"
 	"strings"
 	"sync"
 	"sync/atomic"
@@ -119,7 +116,7 @@ func loadUintptr(p uintptr) uintptr {
 //
 // It has no Open: the executor never asks database/sql for the driver *by name*,
 // which is the point — modernc's "sqlite" registration stays untouched for the
-// write path (the one-time seed in internal/httpapi, which uses a multi-statement
+// write path (the one-time seed in internal/envdb, which uses a multi-statement
 // Exec that this file deliberately does not reimplement), and this read path
 // cannot be reached by an accidental sql.Open("...") elsewhere.
 type sqliteRawDriver struct{}
@@ -154,22 +151,8 @@ func (c *sqliteConnector) Connect(ctx context.Context) (driver.Conn, error) {
 
 // sqliteConnectorFor resolves a SQLiteConfig into the connector the executor
 // pools.
-//
-// SQLiteConfig.DSN is accepted verbatim, pragmas included, and parsed back into
-// the fields above: the DSN's escaping is url.Values', the pragma syntax is
-// SQLite's, and everything the connector cannot honour (a custom VFS, mode
-// abbreviations other than ro/rw/rwc, unknown parameters) is refused by name
-// rather than silently ignored.
 func sqliteConnectorFor(config SQLiteConfig) (*sqliteConnector, error) {
 	connector := &sqliteConnector{driver: &sqliteRawDriver{}}
-	if dsn := strings.TrimSpace(config.DSN); dsn != "" {
-		path, pragmas, readOnly, err := parseSQLiteDSN(dsn)
-		if err != nil {
-			return nil, err
-		}
-		connector.path, connector.pragmas, connector.readOnly = path, pragmas, readOnly
-		return connector, nil
-	}
 	if strings.TrimSpace(config.Path) == "" {
 		return nil, errors.New("sqlite: no database path")
 	}
@@ -183,50 +166,6 @@ func sqliteConnectorFor(config SQLiteConfig) (*sqliteConnector, error) {
 		connector.pragmas = append(connector.pragmas, "query_only(1)")
 	}
 	return connector, nil
-}
-
-// parseSQLiteDSN splits a modernc-style DSN into its path, pragmas and access
-// mode. It understands the two shapes that are actually built for this engine —
-// `file:relative/path.db?_pragma=...&mode=ro` (internal/engine.sqliteDSN and
-// internal/httpapi.sqliteSeedDSN) and a bare path (":memory:") — and refuses the
-// rest, because a DSN parameter that is quietly dropped is a connection that
-// quietly differs from the one that was asked for.
-func parseSQLiteDSN(dsn string) (path string, pragmas []string, readOnly bool, err error) {
-	raw := strings.TrimPrefix(dsn, "file:")
-	query := ""
-	if i := strings.IndexByte(raw, '?'); i >= 0 {
-		query, raw = raw[i+1:], raw[:i]
-	}
-	if raw == "" {
-		return "", nil, false, fmt.Errorf("sqlite: DSN %q names no database file", dsn)
-	}
-	if decoded, derr := url.PathUnescape(raw); derr == nil {
-		raw = decoded
-	}
-	q, err := url.ParseQuery(query)
-	if err != nil {
-		return "", nil, false, fmt.Errorf("sqlite: bad DSN query in %q: %w", dsn, err)
-	}
-	for _, p := range q["_pragma"] {
-		if strings.TrimSpace(p) != "" {
-			pragmas = append(pragmas, p)
-		}
-	}
-	switch mode := q.Get("mode"); mode {
-	case "", "rw", "rwc":
-	case "ro":
-		readOnly = true
-	case "memory":
-		return "", nil, false, errors.New("sqlite: mode=memory is not supported by the read path; open a file or use Path \":memory:\"")
-	default:
-		return "", nil, false, fmt.Errorf("sqlite: unknown DSN mode %q", mode)
-	}
-	for key := range q {
-		if key != "_pragma" && key != "mode" {
-			return "", nil, false, fmt.Errorf("sqlite: DSN parameter %q is not supported by the read path", key)
-		}
-	}
-	return raw, pragmas, readOnly, nil
 }
 
 /* ---------- one connection ---------- */
@@ -290,11 +229,6 @@ func openSQLiteRawConn(path string, pragmas []string, readOnly bool) (*sqliteRaw
 	}
 	c.db = db
 
-	// Extended result codes so sqlite3_errcode names the exact failure (a
-	// constraint rule rather than "constraint failed"), the way modernc's own
-	// driver configures its connections.
-	lib.Xsqlite3_extended_result_codes(tls, db, 1)
-
 	if err := c.applyPragmas(pragmas); err != nil {
 		_ = c.Close()
 		return nil, err
@@ -302,9 +236,9 @@ func openSQLiteRawConn(path string, pragmas []string, readOnly bool) (*sqliteRaw
 	return c, nil
 }
 
-// applyPragmas runs each pragma as its own statement. busy_timeout goes first —
-// the order modernc applies its DSN pragmas in — because the busy handler has to
-// exist before a pragma that may have to wait for a lock is executed.
+// applyPragmas runs each pragma as its own statement. busy_timeout goes first:
+// the busy handler has to exist before a pragma that may have to wait for a lock
+// is executed.
 func (c *sqliteRawConn) applyPragmas(pragmas []string) error {
 	ordered := make([]string, 0, len(pragmas))
 	for _, p := range pragmas {
@@ -321,7 +255,7 @@ func (c *sqliteRawConn) applyPragmas(pragmas []string) error {
 		if strings.TrimSpace(p) == "" {
 			continue
 		}
-		rows, err := c.stepScript(context.Background(), "PRAGMA "+p, nil)
+		rows, err := c.stepScript(context.Background(), "PRAGMA "+p)
 		if rows != nil {
 			// The cursor owns the pragma's statement and its interrupt watch;
 			// dropping it would leak the statement handle (never finalized) and,
@@ -370,18 +304,17 @@ func (c *sqliteRawConn) Begin() (driver.Tx, error) {
 	return nil, errors.New("querycraft sqlite: transactions are not supported; a statement is its own transaction")
 }
 
-// Prepare implements driver.Conn. The connector answers QueryerContext and
-// ExecerContext, so database/sql never prepares through this path; a caller that
-// asks for a prepared statement is told so instead of getting a half-working
-// one.
+// Prepare implements driver.Conn. The connector answers QueryerContext, so a
+// query never prepares through this path; a caller that asks for a prepared
+// statement is told so instead of getting a half-working one.
 func (c *sqliteRawConn) Prepare(string) (driver.Stmt, error) {
-	return nil, errors.New("querycraft sqlite: prepared statements are not supported; statements run through QueryContext/ExecContext")
+	return nil, errors.New("querycraft sqlite: prepared statements are not supported; statements run through QueryContext")
 }
 
 // Ping implements driver.Pinger with a real statement, so a health check
 // exercises the handle rather than the pool's bookkeeping.
 func (c *sqliteRawConn) Ping(ctx context.Context) error {
-	rows, err := c.stepScript(ctx, "SELECT 1", nil)
+	rows, err := c.stepScript(ctx, "SELECT 1")
 	if rows != nil {
 		// Close the cursor rather than dropping it: it owns the statement and
 		// the interrupt watch, and a watcher left armed for a context that the
@@ -404,7 +337,7 @@ func (c *sqliteRawConn) ResetSession(context.Context) error {
 }
 
 // CheckNamedValue satisfies database/sql as-is: the executor's callers pass no
-// arguments, and the values it may pass are the ones bindValue knows.
+// arguments, and QueryContext refuses a statement that carries any.
 func (c *sqliteRawConn) CheckNamedValue(*driver.NamedValue) error { return nil }
 
 // interrupt asks SQLite to stop whatever statement is running on this handle.
@@ -477,7 +410,7 @@ func (c *sqliteRawConn) interruptOnDone(ctx context.Context, fired *atomic.Bool)
 // sees when someone pastes two statements into the editor, and the reason
 // `SELECT 1; INSERT ...` runs the INSERT (and is refused) rather than stopping
 // at the semicolon.
-func (c *sqliteRawConn) stepScript(ctx context.Context, statement string, args []driver.NamedValue) (*sqliteRawRows, error) {
+func (c *sqliteRawConn) stepScript(ctx context.Context, statement string) (*sqliteRawRows, error) {
 	if err := c.checkOpen(); err != nil {
 		return nil, err
 	}
@@ -523,13 +456,6 @@ func (c *sqliteRawConn) stepScript(ctx context.Context, statement string, args [
 			psql = tail
 			continue
 		}
-		if berr := c.bind(stmt, args); berr != nil {
-			_ = lib.Xsqlite3_finalize(c.tls, stmt)
-			rows.finalize()
-			watch.Close()
-			return nil, berr
-		}
-
 		rc := lib.Xsqlite3_step(c.tls, stmt)
 		switch rc & 0xff {
 		case int32(lib.SQLITE_ROW):
@@ -566,38 +492,19 @@ func (c *sqliteRawConn) stepScript(ctx context.Context, statement string, args [
 	return rows, nil
 }
 
-// QueryContext implements driver.QueryerContext.
+// QueryContext implements driver.QueryerContext. The connector binds no
+// statement parameters: a learner's statement is text, so a caller that supplies
+// arguments is refused rather than silently mis-bound.
 func (c *sqliteRawConn) QueryContext(ctx context.Context, statement string, args []driver.NamedValue) (driver.Rows, error) {
-	rows, err := c.stepScript(ctx, statement, args)
+	if len(args) > 0 {
+		return nil, errors.New("querycraft sqlite: statement parameters are not supported")
+	}
+	rows, err := c.stepScript(ctx, statement)
 	if err != nil {
 		return nil, err
 	}
 	return rows, nil
 }
-
-// ExecContext implements driver.ExecerContext: the statements run and the
-// cursor is discarded, with the engine's own counts reported.
-func (c *sqliteRawConn) ExecContext(ctx context.Context, statement string, args []driver.NamedValue) (driver.Result, error) {
-	rows, err := c.stepScript(ctx, statement, args)
-	if err != nil {
-		return nil, err
-	}
-	_ = rows.Close()
-	return sqliteRawResult{
-		changes:      int64(lib.Xsqlite3_changes(c.tls, c.db)),
-		lastInsertID: lib.Xsqlite3_last_insert_rowid(c.tls, c.db),
-	}, nil
-}
-
-// sqliteRawResult is ExecerContext's answer: SQLite's own change count and last
-// insert rowid.
-type sqliteRawResult struct {
-	changes      int64
-	lastInsertID int64
-}
-
-func (r sqliteRawResult) LastInsertId() (int64, error) { return r.lastInsertID, nil }
-func (r sqliteRawResult) RowsAffected() (int64, error) { return r.changes, nil }
 
 // prepare calls sqlite3_prepare_v2 for the statement at psql and returns the
 // handle together with the tail that follows it. Both out-parameters come from
@@ -620,75 +527,6 @@ func (c *sqliteRawConn) prepare(psql, scratch uintptr) (stmt, tail uintptr, err 
 	return stmt, tail, nil
 }
 
-// bind binds the caller's arguments. The executor's own callers pass none — a
-// learner's statement is text — so the supported set is exactly what
-// database/sql can hand a driver (its driver.Value types), and anything else is
-// refused by name rather than bound as something the learner did not write.
-func (c *sqliteRawConn) bind(stmt uintptr, args []driver.NamedValue) error {
-	if len(args) == 0 {
-		return nil
-	}
-	count := int(lib.Xsqlite3_bind_parameter_count(c.tls, stmt))
-	if count != len(args) {
-		return fmt.Errorf("sqlite: statement has %d parameter(s) but %d value(s) were supplied", count, len(args))
-	}
-	for i, arg := range args {
-		index := int32(i + 1)
-		var rc int32
-		switch v := arg.Value.(type) {
-		case nil:
-			rc = lib.Xsqlite3_bind_null(c.tls, stmt, index)
-		case int64:
-			rc = lib.Xsqlite3_bind_int64(c.tls, stmt, index, v)
-		case float64:
-			rc = lib.Xsqlite3_bind_double(c.tls, stmt, index, v)
-		case bool:
-			n := int64(0)
-			if v {
-				n = 1
-			}
-			rc = lib.Xsqlite3_bind_int64(c.tls, stmt, index, n)
-		case string:
-			rc = c.bindText(stmt, index, v)
-		case []byte:
-			rc = c.bindBlob(stmt, index, v)
-		default:
-			// database/sql checks the value first (CheckNamedValue), so this is
-			// the belt to that brace: the type is named rather than coerced.
-			return fmt.Errorf("sqlite: cannot bind a %T as a statement parameter", arg.Value)
-		}
-		if rc != int32(lib.SQLITE_OK) {
-			return c.engineError("bind")
-		}
-	}
-	return nil
-}
-
-// bindText binds a string with SQLITE_TRANSIENT, so SQLite copies it and the C
-// buffer can be freed as soon as the bind returns.
-func (c *sqliteRawConn) bindText(stmt uintptr, index int32, s string) int32 {
-	z, err := libc.CString(s)
-	if err != nil {
-		return int32(lib.SQLITE_NOMEM)
-	}
-	defer libc.Xfree(c.tls, z)
-	return lib.Xsqlite3_bind_text(c.tls, stmt, index, z, int32(len(s)), lib.SQLITE_TRANSIENT)
-}
-
-// bindBlob is bindText for bytes.
-func (c *sqliteRawConn) bindBlob(stmt uintptr, index int32, b []byte) int32 {
-	if len(b) == 0 {
-		return lib.Xsqlite3_bind_blob(c.tls, stmt, index, 0, 0, lib.SQLITE_TRANSIENT)
-	}
-	p := c.tls.Alloc(len(b))
-	defer c.tls.Free(len(b))
-	// libc.GoBytes views the freshly allocated C buffer, so this copy lands in
-	// the memory the engine reads, while SQLITE_TRANSIENT below has SQLite copy
-	// it again and lets this buffer be freed as soon as the bind returns.
-	copy(libc.GoBytes(p, len(b)), b)
-	return lib.Xsqlite3_bind_blob(c.tls, stmt, index, p, int32(len(b)), lib.SQLITE_TRANSIENT)
-}
-
 // checkOpen refuses to run a statement on a handle that is going away.
 func (c *sqliteRawConn) checkOpen() error {
 	c.mu.Lock()
@@ -702,18 +540,17 @@ func (c *sqliteRawConn) checkOpen() error {
 
 /* ---------- errors ---------- */
 
-// engineError reads SQLite's own sentence and result code off the connection.
+// engineError reads SQLite's own sentence off the connection.
 //
 // There is no framing to remove: sqlite3_errmsg is the text the dialect
 // profile's rules were written against, which is why the learner reads "no such
-// table: customers" and not a driver's rendering of it. The code is what
-// sqlite3_errcode reports with extended result codes enabled.
+// table: customers" and not a driver's rendering of it.
 func (c *sqliteRawConn) engineError(what string) error {
 	msg := libc.GoString(lib.Xsqlite3_errmsg(c.tls, c.db))
 	if strings.TrimSpace(msg) == "" {
 		msg = what + " failed"
 	}
-	return &sqliteError{sentence: msg, code: int(lib.Xsqlite3_extended_errcode(c.tls, c.db))}
+	return &sqliteError{sentence: msg}
 }
 
 // stepError is engineError for a failed step, with one exception: when this

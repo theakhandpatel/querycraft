@@ -16,7 +16,7 @@ import type { QueryResult } from '../types';
  * The error card is a `role="alert"`; a failed statement is the one thing in
  * this component that must be announced without being asked for.
  */
-export default function ResultGrid({ qr, showFooter = true }: { qr: QueryResult | null; showFooter?: boolean }) {
+export default function ResultGrid({ qr }: { qr: QueryResult | null }) {
   if (!qr) return null;
   if (qr.status !== 'succeeded') {
     return (
@@ -58,23 +58,21 @@ export default function ResultGrid({ qr, showFooter = true }: { qr: QueryResult 
           </tbody>
         </table>
       </div>
-      {showFooter && (
-        <div className="resultfoot">
-          <span className="muted">
-            {qr.row_count} row{qr.row_count === 1 ? '' : 's'}
-            {qr.truncated ? ' · truncated' : ''}
-            {qr.request_id ? ` · ${qr.request_id}` : ''}
-          </span>
-          {/* The label beside a result names the engine that produced *this*
-              result. `qr.dialect` is the contract's honest, machine-readable
-              answer, so it is what the words are built from — never the
-              chapter's dialect and never the adapter's — and the engine's own
-              free text is shown only when it already names that dialect. */}
-          <span className="muted" data-dialect={qr.dialect}>
-            {qr.duration_ms} ms · {engineLabelFor(qr.dialect, qr.engine)}
-          </span>
-        </div>
-      )}
+      <div className="resultfoot">
+        <span className="muted">
+          {qr.row_count} row{qr.row_count === 1 ? '' : 's'}
+          {qr.truncated ? ' · truncated' : ''}
+          {qr.request_id ? ` · ${qr.request_id}` : ''}
+        </span>
+        {/* The label beside a result names the engine that produced *this*
+            result. `qr.dialect` is the contract's honest, machine-readable
+            answer, so it is what the words are built from — never the
+            chapter's dialect and never the adapter's — and the engine's own
+            free text is shown only when it already names that dialect. */}
+        <span className="muted" data-dialect={qr.dialect}>
+          {qr.duration_ms} ms · {engineLabelFor(qr.dialect, qr.engine)}
+        </span>
+      </div>
     </>
   );
 }

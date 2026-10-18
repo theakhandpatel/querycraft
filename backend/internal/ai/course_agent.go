@@ -10,43 +10,62 @@ import (
 	"strings"
 	"time"
 
+	"github.com/sky-valley/pi/agent"
+	"github.com/sky-valley/pi/ai"
+
 	"github.com/querycraft/sqlquery/backend/internal/ai/provider"
 	"github.com/querycraft/sqlquery/backend/internal/ai/transcript"
 	"github.com/querycraft/sqlquery/backend/internal/engine"
 	"github.com/querycraft/sqlquery/backend/internal/schema"
 )
 
-/* M8 — the course agent.
+/* The course agent: one course generation, from the outline to the stored plan.
  *
- * M7 asked the model for a whole course in one reply and blocked until the
- * reply arrived. A live run measured 147 s of that, and every fact about the
- * course was decided at the end: nothing was stored while it ran, a single
- * rejected exercise threw away every chapter around it, and the screen had
- * nothing to draw until the last byte.
+ * A run is one conversation between the gateway and the model. pi's agent loop
+ * (course_agent_tools.go) drives the turns, and every fact about the course is
+ * measured before it is stored. A run has four steps.
  *
- * M8 is the same pipeline driven one chapter at a time, in one conversation,
- * through tool calls:
+ *   1. Outline. outlinePhase validates the request and asks for one small
+ *      answer: CourseOutline holds the title, the level, the objectives, the
+ *      setup and the chapter list. validateCourseOutline gates that answer.
+ *      The gateway stores it as a `building` course before any chapter exists,
+ *      so a poller and a reloaded tab can draw the course's shape.
+ *   2. Chapters. runCourseAgent opens one throwaway environment for the whole
+ *      course (openScratch) and runs pi's loop. The model calls save_chapter
+ *      once per chapter. saveChapterTool places the chapter in the plan, gates
+ *      it with validateCourseChapter, and runs its exercises in the scratch
+ *      environment through verifyChapterInEnv.
+ *   3. Verdicts. A chapter whose exercises ran and cross-checked becomes
+ *      ChapterVerified. The gateway stores it under `building` (storeBuilding)
+ *      and publishes it to the live view (publish). A chapter the engine
+ *      refuses is answered with the engine's own message, and the model repairs
+ *      it, up to maxChapterWrites writes. A chapter that still does not pass
+ *      becomes ChapterDropped, and the run keeps the chapters that did verify.
+ *   4. Close. finish_course ends the loop, and finalizeCourse marks the stages
+ *      from the measured evidence. The course activates when at least one
+ *      chapter verified, and ends refused against no stored row when none did.
  *
- *   1. one small outline call (title, level, objectives, chapter list);
- *   2. the model then calls save_chapter once per chapter;
- *   3. the gateway runs that chapter's references, cross-checks and adversarial
- *      fixtures in the course's one throwaway environment and answers the call
- *      with what the engine measured;
- *   4. a chapter that passes is appended to the stored plan immediately, so a
- *      poller and a reloaded tab can see it while later chapters are written;
- *   5. the model repairs a refused chapter against the engine's own message,
- *      and a chapter that still does not pass is dropped with its failure
- *      reported;
- *   6. finish_course closes the course, and the stored row moves from
- *      "building" to "active".
+ * A run budget bounds the whole conversation. pi owns the turn count, the
+ * configured timeout owns the clock, and courseMaxNudges bounds protocol
+ * misses. A run that spends the budget ends with whatever verified, and
+ * finalizeCourse refuses the rest.
  *
- * What this file does NOT do is weaken a rule. A chapter that arrives through
- * save_chapter is placed into the plan and handed to validateCourseChapter —
- * the same function validateCoursePlan calls — and each exercise is built into
- * an Artifact and handed to verifyInEnv, the same stages a challenge passes. A
- * course therefore still cannot contain an exercise that could not have been a
- * challenge, and the rows a learner is graded against are still the rows the
- * engine returned while checking the chapter.
+ * A course can pause and resume. With RequireApproval the run stops after the
+ * outline and stores it as `awaiting_approval` (awaitApproval). BuildCourse
+ * continues it later from the stored row (newCourseBuildFromRecord). A failed
+ * run with verified chapters is stored as `interrupted` and resumed the same
+ * way. RecoverInterruptedBuilds sweeps the rows a dead process left `building`.
+ *
+ * Nothing here weakens a rule. save_chapter places its chapter into the plan
+ * and hands it to validateCourseChapter. Each exercise becomes an Artifact and
+ * goes to verifyInEnv, the same stages a challenge passes. A course therefore
+ * cannot hold an exercise that could not have been a challenge, and the rows a
+ * learner is graded against are the rows the engine returned while it checked
+ * the chapter.
+ *
+ * Collaborators: Service.complete asks for the outline; provider carries the
+ * model and the stream; pipeline owns the stages, the live view and the store;
+ * courseBuild owns the plan under construction.
  */
 
 /* ---------- tool names ---------- */
@@ -64,10 +83,6 @@ const (
 	// verify after this is dropped rather than allowed to end the whole course,
 	// because the chapters around it are not the reason it failed.
 	maxChapterWrites = 3
-	// maxAgentRounds bounds the whole conversation. Every chapter costs one
-	// turn per write plus the closing turn, so this is generous for a course at
-	// the chapter and exercise bounds and still finite for a model that loops.
-	maxAgentRounds = 40
 	// maxToolResultChars bounds one tool result before it goes back to the
 	// model. A result carries the evaluator's own message, which is what makes
 	// the repair possible; it is clipped rather than dropped, and on a rune
@@ -109,19 +124,19 @@ type OutlineChapter struct {
 }
 
 // validateCourseOutline is the gate the outline passes before a single chapter
-// is asked for. It bounds the same things validateCoursePlan bounds — chapter
-// count, ids, the exercise budget, the setup plan — so a plan cannot be built
-// out of an outline the whole-plan gate would have refused.
+// is asked for. It bounds the outline's shape (chapter count, ids, the exercise
+// budget, the setup plan), so a plan cannot be built out of an outline the
+// chapter gate would have refused.
 //
 // budget is the exercise count the request asked for (courseExerciseBudget:
 // exercise_count under the course's floor and ceiling). It is passed in because
 // this gate is the first and only place where the request's budget and the
-// model's chapter count are both known: the chapter count is the model's choice,
+// model's chapter count are both known. The chapter count is the model's choice,
 // so no floor can be computed at request time. A request for fewer exercises
-// than the outline plans chapters is therefore not impossible — it is a request
+// than the outline plans chapters is therefore not impossible. It is a request
 // whose outline must either widen the exercise count to one per chapter or
-// shrink the chapter list — and the gate is what turns that fact into a
-// sentence the learner can act on.
+// shrink the chapter list, and the gate is what turns that fact into a sentence
+// the learner can act on.
 func validateCourseOutline(o *CourseOutline, budget int, l Limits) *schema.Error {
 	if o == nil {
 		return coursePlanError("outline", "no outline")
@@ -172,12 +187,12 @@ func validateCourseOutline(o *CourseOutline, budget int, l Limits) *schema.Error
 			/* A chapter with no exercise is not a course chapter, so the rule
 			   stands unchanged. What changes is the sentence. A model that
 			   reads "Exercises: N, spread across the chapters" as a total to
-			   divide among more than N chapters produces exactly this outline,
-			   and the field-shaped reply it used to get — "chapters[0].exercises:
-			   a chapter must plan at least one exercise" — names the provider's
-			   schema, not anything the learner can ask for. The outline has no
-			   repair round, so this error is the last thing the learner reads;
-			   it names the requested budget and both ways to satisfy it. */
+			   divide among more than N chapters produces exactly this outline.
+			   The field-shaped reply ("chapters[0].exercises: a chapter must
+			   plan at least one exercise") names the provider's schema, not
+			   anything the learner can ask for. The outline has no repair
+			   round, so this error is the last thing the learner reads. It
+			   names the requested budget and both ways to satisfy it. */
 			return courseOutlineExerciseError(o, budget)
 		}
 		if ch.Exercises > maxCourseExercises {
@@ -192,16 +207,16 @@ func validateCourseOutline(o *CourseOutline, budget int, l Limits) *schema.Error
 }
 
 // courseOutlineExerciseError is the actionable form of the per-chapter minimum.
-// The rule is not weakened — an outline that planned a chapter with no exercise
+// The rule is not weakened: an outline that planned a chapter with no exercise
 // is still refused, because a course chapter with no exercise is not a course
-// chapter — but the sentence changes from the provider's own schema path
+// chapter. The sentence replaces the provider's own schema path
 // ("chapters[0].exercises: a chapter must plan at least one exercise", which no
-// learner can act on) to one that names the exercise budget the request asked
+// learner can act on) with one that names the exercise budget the request asked
 // for and what to change instead.
 //
-// The outline call has no repair round, so this error is the run's last word:
-// it is the only place the learner is told why a request they were allowed to
-// make could not be built, and the reason is a coupling between two numbers —
+// The outline call has no repair round, so this error is the run's last word.
+// It is the only place the learner is told why a request they were allowed to
+// make could not be built, and the reason is a coupling between two numbers:
 // every chapter needs at least one exercise, so a request for N exercises
 // cannot be satisfied by an outline of more than N chapters.
 func courseOutlineExerciseError(o *CourseOutline, budget int) *schema.Error {
@@ -267,7 +282,7 @@ type courseBuild struct {
 	report   []schema.ChapterResult
 	repaired int
 	finished bool
-	// fatal is set when the run cannot continue for a reason no repair fixes —
+	// fatal is set when the run cannot continue for a reason no repair fixes:
 	// the store failed. The loop stops and the run reports it instead of
 	// pretending the course is still being written.
 	fatal *schema.Error
@@ -285,8 +300,8 @@ type chapterWrite struct {
 
 // newCourseBuild turns a validated outline into the plan skeleton the store
 // keeps while the chapters are written. The chapters exist from the first
-// moment — the learner sees the course's shape before its content — and carry
-// no sections until one passes.
+// moment, so the learner sees the course's shape before its content, and they
+// carry no sections until one passes.
 func newCourseBuild(req schema.GenerationRequest, outline CourseOutline) *courseBuild {
 	plan := schema.CoursePlan{
 		ID:         courseID(outline),
@@ -304,17 +319,7 @@ func newCourseBuild(req schema.GenerationRequest, outline CourseOutline) *course
 		if n <= 0 {
 			n = i + 1
 		}
-		plan.Chapters = append(plan.Chapters, schema.CourseChapter{
-			ID:         ch.ID,
-			N:          n,
-			Title:      ch.Title,
-			Summary:    ch.Summary,
-			Kind:       ch.Kind,
-			Minutes:    ch.Minutes,
-			Objectives: ch.Objectives,
-			Sections:   []schema.CourseSection{},
-			Exercises:  []schema.CourseExercise{},
-		})
+		plan.Chapters = append(plan.Chapters, ch.chapter(n, schema.CourseChapter{}))
 	}
 	b := &courseBuild{request: req, outline: outline, plan: plan}
 	b.written = make([]chapterWrite, len(outline.Chapters))
@@ -368,28 +373,19 @@ func newCourseBuildFromRecord(rec schema.CourseRecord) *courseBuild {
 }
 
 // requestFromRecord recovers the generation request a stored course was built
-// from. A record stored before the request was persisted has none; the fields
-// the plan itself knows — the goal, as the plan's title — are used and the rest
-// are left at their defaults rather than invented, so an old record is still
-// readable and resumes with a prompt built only from what is really known.
+// from. Every writer stores it: the outline save, the interrupted mark and the
+// active save all set CourseRecord.Request before the row exists, so a stored
+// course without one cannot be produced.
 func requestFromRecord(rec schema.CourseRecord) schema.GenerationRequest {
-	if rec.Request != nil {
-		req := *rec.Request
-		req.Kind = "course"
-		return req
-	}
-	return schema.GenerationRequest{
-		Kind:          "course",
-		Title:         rec.Plan.Title,
-		Difficulty:    schema.Intermediate,
-		ExerciseCount: exerciseCount(&rec.Plan),
-	}
+	req := *rec.Request
+	req.Kind = "course"
+	return req
 }
 
 // outlineFromRecord recovers the outline the chapter phase is written against.
-// Everything the outline gate reads is already in the stored plan's chapters —
-// id, position, title, summary, kind, minutes, objectives — and the one field
-// the plan does not keep is how many exercises each chapter planned. That is
+// Everything the outline gate reads is already in the stored plan's chapters
+// (id, position, title, summary, kind, minutes, objectives). The one field the
+// plan does not keep is how many exercises each chapter planned. That is
 // reconstructed from the request's budget and, where a chapter already carries
 // content, reported as the count it actually holds.
 func outlineFromRecord(rec schema.CourseRecord) CourseOutline {
@@ -426,7 +422,7 @@ func outlineFromRecord(rec schema.CourseRecord) CourseOutline {
 }
 
 // plannedExercisesPerChapter distributes the request's exercise budget across
-// the stored chapters, at least one each — the coupling validateCourseOutline
+// the stored chapters, at least one each, the coupling validateCourseOutline
 // enforces. It is only ever a prompt hint for a resumed build (the authoritative
 // count is the chapter that is actually saved), which is why a reconstruction is
 // acceptable where the stored plan lost the number.
@@ -583,22 +579,21 @@ func (b *courseBuild) verifiedCount() int {
 
 // courseOutlinePrompt is the first ask: the plan, before any content. It opens
 // with the course marker because the built-in provider recognizes a course
-// request by the prompt it is given — the same thing a model does.
+// request by the prompt it is given, the same thing a model does.
 //
 // The outline ask is also where the chapter budget is stated, because the
-// outline call is where the model chooses the chapter count. The two numbers
-// are coupled by a rule the model cannot see otherwise: every chapter must hold
-// at least one exercise, so a request for N exercises cannot be satisfied by an
+// outline call is where the model chooses the chapter count. Two numbers are
+// coupled by a rule the model cannot see otherwise: every chapter must hold at
+// least one exercise, so a request for N exercises cannot be satisfied by an
 // outline of more than N chapters. Left unsaid, a model reads "Exercises: N,
 // spread across the chapters" as a total to divide however it likes and plans
-// more chapters than it has exercises for — the unsatisfiable outline
-// validateCourseOutline now explains in the learner's terms.
+// more chapters than it has exercises for. That is the unsatisfiable outline
+// validateCourseOutline explains in the learner's terms.
 //
-// The sentence is appended, so the pre-existing ask is a strict prefix of this
-// one: the prompt's shape is unchanged, no bound moves, and the gate accepts
-// exactly the outlines it accepted before. coursePrompt itself is untouched —
-// it is shared with the whole-plan path, and the chapter/exercise coupling only
-// has to be stated where chapters are chosen.
+// The sentence is appended to coursePrompt, so the existing ask is a strict
+// prefix of this one. The prompt's shape is unchanged, no bound moves, and the
+// gate accepts exactly the outlines it accepted before. The chapter/exercise
+// coupling only has to be stated where chapters are chosen.
 func courseOutlinePrompt(req schema.GenerationRequest) string {
 	budget := courseExerciseBudget(req)
 	return coursePrompt(req) + "\n\nBefore writing any chapter, reply with the course's outline only: the title, the subtitle, the level, the course objectives, the setup, and the chapter list. Each chapter in the outline has an id, its position n, a title, a one-sentence summary, its objectives, and how many exercises it will contain. The outline is what the learner sees while the chapters are still being written, so it must stand on its own. Do not write any chapter body yet." +
@@ -649,31 +644,7 @@ const courseOutlineSchema = `{
   }
 }`
 
-// courseTools is what the model may call. Both names are constants because the
-// built-in provider answers the same protocol a model does, and a name written
-// twice would eventually be written differently twice.
-func courseTools() []provider.Tool {
-	return []provider.Tool{
-		{
-			Type: "function",
-			Function: provider.ToolFunction{
-				Name:        toolSaveChapter,
-				Description: "Save one finished chapter of the course: its markdown sections and its exercises, using the id the outline gave it. The gateway runs every exercise against the real database and answers with what it measured, so a chapter that does not run comes back with the database's own error and must be sent again.",
-				Parameters:  json.RawMessage(courseChapterSchema),
-			},
-		},
-		{
-			Type: "function",
-			Function: provider.ToolFunction{
-				Name:        toolFinishCourse,
-				Description: "Close the course once every chapter in the outline has been saved and accepted.",
-				Parameters:  json.RawMessage(finishCourseSchema),
-			},
-		},
-	}
-}
-
-// courseAgentSystemPrompt is the challenge system prompt plus the protocol the
+// courseAgentSystemPrompt is the course system prompt plus the protocol the
 // agent speaks.
 func courseAgentSystemPrompt() string {
 	return courseSystemPrompt() + `
@@ -681,20 +652,29 @@ func courseAgentSystemPrompt() string {
 You now write the course one chapter at a time by calling a function instead of replying with the whole course. Call save_chapter once per chapter, with the id the outline gave it, its markdown sections, and its exercises. Call finish_course when every chapter has been written and accepted. Every save_chapter is answered with what the gateway measured when it ran your chapter against the real database; when a chapter is refused, that answer names the exercise, the stage and the database's own error, and you send the chapter again with that problem fixed and nothing else changed. Write the simplest SQL that answers the question.`
 }
 
-// courseAgentPrompt opens the conversation: the learner's own words, the
-// outline that was already agreed and stored, and what to do first. The
-// conversation starts from the outline rather than from the whole course
-// because the outline is what the learner can already see.
+// goalOutlineMarker and goalOutlineEnd bracket the outline JSON inside the goal
+// prompt. The built-in provider reads the outline back out of the prompt, so
+// both sides share the symbols: one edit moves the contract, and no second
+// literal can drift.
+const (
+	goalOutlineMarker = "The course's outline, already agreed and stored. Write exactly these chapters, in this order, with these ids:\n"
+	goalOutlineEnd    = "\n\nCall save_chapter"
+)
+
+// courseAgentPrompt opens the conversation: the learner's own words, the outline
+// that was already agreed and stored, and what to do first. The conversation
+// starts from the outline rather than from the whole course because the outline
+// is what the learner can already see.
 func courseAgentPrompt(req schema.GenerationRequest, outline CourseOutline) string {
 	var b strings.Builder
 	b.WriteString(coursePrompt(req))
-	b.WriteString("\n\nThe course's outline, already agreed and stored. Write exactly these chapters, in this order, with these ids:\n")
+	b.WriteString("\n\n" + goalOutlineMarker)
 	raw, err := json.MarshalIndent(outline, "", "  ")
 	if err != nil {
 		raw = []byte("{}")
 	}
 	b.WriteString(string(raw))
-	b.WriteString("\n\nCall save_chapter now with the first chapter. Send one chapter per call. Each exercise needs a reference solution, an independent cross-check solution that returns the same rows, and a result contract naming the exact column names in order.")
+	b.WriteString(goalOutlineEnd + " now with the first chapter. Send one chapter per call. Each exercise needs a reference solution, an independent cross-check solution that returns the same rows, and a result contract naming the exact column names in order.")
 	return b.String()
 }
 
@@ -703,10 +683,12 @@ func courseAgentPrompt(req schema.GenerationRequest, outline CourseOutline) stri
 // run and a continuation: a fresh build has none and this returns nothing, so
 // today's conversation is unchanged. A resumed build replays each resolved
 // chapter as an assistant save_chapter call and the gateway's own verdict for
-// it, which is exactly the protocol the model speaks — so the model sees what
-// is done and is never asked to write it again.
-func storedChapterTurns(build *courseBuild) []provider.ProviderMessage {
-	var out []provider.ProviderMessage
+// it, which is exactly the protocol the model speaks. The model therefore sees
+// what is done and is never asked to write it again. The synthesized turn ids
+// carry the "stored_" prefix, so a replayed call is never mistaken for one the
+// model made.
+func storedChapterTurns(build *courseBuild) []agent.AgentMessage {
+	var out []agent.AgentMessage
 	for i := range build.outline.Chapters {
 		state := build.written[i].state
 		if state != ChapterVerified && state != ChapterDropped {
@@ -714,24 +696,20 @@ func storedChapterTurns(build *courseBuild) []provider.ProviderMessage {
 		}
 		och := build.outline.Chapters[i]
 		out = append(out,
-			provider.ProviderMessage{
-				Role:    "assistant",
-				Content: "",
-				ToolCalls: []provider.ToolCall{{
-					ID:       "stored_" + och.ID,
-					Type:     "function",
-					Function: provider.ToolCallFunction{Name: toolSaveChapter, Arguments: `{"id":"` + och.ID + `"}`},
-				}},
-			},
-			provider.ProviderMessage{
-				Role:       "tool",
+			ai.AssistantMessage{Content: ai.ContentList{ai.ToolCall{
+				ID:        "stored_" + och.ID,
+				Name:      toolSaveChapter,
+				Arguments: map[string]any{"id": och.ID},
+			}}},
+			ai.ToolResultMessage{
 				ToolCallID: "stored_" + och.ID,
-				Content: toolResult(map[string]any{
+				ToolName:   toolSaveChapter,
+				Content: ai.ContentList{ai.TextContent{Text: toolResult(map[string]any{
 					"status":  state,
 					"chapter": och.ID,
 					"title":   och.Title,
 					"message": fmt.Sprintf("Chapter %q was already %s in the stored course.", och.ID, state),
-				}),
+				})}},
 			},
 		)
 	}
@@ -740,15 +718,15 @@ func storedChapterTurns(build *courseBuild) []provider.ProviderMessage {
 
 /* ---------- the run ---------- */
 
-// generateCourse runs the M8 course agent. By default it runs both phases in
-// one request: the outline is validated and stored, and the chapter
-// conversation follows immediately, so nothing a client did before sees a
-// different run. When the request asks for the outline to be approved first
-// (RequireApproval), the run stops after the outline: the stored `building`
-// course is the state, the outcome is `awaiting_approval`, and BuildCourse (a
-// later, separate request) continues it into the chapter phase.
+// generateCourse runs the course agent. By default it runs both phases in one
+// request: the outline is validated and stored, and the chapter conversation
+// follows immediately, so a client sees the same run it always did. When the
+// request asks for the outline to be approved first (RequireApproval), the run
+// stops after the outline. The stored `building` course is the state, the
+// outcome is `awaiting_approval`, and BuildCourse, a later and separate request,
+// continues it into the chapter phase.
 func (s *Service) generateCourse(ctx context.Context, req schema.GenerationRequest) schema.Outcome {
-	limits := s.cfg.Limits.Merge(DefaultLimits())
+	limits := s.cfg.Limits
 	runCtx, cancel := context.WithTimeout(ctx, limits.Timeout)
 	defer cancel()
 
@@ -761,9 +739,10 @@ func (s *Service) generateCourse(ctx context.Context, req schema.GenerationReque
 		return *failed
 	}
 	if req.RequireApproval {
-		return p.awaitApproval(build)
+		return p.awaitApproval(runCtx, build)
 	}
 	if aerr := p.runCourseAgent(runCtx, build); aerr != nil {
+		p.settleStoppedBuild(runCtx, build)
 		out := p.failedOutcome(schema.StatusFailed, aerr)
 		out.Plan = nil
 		out.Chapters = build.fullReport()
@@ -774,9 +753,9 @@ func (s *Service) generateCourse(ctx context.Context, req schema.GenerationReque
 
 // outlinePhase is the first half of a course run, and the whole of a paused one:
 // it validates the request, asks for the outline, validates that against the
-// same gate the whole-plan path uses, and stores it as a `building` course
-// before a single chapter is written. It returns the build, or the failed
-// outcome that ended the run — never both.
+// outline gate, and stores it as a `building` course before a single chapter is
+// written. It returns the build, or the failed outcome that ended the run, never
+// both.
 func (p *pipeline) outlinePhase(runCtx context.Context, req schema.GenerationRequest, start time.Time) (*courseBuild, *schema.Outcome) {
 	p.begin(schema.StageValidateRequest)
 	if verr := validateRequest(req, p.limits); verr != nil {
@@ -838,7 +817,11 @@ func (p *pipeline) outlinePhase(runCtx context.Context, req schema.GenerationReq
 // being asked to approve; the chapter phase runs later, as its own request. The
 // activate stage is reported as skipped rather than failed: nothing went wrong,
 // the run simply stopped where the learner asked it to.
-func (p *pipeline) awaitApproval(build *courseBuild) schema.Outcome {
+//
+// The row itself is restated as `awaiting_approval`: a paused course is not
+// `building`. Leaving it under the live-build status would make a pause, a
+// crash and a live run indistinguishable after a reload.
+func (p *pipeline) awaitApproval(ctx context.Context, build *courseBuild) schema.Outcome {
 	p.mark(schema.StageActivate, schema.StateSkipped,
 		"waiting for the learner to approve the outline before the chapters are written")
 	out := p.outcome(schema.StatusAwaitingApproval, nil, nil)
@@ -846,6 +829,17 @@ func (p *pipeline) awaitApproval(build *courseBuild) schema.Outcome {
 	plan.Chapters = buildingChapters(build)
 	out.Plan = &plan
 	out.Chapters = build.fullReport()
+	if p.svc.cfg.Depot != nil {
+		if err := p.svc.cfg.Depot.SaveCourse(ctx, schema.CourseRecord{
+			Plan:      plan,
+			Outcome:   out,
+			Status:    schema.StatusAwaitingApproval,
+			CreatedAt: time.Now().UTC(),
+			Request:   &build.request,
+		}); err != nil {
+			p.mark(schema.StageActivate, schema.StateFailed, "the paused course could not be restated in the store")
+		}
+	}
 	return out
 }
 
@@ -867,11 +861,11 @@ func (s *Service) BuildCourse(ctx context.Context, id string) schema.Outcome {
 }
 
 // buildCourseRecorded is BuildCourse with the transcript recorder already
-// attached — the same split generate/generateRecorded use, for the same reason:
-// the recorder has to exist before the first provider call and be finished once,
-// whatever the outcome.
+// attached. It is the same split generate/generateRecorded use, for the same
+// reason: the recorder has to exist before the first provider call and be
+// finished once, whatever the outcome.
 func (s *Service) buildCourseRecorded(ctx context.Context, id string) schema.Outcome {
-	limits := s.cfg.Limits.Merge(DefaultLimits())
+	limits := s.cfg.Limits
 	runCtx, cancel := context.WithTimeout(ctx, limits.Timeout)
 	defer cancel()
 
@@ -893,12 +887,99 @@ func (s *Service) buildCourseRecorded(ctx context.Context, id string) schema.Out
 	p.courseID = build.plan.ID
 
 	if aerr := p.runCourseAgent(runCtx, build); aerr != nil {
+		p.settleStoppedBuild(runCtx, build)
 		out := p.failedOutcome(schema.StatusFailed, aerr)
 		out.Plan = nil
 		out.Chapters = build.fullReport()
 		return out
 	}
 	return p.finalizeCourse(runCtx, build)
+}
+
+// settleStoppedBuild is what happens to the stored row when the chapter phase
+// ends in a hard failure. A row with verified chapters becomes `interrupted`
+// and POST /courses/{id}/build resumes it; a row with none is deleted, the
+// same rule a refusal follows, because a course with no chapters is not a
+// course. Either way the run still reports its failure.
+func (p *pipeline) settleStoppedBuild(ctx context.Context, build *courseBuild) {
+	if p.svc.cfg.Depot == nil {
+		return
+	}
+	if build.verifiedCount() == 0 {
+		if err := p.svc.cfg.Depot.DeleteCourse(ctx, build.plan.ID); err != nil {
+			p.mark(schema.StageActivate, schema.StateFailed, "the interrupted build's row could not be removed")
+			return
+		}
+		p.courseID = ""
+		return
+	}
+	plan := build.plan
+	plan.Chapters = buildingChapters(build)
+	out := schema.Outcome{
+		Status:   schema.StatusInterrupted,
+		Kind:     "course",
+		Plan:     &plan,
+		Chapters: build.report,
+		Stages:   p.snapshotStages(),
+		Attempts: []schema.Attempt{},
+	}
+	if err := p.svc.cfg.Depot.SaveCourse(ctx, schema.CourseRecord{
+		Plan:      plan,
+		Outcome:   out,
+		Status:    schema.StatusInterrupted,
+		CreatedAt: time.Now().UTC(),
+		Request:   &build.request,
+	}); err != nil {
+		p.mark(schema.StageActivate, schema.StateFailed, "the interrupted build could not be marked as such")
+	}
+}
+
+// RecoverInterruptedBuilds sweeps the rows a dead process left behind. At
+// boot, a `building` row has no live writer: the process that was writing it
+// is this one's predecessor. A row with a written chapter becomes
+// `interrupted`, keeping its chapters for a resume; one with nothing written
+// is removed. Paused and active rows are untouched. The sweep assumes one
+// gateway owns the database, which is the deployment the binary ships for; a
+// multi-writer deployment would need a heartbeat instead. It reports how many
+// rows it kept and how many it removed.
+func (s *Service) RecoverInterruptedBuilds(ctx context.Context) (kept, removed int, err error) {
+	if s == nil || s.cfg.Depot == nil {
+		return 0, 0, nil
+	}
+	recs, err := s.cfg.Depot.Courses(ctx)
+	if err != nil {
+		return 0, 0, err
+	}
+	for _, rec := range recs {
+		if rec.Status != schema.StatusBuilding {
+			continue
+		}
+		if !courseHasWrittenChapter(rec.Plan) {
+			if err := s.cfg.Depot.DeleteCourse(ctx, rec.Plan.ID); err != nil {
+				return kept, removed, err
+			}
+			removed++
+			continue
+		}
+		rec.Status = schema.StatusInterrupted
+		rec.Outcome.Status = schema.StatusInterrupted
+		if err := s.cfg.Depot.SaveCourse(ctx, rec); err != nil {
+			return kept, removed, err
+		}
+		kept++
+	}
+	return kept, removed, nil
+}
+
+// courseHasWrittenChapter reports whether a stored plan carries any chapter
+// with content, which is the mark a verified chapter leaves in the row.
+func courseHasWrittenChapter(plan schema.CoursePlan) bool {
+	for _, ch := range plan.Chapters {
+		if len(ch.Sections) > 0 || len(ch.Exercises) > 0 {
+			return true
+		}
+	}
+	return false
 }
 
 // courseBuildRefusal is the honest answer when a build cannot even start: the
@@ -924,124 +1005,11 @@ func outlineExerciseCount(o CourseOutline) int {
 	return n
 }
 
-// runCourseAgent drives the chapter conversation. It returns nil when the
-// conversation ended (however it ended), and an error only when the run itself
-// could not continue: the provider is gone, or the run ran out of time.
-func (p *pipeline) runCourseAgent(ctx context.Context, build *courseBuild) *schema.Error {
-	if p.svc.cfg.Depot == nil {
-		return NewError(CodeUnavailable, schema.StageActivate,
-			"The course could not be stored while it was being written.", "")
-	}
-	ex, release, err := p.openScratch(ctx, &build.plan)
-	if err != nil {
-		return err
-	}
-	defer release()
-
-	messages := []provider.ProviderMessage{
-		{Role: "system", Content: courseAgentSystemPrompt()},
-		{Role: "user", Content: courseAgentPrompt(build.request, build.outline)},
-	}
-	// A resumed build already has chapters in the store. The conversation says
-	// so, as the turns that put them there, because a model that is simply
-	// asked for "the outline's chapters" would write them all again and spend
-	// the run re-saving work that already verified. A fresh run has none, so
-	// this adds nothing to today's conversation.
-	messages = append(messages, storedChapterTurns(build)...)
-	// The conversation is recorded as it is assembled, because the agent owns
-	// it: completeRaw records the reply, but a turn's *input* is the whole
-	// conversation so far, which is not a single request. Recording the two
-	// opening turns here and each assistant turn and tool result below keeps
-	// the transcript one entry per fact rather than one per round.
-	rec := transcript.From(ctx)
-	for _, m := range messages {
-		rec.Message(m.Role, m.Content)
-	}
-	tools := courseTools()
-	turns := 0
-
-	for round := 0; round < maxAgentRounds; round++ {
-		if err := ctx.Err(); err != nil {
-			return p.agentTimeout(nil)
-		}
-		if build.finished && build.resolved() {
-			break
-		}
-		p.begin(schema.StageRequestBundle)
-		resp, perr := p.svc.completeRaw(ctx, provider.ProviderRequest{
-			Kind:           "course",
-			Prompt:         courseOutlinePrompt(build.request),
-			Messages:       messages,
-			Tools:          tools,
-			ToolChoice:     "auto",
-			MaxOutputBytes: p.limits.MaxOutputBytes,
-		})
-		if perr != nil {
-			return perr
-		}
-		turns++
-		p.mark(schema.StageRequestBundle, schema.StateDone,
-			fmt.Sprintf("chapter conversation: %d turn(s), %d of %d chapters written", turns, build.verifiedCount(), len(build.outline.Chapters)))
-
-		// The assistant turn itself is recorded by completeRaw. A reply with no
-		// tool call is the protocol being missed; the nudge back is a real
-		// message the model is sent, so it is recorded too.
-		messages = append(messages, provider.ProviderMessage{Role: "assistant", Content: resp.Text, ToolCalls: resp.ToolCalls})
-		if len(resp.ToolCalls) == 0 {
-			// The protocol asks for a tool call. Saying so once is a repair; a
-			// model that keeps replying with prose is bounded by the rounds.
-			nudge := "Call save_chapter with the next chapter, or finish_course when every chapter has been written and accepted."
-			rec.Message("user", nudge)
-			messages = append(messages, provider.ProviderMessage{Role: "user", Content: nudge})
-			continue
-		}
-		for _, call := range resp.ToolCalls {
-			result := p.handleToolCall(ctx, build, ex, call)
-			rec.RecordToolResult(call.ID, result)
-			messages = append(messages, provider.ProviderMessage{
-				Role:       "tool",
-				ToolCallID: call.ID,
-				Content:    result,
-			})
-		}
-		if build.fatal != nil {
-			return build.fatal
-		}
-	}
-
-	if !build.finished && !build.resolved() {
-		// The conversation ran out of rounds with chapters still unwritten.
-		// Every one of them is reported as skipped by fullReport, so the course
-		// is a smaller honest one rather than a course with a hole in it.
-		p.mark(schema.StageRepair, schema.StateDone,
-			fmt.Sprintf("the conversation ended after %d turn(s) with %d chapter(s) unwritten", turns, len(build.missing())))
-	}
-	return nil
-}
-
-// handleToolCall executes one function call and returns the tool result the
-// model reads next. The result is the engine's own verdict, never a summary of
-// it: "the cross-check disagreed" is not something a model can repair against,
-// and the evaluator's message is.
-func (p *pipeline) handleToolCall(ctx context.Context, build *courseBuild, ex engine.Executor, call provider.ToolCall) string {
-	switch strings.TrimSpace(call.Function.Name) {
-	case toolSaveChapter:
-		return p.saveChapterTool(ctx, build, ex, call)
-	case toolFinishCourse:
-		return p.finishCourseTool(build)
-	default:
-		return toolResult(map[string]any{
-			"status":  "unknown_function",
-			"message": fmt.Sprintf("There is no function %q. The functions are %s and %s.", call.Function.Name, toolSaveChapter, toolFinishCourse),
-		})
-	}
-}
-
-// saveChapterTool is the load-bearing call. It validates the chapter with the
-// same gate the whole-plan path uses, runs it in the course's scratch
-// environment, and answers with the engine's verdict.
-func (p *pipeline) saveChapterTool(ctx context.Context, build *courseBuild, ex engine.Executor, call provider.ToolCall) string {
-	args := strings.TrimSpace(call.Function.Arguments)
+// saveChapterTool grades one chapter and answers with the engine's verdict. It
+// validates the chapter with the same gate every chapter passes and runs it in
+// the course's scratch environment.
+func (p *pipeline) saveChapterTool(ctx context.Context, build *courseBuild, ex engine.Executor, argsJSON string) string {
+	args := strings.TrimSpace(argsJSON)
 	if args == "" {
 		return toolResult(map[string]any{"status": "invalid", "message": "save_chapter was called with no arguments."})
 	}
@@ -1073,7 +1041,7 @@ func (p *pipeline) saveChapterTool(ctx context.Context, build *courseBuild, ex e
 	// skeleton is kept so a refusal leaves the stored plan exactly as it was:
 	// a rejected chapter must not leave half of itself behind.
 	skeleton := build.plan.Chapters[pos]
-	candidate := withChapterSkeleton(chapter, build.outline.Chapters[pos], skeleton)
+	candidate := build.outline.Chapters[pos].chapter(skeleton.N, chapter)
 	build.plan.Chapters[pos] = candidate
 	seen, total := build.gateFacts()
 	if verr := validateCourseChapter(&build.plan, pos, seen, &total, p.limits); verr != nil {
@@ -1098,13 +1066,13 @@ func (p *pipeline) saveChapterTool(ctx context.Context, build *courseBuild, ex e
 
 	build.written[pos].state = ChapterVerified
 	build.record(res)
-	// The store is written before the live view is published, and that order is
-	// load-bearing: publishing first let a poller read "1 chapter verified"
+	// The store is written before the live view is published, and that order
+	// matters: publishing first would let a poller read "1 chapter verified"
 	// from the job while GET /courses/{id} still carried the chapter as an
-	// empty skeleton — the job's counter ran ahead of the record. A poller must
-	// never be told a chapter is stored before it is. storeBuilding notifies on
-	// its own, and at that moment p.verified still holds the previous count, so
-	// the live view can only ever lag the store, never lead it.
+	// empty skeleton, so the job's counter would run ahead of the record. A
+	// poller must never be told a chapter is stored before it is. storeBuilding
+	// notifies on its own, and at that moment p.verified still holds the
+	// previous count, so the live view can only lag the store, never lead it.
 	if err := p.storeBuilding(ctx, build); err != nil {
 		// The chapter verified but could not be kept. That is not a content
 		// problem and no repair fixes it, so it ends the run rather than
@@ -1180,7 +1148,7 @@ func (p *pipeline) chapterRefused(ctx context.Context, build *courseBuild, pos i
 	}
 	if build.written[pos].writes >= maxChapterWrites {
 		// The chapter never verified. It is dropped so the chapters that did
-		// verify can still be handed to a learner — a smaller honest course,
+		// verify can still be handed to a learner: a smaller honest course,
 		// never a course with an unverified exercise in it.
 		build.written[pos].state = ChapterDropped
 		build.record(schema.ChapterResult{
@@ -1250,13 +1218,15 @@ func (p *pipeline) finalizeCourse(ctx context.Context, build *courseBuild) schem
 	if len(dropped) > 0 {
 		dropNote = fmt.Sprintf("; %d chapter(s) dropped (%s)", len(dropped), strings.Join(dropped, ", "))
 	}
-	stageStart := time.Now()
-	p.timed(schema.StageReferenceContract, schema.StateDone,
-		fmt.Sprintf("%d/%d reference solutions returned rows (%d rows measured)", verifiedExercises, verifiedExercises, p.evidence.ReferenceRows), stageStart)
-	p.timed(schema.StageCrossCheck, schema.StateDone,
-		fmt.Sprintf("%d independent solutions agreed with their reference%s", verifiedExercises, dropNote), stageStart)
-	p.timed(schema.StageAdversarialFixtures, schema.StateDone,
-		fmt.Sprintf("wrong queries were rejected for all %d exercises%s", verifiedExercises, dropNote), stageStart)
+	// The per-exercise engine time was measured as each exercise ran
+	// (course_pipeline.go); these three stages are the chapter's roll-up, not a
+	// timed step of their own, so they carry no time rather than a false one.
+	p.mark(schema.StageReferenceContract, schema.StateDone,
+		fmt.Sprintf("%d/%d reference solutions returned rows (%d rows measured)", verifiedExercises, verifiedExercises, p.evidence.ReferenceRows))
+	p.mark(schema.StageCrossCheck, schema.StateDone,
+		fmt.Sprintf("%d independent solutions agreed with their reference%s", verifiedExercises, dropNote))
+	p.mark(schema.StageAdversarialFixtures, schema.StateDone,
+		fmt.Sprintf("wrong queries were rejected for all %d exercises%s", verifiedExercises, dropNote))
 	if build.repaired > 0 {
 		p.mark(schema.StageRepair, schema.StateDone, fmt.Sprintf("%d chapter write(s) repaired in session", build.repaired))
 	}
@@ -1302,12 +1272,12 @@ func (p *pipeline) courseRefused(build *courseBuild, report []schema.ChapterResu
 	stage := schema.StageRequestBundle
 	if last != nil {
 		stage = last.Stage
-		switch last.Stage {
-		case schema.StageCrossCheck:
-			code = CodeCrossCheckFailed
-		case schema.StageReferenceContract:
-			code = CodeReferenceFailed
-		case schema.StageValidateArtifact:
+		if mapped, ok := codeForStage(last.Stage); ok {
+			code = mapped
+		} else if last.Stage == schema.StageValidateArtifact {
+			// The course's own divergence: the chapter gate refused the
+			// artifact itself, which is an invalid artifact, not an exhausted
+			// repair budget.
 			code = CodeInvalidArtifact
 		}
 	}
@@ -1322,19 +1292,21 @@ func (p *pipeline) courseRefused(build *courseBuild, report []schema.ChapterResu
 
 /* ---------- chapter helpers ---------- */
 
-// withChapterSkeleton copies the outline's own facts — id, position, title,
-// summary, objectives, kind, minutes — alongside the content the model sent.
-// The outline is what the learner has already been shown, so the chapter cannot
-// rename itself in the middle of the course.
-func withChapterSkeleton(chapter schema.CourseChapter, outline OutlineChapter, prev schema.CourseChapter) schema.CourseChapter {
-	out := chapter
-	out.ID = outline.ID
-	out.N = prev.N
-	out.Title = outline.Title
-	out.Summary = outline.Summary
-	out.Objectives = outline.Objectives
-	out.Kind = outline.Kind
-	out.Minutes = outline.Minutes
+// chapter overlays the outline's own facts (id, title, summary, objectives,
+// kind, minutes) onto a base chapter at position n. The outline is what the
+// learner has already been shown, so a chapter cannot rename itself in the
+// middle of the course. newCourseBuild and buildingChapters pass a zero base and
+// keep no content; saveChapterTool passes the chapter the model just sent, so
+// its sections and exercises survive the overlay.
+func (o OutlineChapter) chapter(n int, prev schema.CourseChapter) schema.CourseChapter {
+	out := prev
+	out.ID = o.ID
+	out.N = n
+	out.Title = o.Title
+	out.Summary = o.Summary
+	out.Objectives = o.Objectives
+	out.Kind = o.Kind
+	out.Minutes = o.Minutes
 	if out.Sections == nil {
 		out.Sections = []schema.CourseSection{}
 	}
@@ -1495,23 +1467,13 @@ func (p *pipeline) storeBuilding(ctx context.Context, build *courseBuild) *schem
 // buildingChapters is what a stored building course carries: every planned
 // chapter, with content only where it verified. The sections are empty until
 // then, which is exactly what "this chapter has not been written yet" looks
-// like — the client renders the shape and fills it in.
+// like. The client renders the shape and fills it in.
 func buildingChapters(build *courseBuild) []schema.CourseChapter {
 	out := make([]schema.CourseChapter, 0, len(build.plan.Chapters))
 	for i := range build.plan.Chapters {
 		ch := build.plan.Chapters[i]
 		if build.written[i].state != ChapterVerified {
-			ch = schema.CourseChapter{
-				ID:         build.outline.Chapters[i].ID,
-				N:          build.plan.Chapters[i].N,
-				Title:      build.outline.Chapters[i].Title,
-				Summary:    build.outline.Chapters[i].Summary,
-				Kind:       build.outline.Chapters[i].Kind,
-				Minutes:    build.outline.Chapters[i].Minutes,
-				Objectives: build.outline.Chapters[i].Objectives,
-				Sections:   []schema.CourseSection{},
-				Exercises:  []schema.CourseExercise{},
-			}
+			ch = build.outline.Chapters[i].chapter(build.plan.Chapters[i].N, schema.CourseChapter{})
 		}
 		out = append(out, ch)
 	}

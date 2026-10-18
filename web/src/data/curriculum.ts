@@ -26,19 +26,14 @@ var MODULES: CourseModule[] = [
     intro('Naming tells you how the tables connect: <span class="kbd-inline">orders.customer_id</span> points at <span class="kbd-inline">customers.id</span>, and <span class="kbd-inline">order_items.order_id</span> points at <span class="kbd-inline">orders.id</span>. Those are the join keys you will use all course.'),
     {type:'syntax', sql:'-- one row per product\nSELECT id, name, category, price\nFROM products\nORDER BY price;', note:'SELECT chooses columns, FROM chooses the table, ORDER BY sorts the result.'},
     {type:'example', id:'ex.m1.demo', sql:'SELECT id, name, city\nFROM customers\nORDER BY id\nLIMIT 5;', note:'A small read of the customer table. LIMIT keeps the result manageable.',
-      result:{columns:['id','name','city'], rows:[['1','Ada Whitfield','Leeds'],['2','Bruno Sala','Milan'],['3','Chidi Okafor',null],['4','Dara Novak',null],['5','Emi Tanaka','Osaka']]}},
+      result:{columns:['id','name','city'], rows:[['1','Ada Whitfield','Leeds'],['2','Bruno Sala','Milan'],['3','Chidi Okafor','Lagos'],['4','Dara Novak',null],['5','Emi Tanaka','Osaka']]}},
     {type:'exercise', id:'ex.1.1',
       prompt:'Return the name, category and price of every product in the Electronics category, cheapest first.',
       starter:"SELECT\n    -- name, category, price\nFROM products\n-- filter to Electronics\n-- order by price",
       solution:"SELECT name, category, price\nFROM products\nWHERE category = 'Electronics'\nORDER BY price;",
       hints:['Filter with <span class="kbd-inline">WHERE category = \'Electronics\'</span>.','Add <span class="kbd-inline">ORDER BY price</span> (ascending is the default).'],
       contract:{columns:['name','category','price'], column_order:'exact', row_order:'exact'},
-      checks:[
-        {label:'Projects name, category, price', code:'COLUMN_MISMATCH', test:function(s){ return /select[\s\S]*\bname\b[\s\S]*\bcategory\b[\s\S]*\bprice\b/i.test(s); }},
-        {label:'Filters to the Electronics category', code:'FILTER_MISSING', test:function(s){ return /category\s*=\s*'electronics'/i.test(s); }},
-        {label:'Orders by price ascending', code:'ROW_ORDER_MISMATCH', test:function(s){ return /order\s+by\s+price\b/i.test(s) && !/price\s+desc/i.test(s); }}
-      ],
-      result:{columns:['name','category','price'], rows:[['Aurora Wireless Earbuds','Electronics','59.00'],['Pulse Fitness Tracker','Electronics','74.25'],['Vertex Mechanical Keyboard','Electronics','89.50'],['Nimbus Headphones','Electronics','129.00'],['Lumen 27-inch 4K Monitor','Electronics','329.00']]}}
+      result:{columns:['name','category','price'], rows:[['Aurora Wireless Earbuds','Electronics','59.00'],['Noise-Cancel Earmuffs','Electronics','64.90'],['Pulse Fitness Tracker','Electronics','74.25'],['Vertex Mechanical Keyboard','Electronics','89.50'],['Nimbus Headphones','Electronics','129.00']]}}
   ]},
 
 { id:'m2', n:2, title:'Joins without row multiplication', kind:'Core skill', minutes:15,
@@ -56,12 +51,6 @@ var MODULES: CourseModule[] = [
       solution:"SELECT o.id AS order_id,\n       c.name AS customer_name,\n       COUNT(oi.id) AS line_items\nFROM orders o\nJOIN customers c ON c.id = o.customer_id\nJOIN order_items oi ON oi.order_id = o.id\nGROUP BY o.id, c.name\nORDER BY line_items DESC;",
       hints:['Use <span class="kbd-inline">COUNT(oi.id)</span>, not <span class="kbd-inline">COUNT(*)</span>.','Group by both order id and customer name, then order by the count descending.'],
       contract:{columns:['order_id','customer_name','line_items'], column_order:'exact', row_order:'exact'},
-      checks:[
-        {label:'Joins customers and order_items', code:'JOIN_MISSING', test:function(s){ return /join\s+customers/i.test(s) && /join\s+order_items/i.test(s); }},
-        {label:'Counts line items', code:'AGGREGATION_MISSING', test:function(s){ return /count\s*\(/i.test(s); }},
-        {label:'Groups before aggregating', code:'GROUPING_MISSING', test:function(s){ return /group\s+by/i.test(s); }},
-        {label:'Orders by line count descending', code:'ROW_ORDER_MISMATCH', test:function(s){ return /order\s+by[\s\S]*desc/i.test(s); }}
-      ],
       result:{columns:['order_id','customer_name','line_items'], rows:[['1007','Dara Novak','4'],['1001','Ada Whitfield','3'],['1012','Chidi Okafor','3'],['1005','Ada Whitfield','2'],['1006','Bruno Sala','2']]}}
   ]},
 
@@ -80,12 +69,6 @@ var MODULES: CourseModule[] = [
       solution:"SELECT DATE_TRUNC('month', o.ordered_at)::date AS month,\n       SUM(oi.quantity * oi.unit_price) AS net_revenue\nFROM orders o\nJOIN order_items oi ON oi.order_id = o.id\nWHERE o.status = 'completed'\nGROUP BY 1\nORDER BY 1;",
       hints:['Multiply <span class="kbd-inline">quantity</span> by <span class="kbd-inline">unit_price</span> inside <span class="kbd-inline">SUM</span>.','Filter with <span class="kbd-inline">WHERE o.status = \'completed\'</span> before grouping.'],
       contract:{columns:['month','net_revenue'], column_order:'exact', row_order:'exact'},
-      checks:[
-        {label:'Computes revenue from quantity and unit price', code:'VALUE_MISMATCH', test:function(s){ return /quantity\s*\*\s*unit_price|unit_price\s*\*\s*quantity/i.test(s); }},
-        {label:'Filters to completed orders', code:'FILTER_MISSING', test:function(s){ return /status\s*=\s*'completed'/i.test(s); }},
-        {label:'Groups by month', code:'GROUPING_MISSING', test:function(s){ return /date_trunc\s*\(\s*'month'/i.test(s) && /group\s+by/i.test(s); }},
-        {label:'Orders months ascending', code:'ROW_ORDER_MISMATCH', test:function(s){ return /order\s+by[\s\S]*1\b|order\s+by[\s\S]*month/i.test(s); }}
-      ],
       result:{columns:['month','net_revenue'], rows:[['2026-01-01','48230.00'],['2026-02-01','52610.00'],['2026-03-01','45090.00'],['2026-04-01','61470.00']]}}
   ]},
 
@@ -104,12 +87,6 @@ var MODULES: CourseModule[] = [
       solution:"WITH completed AS (\n    SELECT id, customer_id\n    FROM orders\n    WHERE status = 'completed'\n),\nper_customer AS (\n    SELECT customer_id, COUNT(*) AS completed_orders\n    FROM completed\n    GROUP BY customer_id\n)\nSELECT customer_id, completed_orders\nFROM per_customer\nWHERE completed_orders >= 3\nORDER BY completed_orders DESC;",
       hints:['Filter completed orders in the first CTE.','Use a second CTE to GROUP BY customer_id, then filter the aggregate in the final SELECT.'],
       contract:{columns:['customer_id','completed_orders'], column_order:'exact', row_order:'exact'},
-      checks:[
-        {label:'Uses a WITH clause', code:'CTE_MISSING', test:function(s){ return /^\s*with\b/i.test(s); }},
-        {label:'Counts per customer', code:'AGGREGATION_MISSING', test:function(s){ return /count\s*\(\s*\*\s*\)/i.test(s) && /group\s+by\s+customer_id/i.test(s); }},
-        {label:'Keeps customers with 3 or more', code:'FILTER_MISSING', test:function(s){ return /(>=)\s*3|>\s*2\b/.test(s); }},
-        {label:'Orders by count descending', code:'ROW_ORDER_MISMATCH', test:function(s){ return /order\s+by[\s\S]*desc/i.test(s); }}
-      ],
       result:{columns:['customer_id','completed_orders'], rows:[['1','5'],['3','4'],['7','4']]}}
   ]},
 
@@ -129,13 +106,6 @@ var MODULES: CourseModule[] = [
       solution:"SELECT name, category, price,\n       RANK() OVER (\n         PARTITION BY category\n         ORDER BY price DESC\n       ) AS price_rank\nFROM products\nORDER BY category, price_rank, name;",
       hints:['Use <span class="kbd-inline">RANK() OVER (PARTITION BY category ORDER BY price DESC)</span>.','Alias it <span class="kbd-inline">price_rank</span> and use it in the outer ORDER BY.'],
       contract:{columns:['name','category','price','price_rank'], column_order:'exact', row_order:'exact'},
-      checks:[
-        {label:'Uses a window function with OVER', code:'WINDOW_MISSING', test:function(s){ return /over\s*\(/i.test(s); }},
-        {label:'Partitions by category', code:'PARTITION_MISSING', test:function(s){ return /partition\s+by\s+category/i.test(s); }},
-        {label:'Orders the window by price descending', code:'WINDOW_ORDER_MISSING', test:function(s){ return /order\s+by\s+price\s+desc/i.test(s); }},
-        {label:'Uses RANK for ties', code:'RANK_FUNCTION_MISMATCH', test:function(s){ return /\brank\s*\(\s*\)/i.test(s); }},
-        {label:'Does not collapse rows with GROUP BY', code:'GRAIN_ERROR', test:function(s){ return !/group\s+by/i.test(s); }}
-      ],
       result:{columns:['name','category','price','price_rank'], rows:[['Lumen 27-inch 4K Monitor','Electronics','329.00','1'],['Nimbus Headphones','Electronics','129.00','2'],['Vertex Mechanical Keyboard','Electronics','89.50','3'],['Aurora Wireless Earbuds','Electronics','59.00','4'],['Oak Bookshelf','Home','210.00','1']]}},
     intro('Now the real pattern: aggregate first, then rank the aggregate. Ranking individual line items would rank the wrong thing. And when months have no qualifying rows, decide whether the month should appear at all \u2014 that is the contract, and it is decided by the exercise author, not the engine.', 'Aggregate first, then rank'),
     {type:'exercise', id:'ex.5.2',
@@ -144,12 +114,6 @@ var MODULES: CourseModule[] = [
       solution:"WITH monthly AS (\n    SELECT DATE_TRUNC('month', o.ordered_at)::date AS month,\n           p.category,\n           SUM(oi.quantity * oi.unit_price) AS net_revenue\n    FROM orders o\n    JOIN order_items oi ON oi.order_id = o.id\n    JOIN products p ON p.id = oi.product_id\n    WHERE o.status = 'completed'\n    GROUP BY 1, 2\n),\nranked AS (\n    SELECT month, category, net_revenue,\n           RANK() OVER (\n             PARTITION BY month\n             ORDER BY net_revenue DESC\n           ) AS rank\n    FROM monthly\n)\nSELECT month, category, net_revenue, rank\nFROM ranked\nWHERE rank <= 2\nORDER BY month, rank, category;",
       hints:['Aggregate to one row per month and category in the CTE first.','Apply <span class="kbd-inline">RANK() OVER (PARTITION BY month ORDER BY net_revenue DESC)</span> to the aggregate, then filter <span class="kbd-inline">rank &lt;= 2</span>.'],
       contract:{columns:['month','category','net_revenue','rank'], column_order:'exact', row_order:'exact'},
-      checks:[
-        {label:'Aggregates before ranking', code:'GRAIN_ERROR', test:function(s){ return /group\s+by/i.test(s) && /over\s*\(/i.test(s); }},
-        {label:'Partitions the rank by month', code:'PARTITION_MISSING', test:function(s){ return /partition\s+by\s+month/i.test(s); }},
-        {label:'Filters to top two', code:'FILTER_MISSING', test:function(s){ return /rank\s*<=\s*2/i.test(s); }},
-        {label:'Keeps only completed orders', code:'FILTER_MISSING', test:function(s){ return /status\s*=\s*'completed'/i.test(s); }}
-      ],
       result:{columns:['month','category','net_revenue','rank'], rows:[['2026-01-01','Electronics','48230.00','1'],['2026-01-01','Home','31840.00','2'],['2026-02-01','Home','52610.00','1'],['2026-02-01','Electronics','45090.00','2'],['2026-03-01','Electronics','39120.00','1'],['2026-03-01','Outdoor','27400.00','2']]}}
   ]},
 
@@ -168,12 +132,6 @@ var MODULES: CourseModule[] = [
       solution:"WITH history AS (\n    SELECT customer_id,\n           DATE_TRUNC('month', ordered_at)::date AS month,\n           COUNT(*) OVER (\n             PARTITION BY customer_id\n             ORDER BY ordered_at, id\n           ) AS orders_so_far\n    FROM orders\n    WHERE status = 'completed'\n)\nSELECT month,\n       COUNT(DISTINCT customer_id) AS repeat_customers\nFROM history\nWHERE orders_so_far >= 2\nGROUP BY month\nORDER BY month;",
       hints:['Compute <span class="kbd-inline">orders_so_far</span> with a running COUNT window.','Keep rows where <span class="kbd-inline">orders_so_far &gt;= 2</span>, then <span class="kbd-inline">COUNT(DISTINCT customer_id)</span> per month.'],
       contract:{columns:['month','repeat_customers'], column_order:'exact', row_order:'exact'},
-      checks:[
-        {label:'Computes a running count per customer', code:'WINDOW_MISSING', test:function(s){ return /count\s*\(\s*\*\s*\)\s*over/i.test(s) && /partition\s+by\s+customer_id/i.test(s); }},
-        {label:'Filters repeat status at 2 or more', code:'FILTER_MISSING', test:function(s){ return /orders_so_far\s*>=\s*2/i.test(s); }},
-        {label:'Counts distinct customers per month', code:'AGGREGATION_MISSING', test:function(s){ return /count\s*\(\s*distinct\s+customer_id/i.test(s); }},
-        {label:'Only completed orders', code:'FILTER_MISSING', test:function(s){ return /status\s*=\s*'completed'/i.test(s); }}
-      ],
       result:{columns:['month','repeat_customers'], rows:[['2026-01-01','0'],['2026-02-01','6'],['2026-03-01','11'],['2026-04-01','14']]}}
   ]},
 
@@ -192,10 +150,6 @@ var MODULES: CourseModule[] = [
       solution:"SELECT DATE_TRUNC('month', ordered_at)::date AS month,\n       COUNT(*) AS completed\nFROM orders\nWHERE status = 'completed'\nGROUP BY 1\nORDER BY 1;\n-- expected access method: sequential scan (or a partial index on status = 'completed')\n-- why: status has very few distinct values, so a plain B-tree index is not selective;\n--     a partial index or a covering index is the better fit.",
       hints:['Count and group by month first.','A low-cardinality column is a poor index target; mention selectivity.'],
       contract:{columns:['month','completed'], column_order:'exact', row_order:'exact'},
-      checks:[
-        {label:'Groups completed orders by month', code:'AGGREGATION_MISSING', test:function(s){ return /status\s*=\s*'completed'/i.test(s) && /group\s+by/i.test(s) && /date_trunc/i.test(s); }},
-        {label:'Explains the access method', code:'EXPLANATION_MISSING', test:function(s){ return /scan|index|selectiv/i.test(s); }}
-      ],
       result:{columns:['month','completed'], rows:[['2026-01-01','12'],['2026-02-01','14'],['2026-03-01','11'],['2026-04-01','15']]}}
   ]},
 
@@ -213,13 +167,6 @@ var MODULES: CourseModule[] = [
       solution:"WITH lines AS (\n    SELECT DATE_TRUNC('month', o.ordered_at)::date AS month,\n           p.category,\n           o.customer_id,\n           oi.quantity * oi.unit_price AS revenue\n    FROM orders o\n    JOIN order_items oi ON oi.order_id = o.id\n    JOIN products p ON p.id = oi.product_id\n    WHERE o.status = 'completed'\n),\nby_cat AS (\n    SELECT month, category,\n           SUM(revenue) AS net_revenue,\n           COUNT(DISTINCT customer_id) AS buyers\n    FROM lines\n    GROUP BY month, category\n),\nranked AS (\n    SELECT month, category, net_revenue, buyers,\n           ROW_NUMBER() OVER (PARTITION BY month ORDER BY net_revenue DESC, category) AS rn\n    FROM by_cat\n)\nSELECT month, category, net_revenue, buyers\nFROM ranked\nWHERE rn = 1\nORDER BY month;",
       hints:['Compute line revenue in a CTE, then aggregate to month and category.','Rank with a stable tie-break (<span class="kbd-inline">net_revenue DESC, category</span>) so the top row is deterministic.'],
       contract:{columns:['month','category','net_revenue','buyers'], column_order:'exact', row_order:'exact'},
-      checks:[
-        {label:'Uses a multi-step CTE chain', code:'CTE_MISSING', test:function(s){ return /^\s*with\b/i.test(s) && /group\s+by/i.test(s); }},
-        {label:'Counts distinct buyers', code:'AGGREGATION_MISSING', test:function(s){ return /count\s*\(\s*distinct\s+customer_id/i.test(s); }},
-        {label:'Ranks within month with a tie-break', code:'WINDOW_ORDER_MISSING', test:function(s){ return /partition\s+by\s+month/i.test(s) && /order\s+by[\s\S]*category/i.test(s); }},
-        {label:'Keeps one row per month', code:'FILTER_MISSING', test:function(s){ return /rn\s*=\s*1|row_number|rank\s*=\s*1/i.test(s); }},
-        {label:'Only completed orders', code:'FILTER_MISSING', test:function(s){ return /status\s*=\s*'completed'/i.test(s); }}
-      ],
       result:{columns:['month','category','net_revenue','buyers'], rows:[['2026-01-01','Electronics','48230.00','18'],['2026-02-01','Home','52610.00','21'],['2026-03-01','Electronics','39120.00','16'],['2026-04-01','Home','58040.00','23']]}}
   ]},
 
@@ -239,13 +186,6 @@ var MODULES: CourseModule[] = [
       solution:"WITH RECURSIVE months(month) AS (\n    SELECT DATE '2026-01-01'\n    UNION ALL\n    SELECT (month + INTERVAL '1 month')::date\n    FROM months\n    WHERE month < DATE '2026-06-01'\n)\nSELECT TO_CHAR(m.month, 'YYYY-MM') AS month,\n       COUNT(o.id) AS completed\nFROM months m\nLEFT JOIN orders o\n       ON DATE_TRUNC('month', o.ordered_at)::date = m.month\n      AND o.status = 'completed'\nGROUP BY m.month\nORDER BY m.month;",
       hints:['The recursive term needs <span class="kbd-inline">WHERE month &lt; DATE \'2026-06-01\'</span> or the loop never stops.','Use a <span class="kbd-inline">LEFT JOIN</span> from the series so a month with no orders still survives.','Put <span class="kbd-inline">o.status = \'completed\'</span> in the <span class="kbd-inline">ON</span> clause, not <span class="kbd-inline">WHERE</span>, or the left join collapses to an inner join.','Count <span class="kbd-inline">o.id</span>, not <span class="kbd-inline">*</span>, so empty months count 0.'],
       contract:{columns:['month','completed'], column_order:'ignored', row_order:'exact'},
-      checks:[
-        {label:'Uses a recursive CTE', code:'CTE_MISSING', test:function(s){ return /with\s+recursive/i.test(s); }},
-        {label:'Stops the recursion in June', code:'RECURSION_MISSING', test:function(s){ return /month\s*<\s*date\s*'2026-06-01'/i.test(s); }},
-        {label:'Keeps every month from the series', code:'JOIN_MISSING', test:function(s){ return /left\s+join/i.test(s); }},
-        {label:'Keeps only completed orders', code:'FILTER_MISSING', test:function(s){ return /status\s*=\s*'completed'/i.test(s); }},
-        {label:'Counts orders, not series rows', code:'AGGREGATION_MISSING', test:function(s){ return /count\s*\(\s*o\.id\s*\)/i.test(s); }}
-      ],
       result:{columns:['month','completed'], rows:[['2026-01',8],['2026-02',8],['2026-03',9],['2026-04',7],['2026-05',5],['2026-06',0]]}}
   ]}
 ];
@@ -266,11 +206,6 @@ var JOINS_MODULES: CourseModule[] = [
       solution:"SELECT o.id AS order_id,\n       c.name AS customer_name,\n       o.status\nFROM orders o\nJOIN customers c ON c.id = o.customer_id\nORDER BY o.ordered_at DESC;",
       hints:['Join <span class="kbd-inline">customers c ON c.id = o.customer_id</span>.','Order by <span class="kbd-inline">o.ordered_at DESC</span> for newest first.'],
       contract:{columns:['order_id','customer_name','status'], column_order:'exact', row_order:'ignored'},
-      checks:[
-        {label:'Joins customers to orders', code:'JOIN_MISSING', test:function(s){ return /join\s+customers/i.test(s); }},
-        {label:'Returns the order status', code:'COLUMN_MISMATCH', test:function(s){ return /\bstatus\b/i.test(s); }},
-        {label:'Orders newest first', code:'ROW_ORDER_MISMATCH', test:function(s){ return /order\s+by[\s\S]*desc/i.test(s); }}
-      ],
       result:{columns:['order_id','customer_name','status'], rows:[['1012','Chidi Okafor','completed'],['1009','Bruno Sala','completed'],['1005','Ada Whitfield','completed'],['1004','Chidi Okafor','completed'],['1001','Ada Whitfield','completed']]}}
   ]},
 
@@ -289,11 +224,6 @@ var JOINS_MODULES: CourseModule[] = [
       solution:"SELECT c.name, COUNT(o.id) AS orders\nFROM customers c\nLEFT JOIN orders o ON o.customer_id = c.id\nGROUP BY c.id, c.name\nORDER BY orders DESC, c.name;",
       hints:['Use <span class="kbd-inline">LEFT JOIN</span>, not JOIN.','Count <span class="kbd-inline">o.id</span> so unmatched rows count as 0.'],
       contract:{columns:['name','orders'], column_order:'exact', row_order:'ignored'},
-      checks:[
-        {label:'Uses a LEFT JOIN', code:'JOIN_TYPE_MISMATCH', test:function(s){ return /left\s+join/i.test(s); }},
-        {label:'Counts joined rows, not star', code:'AGGREGATION_MISSING', test:function(s){ return /count\s*\(\s*o\.id\s*\)/i.test(s); }},
-        {label:'Groups by customer', code:'GROUPING_MISSING', test:function(s){ return /group\s+by/i.test(s); }}
-      ],
       result:{columns:['name','orders'], rows:[['Ada Whitfield','5'],['Chidi Okafor','4'],['Bruno Sala','2'],['Dara Novak','0']]}}
   ]},
 
@@ -312,11 +242,6 @@ var JOINS_MODULES: CourseModule[] = [
       solution:"SELECT p.name, COUNT(DISTINCT oi.order_id) AS orders\nFROM products p\nJOIN order_items oi ON oi.product_id = p.id\nGROUP BY p.id, p.name\nORDER BY orders DESC, p.name;",
       hints:['Join <span class="kbd-inline">order_items oi ON oi.product_id = p.id</span>.','Use <span class="kbd-inline">COUNT(DISTINCT oi.order_id)</span> to avoid counting lines twice.'],
       contract:{columns:['name','orders'], column_order:'exact', row_order:'ignored'},
-      checks:[
-        {label:'Joins order_items to products', code:'JOIN_MISSING', test:function(s){ return /join\s+order_items/i.test(s); }},
-        {label:'Counts distinct orders', code:'GRAIN_ERROR', test:function(s){ return /count\s*\(\s*distinct\s+oi\.order_id/i.test(s) || /count\s*\(\s*distinct\s+order_id/i.test(s); }},
-        {label:'Groups by product', code:'GROUPING_MISSING', test:function(s){ return /group\s+by/i.test(s); }}
-      ],
       result:{columns:['name','orders'], rows:[['Aurora Wireless Earbuds','18'],['Nimbus Headphones','14'],['Linen Duvet Cover','11']]}}
   ]}
 ];
@@ -339,11 +264,6 @@ var SUBQUERIES_MODULES: CourseModule[] = [
       solution:"SELECT name, price\nFROM products\nWHERE price > (SELECT AVG(price) FROM products)\nORDER BY price DESC, name;",
       hints:['The average comes from <span class="kbd-inline">(SELECT AVG(price) FROM products)</span>.','Compare the column against that scalar, not against a hard-coded number.'],
       contract:{columns:['name','price'], column_order:'exact', row_order:'exact'},
-      checks:[
-        {label:'Filters with a subquery', code:'SUBQUERY_MISSING', test:function(s){ return /\(\s*select\b/i.test(s); }},
-        {label:'Compares against the average price', code:'AGGREGATION_MISSING', test:function(s){ return /avg\s*\(\s*price/i.test(s); }},
-        {label:'Orders most expensive first', code:'ROW_ORDER_MISMATCH', test:function(s){ return /order\s+by[\s\S]*desc/i.test(s); }}
-      ],
       result:{columns:['name','price'], rows:[['Lumen 27-inch 4K Monitor','329.00'],['Oak Bookshelf','210.00'],['Trail Runner Jacket','139.00'],['Nimbus Headphones','129.00']]}}
   ]},
 
@@ -363,11 +283,6 @@ var SUBQUERIES_MODULES: CourseModule[] = [
       solution:"SELECT p.name,\n       (SELECT COUNT(*) FROM order_items oi WHERE oi.product_id = p.id) AS lines\nFROM products p\nORDER BY p.id;",
       hints:['Correlate the inner query with <span class="kbd-inline">oi.product_id = p.id</span>.','COUNT of an empty set is 0, so no LEFT JOIN and no COALESCE are needed.'],
       contract:{columns:['name','lines'], column_order:'exact', row_order:'exact'},
-      checks:[
-        {label:'Correlates the subquery with the outer product', code:'SUBQUERY_MISSING', test:function(s){ return /product_id\s*=\s*p\.id/i.test(s); }},
-        {label:'Counts lines per product', code:'AGGREGATION_MISSING', test:function(s){ return /count\s*\(/i.test(s); }},
-        {label:'Keeps one row per product', code:'GRAIN_ERROR', test:function(s){ return /order\s+by\s+p\.id/i.test(s); }}
-      ],
       result:{columns:['name','lines'], rows:[['Aurora Wireless Earbuds','24'],['Nimbus Headphones','18'],['Linen Duvet Cover','15'],['Cedar Desk Lamp','11'],['Trail Runner Jacket','9']]}}
   ]},
 
@@ -387,11 +302,6 @@ var SUBQUERIES_MODULES: CourseModule[] = [
       solution:"SELECT c.name\nFROM customers c\nWHERE NOT EXISTS (\n    SELECT 1 FROM orders o WHERE o.customer_id = c.id\n)\nORDER BY c.name;",
       hints:['<span class="kbd-inline">NOT EXISTS</span> is safe here; <span class="kbd-inline">NOT IN</span> is not.','Tie the inner query to the outer row with <span class="kbd-inline">o.customer_id = c.id</span>.'],
       contract:{columns:['name'], column_order:'exact', row_order:'exact'},
-      checks:[
-        {label:'Uses the NULL-safe anti-join', code:'NULL_SAFETY', test:function(s){ return /not\s+exists/i.test(s) || (/left\s+join/i.test(s) && /is\s+null/i.test(s)); }},
-        {label:'Avoids NOT IN', code:'NULL_TRAP', test:function(s){ return !/not\s+in\s*\(/i.test(s); }},
-        {label:'Orders by name', code:'ROW_ORDER_MISMATCH', test:function(s){ return /order\s+by[\s\S]*name/i.test(s); }}
-      ],
       result:{columns:['name'], rows:[['Emi Tanaka'],['Farah Haddad'],['Greta Lindqvist'],['Hana Sato']]}}
   ]},
 
@@ -411,11 +321,6 @@ var SUBQUERIES_MODULES: CourseModule[] = [
       solution:"SELECT name FROM customers\nEXCEPT\nSELECT c.name\nFROM customers c\nJOIN orders o ON o.customer_id = c.id\nORDER BY name;",
       hints:['<span class="kbd-inline">EXCEPT</span> subtracts the second result from the first: everyone, minus the names that appear in orders.','Both sides must return one text column, in the same position.','An <span class="kbd-inline">INNER JOIN</span> is enough on the second side \u2014 you only need the customers who do have an order.'],
       contract:{columns:['name'], column_order:'exact', row_order:'exact'},
-      checks:[
-        {label:'Uses a set operation', code:'SET_OP_MISSING', test:function(s){ return /except|intersect|union/i.test(s); }},
-        {label:'Subtracts the customers that have orders', code:'JOIN_MISSING', test:function(s){ return /from\s+orders/i.test(s); }},
-        {label:'Orders by name', code:'ROW_ORDER_MISMATCH', test:function(s){ return /order\s+by[\s\S]*name/i.test(s); }}
-      ],
       result:{columns:['name'], rows:[['Aya Rahman'],['Bo Ivanov'],['Cleo Haidar'],['Dara Novak'],['Dev Larsen'],['Yara Park'],['Zane Lindqvist']]}}
   ]}
 ];
@@ -437,11 +342,6 @@ var FOUNDATIONS_MODULES: CourseModule[] = [
       solution:"SELECT DISTINCT category, active\nFROM products\nORDER BY category, active;",
       hints:['List both columns after <span class="kbd-inline">DISTINCT</span>; it de-duplicates the pair, not each column on its own.','Order by <span class="kbd-inline">category, active</span> to make the output deterministic.'],
       contract:{columns:['category','active'], column_order:'ignored', row_order:'exact'},
-      checks:[
-        {label:'Uses DISTINCT', code:'DISTINCT_MISSING', test:function(s){ return /select\s+distinct/i.test(s); }},
-        {label:'Projects category and active', code:'COLUMN_MISMATCH', test:function(s){ return /\bcategory\b/i.test(s) && /\bactive\b/i.test(s); }},
-        {label:'Orders by category then active', code:'ROW_ORDER_MISMATCH', test:function(s){ return /order\s+by[\s\S]*category[\s\S]*active/i.test(s); }}
-      ],
       result:{columns:['category','active'], rows:[['Electronics',true],['Home',true],['Kitchen',true],['Outdoor',false],['Outdoor',true]]}}
   ]},
 
@@ -461,12 +361,6 @@ var FOUNDATIONS_MODULES: CourseModule[] = [
       solution:"SELECT name, category, price\nFROM products\nWHERE active = true\n  AND NOT category = 'Electronics'\n  AND price >= 90\nORDER BY price, name;",
       hints:['Keep only active rows: <span class="kbd-inline">active = true</span>.','Exclude a category with <span class="kbd-inline">NOT category = \'Electronics\'</span> (or the equivalent <span class="kbd-inline">category &lt;&gt; \'Electronics\'</span>).','<span class="kbd-inline">price &gt;= 90</span> keeps 90 exactly; sort with <span class="kbd-inline">ORDER BY price, name</span>.'],
       contract:{columns:['name','category','price'], column_order:'ignored', row_order:'exact'},
-      checks:[
-        {label:'Keeps only active products', code:'FILTER_MISSING', test:function(s){ return /active/i.test(s); }},
-        {label:'Excludes the Electronics category', code:'FILTER_MISSING', test:function(s){ return /(not\s+category\s*=|category\s*<>|category\s*!=)/i.test(s); }},
-        {label:'Restricts to price at least 90', code:'FILTER_MISSING', test:function(s){ return /price\s*>=\s*90/i.test(s); }},
-        {label:'Cheapest first, ties by name', code:'ROW_ORDER_MISMATCH', test:function(s){ return /order\s+by[\s\S]*price/i.test(s) && /order\s+by[\s\S]*name/i.test(s); }}
-      ],
       result:{columns:['name','category','price'], rows:[['Summit Hiking Poles','Outdoor',96.4],['Harbor Rain Shell','Outdoor',118],['Trail Runner Jacket','Outdoor',139],['Granite Cookware Set','Kitchen',210]]}}
   ]},
 
@@ -486,12 +380,6 @@ var FOUNDATIONS_MODULES: CourseModule[] = [
       solution:"SELECT name, price\nFROM products\nORDER BY price DESC, name\nLIMIT 3 OFFSET 6;",
       hints:['Page size is 3, so page three skips two pages of three: <span class="kbd-inline">OFFSET 6</span>.','Sort with <span class="kbd-inline">ORDER BY price DESC, name</span> so ties cannot move between pages.'],
       contract:{columns:['name','price'], column_order:'ignored', row_order:'exact'},
-      checks:[
-        {label:'Sorts by price descending', code:'ROW_ORDER_MISMATCH', test:function(s){ return /order\s+by\s+price\s+desc/i.test(s); }},
-        {label:'Breaks ties by name', code:'ROW_ORDER_MISMATCH', test:function(s){ return /price\s+desc\s*,\s*name/i.test(s); }},
-        {label:'Returns three rows', code:'ROW_COUNT_MISMATCH', test:function(s){ return /limit\s+3/i.test(s); }},
-        {label:'Skips the first two pages', code:'ROW_COUNT_MISMATCH', test:function(s){ return /offset\s+6/i.test(s); }}
-      ],
       result:{columns:['name','price'], rows:[['Linen Duvet Cover',84],['Pulse Fitness Tracker',74.25],['Bamboo Shelf',72.3]]}}
   ]},
 
@@ -513,11 +401,6 @@ var FOUNDATIONS_MODULES: CourseModule[] = [
       solution:"SELECT name, COALESCE(city, 'Unknown') AS city\nFROM customers\nWHERE city IS NULL\nORDER BY name;",
       hints:['The filter is <span class="kbd-inline">WHERE city IS NULL</span>; never <span class="kbd-inline">= NULL</span>.','<span class="kbd-inline">COALESCE(city, \'Unknown\')</span> supplies the label for the missing value.'],
       contract:{columns:['name','city'], column_order:'ignored', row_order:'exact'},
-      checks:[
-        {label:'Tests for a missing city with IS NULL', code:'FILTER_MISSING', test:function(s){ return /is\s+null/i.test(s) && !/=\s*null/i.test(s); }},
-        {label:'Replaces the missing city with COALESCE', code:'COLUMN_MISMATCH', test:function(s){ return /coalesce/i.test(s); }},
-        {label:'Orders by name', code:'ROW_ORDER_MISMATCH', test:function(s){ return /order\s+by[\s\S]*name/i.test(s); }}
-      ],
       result:{columns:['name','city'], rows:[['Bo Ivanov','Unknown'],['Dara Novak','Unknown'],['Luca Novak','Unknown'],['Tess Larsen','Unknown']]}}
   ]},
 
@@ -537,11 +420,6 @@ var FOUNDATIONS_MODULES: CourseModule[] = [
       solution:"SELECT name, price\nFROM products\nWHERE category IN ('Home', 'Kitchen')\n  AND price BETWEEN 20 AND 90\nORDER BY price, name;",
       hints:['<span class="kbd-inline">category IN (\'Home\', \'Kitchen\')</span> replaces two <span class="kbd-inline">OR</span>s.','<span class="kbd-inline">price BETWEEN 20 AND 90</span> includes both endpoints.'],
       contract:{columns:['name','price'], column_order:'ignored', row_order:'exact'},
-      checks:[
-        {label:'Matches categories with IN', code:'FILTER_MISSING', test:function(s){ return /\bin\s*\(/i.test(s); }},
-        {label:'Matches the price range with BETWEEN', code:'FILTER_MISSING', test:function(s){ return /\bbetween\s+20\s+and\s+90/i.test(s); }},
-        {label:'Cheapest first, ties by name', code:'ROW_ORDER_MISMATCH', test:function(s){ return /order\s+by[\s\S]*price/i.test(s) && /order\s+by[\s\S]*name/i.test(s); }}
-      ],
       result:{columns:['name','price'], rows:[['Maple Cutting Board',24],['Ceramic Vase',33.2],['Cedar Desk Lamp',42.5],['Wool Throw Blanket',55],['Copper Kettle',65.75],['Bamboo Shelf',72.3],['Linen Duvet Cover',84]]}}
   ]},
 
@@ -561,13 +439,6 @@ var FOUNDATIONS_MODULES: CourseModule[] = [
       solution:"SELECT name, stock,\n       CASE WHEN stock = 0 THEN 'out'\n            WHEN stock < 20 THEN 'low'\n            ELSE 'ok' END AS stock_level\nFROM products\nWHERE category = 'Outdoor'\nORDER BY stock, name;",
       hints:['Test <span class="kbd-inline">stock = 0</span> before <span class="kbd-inline">stock &lt; 20</span>: the first match wins.','Close with <span class="kbd-inline">ELSE \'ok\'</span> so nothing is left as NULL.'],
       contract:{columns:['name','stock','stock_level'], column_order:'ignored', row_order:'exact'},
-      checks:[
-        {label:'Uses a CASE expression', code:'CASE_MISSING', test:function(s){ return /\bcase\b/i.test(s); }},
-        {label:'Labels zero stock as out', code:'VALUE_MISMATCH', test:function(s){ return /stock\s*=\s*0/i.test(s); }},
-        {label:'Labels under 20 as low', code:'VALUE_MISMATCH', test:function(s){ return /stock\s*<\s*20/i.test(s); }},
-        {label:'Provides an ELSE branch', code:'VALUE_MISMATCH', test:function(s){ return /\belse\b/i.test(s); }},
-        {label:'Orders by stock then name', code:'ROW_ORDER_MISMATCH', test:function(s){ return /order\s+by[\s\S]*stock/i.test(s) && /order\s+by[\s\S]*name/i.test(s); }}
-      ],
       result:{columns:['name','stock','stock_level'], rows:[['Discontinued Camp Stove',0,'out'],['Harbor Rain Shell',9,'low'],['Summit Hiking Poles',11,'low'],['Trail Runner Jacket',12,'low'],['Solar Camp Lantern',16,'low'],['Rope Dog Leash',35,'ok']]}}
   ]},
 
@@ -587,12 +458,6 @@ var FOUNDATIONS_MODULES: CourseModule[] = [
       solution:"SELECT status, COUNT(*) AS orders\nFROM orders\nGROUP BY status\nHAVING COUNT(*) >= 11\nORDER BY orders DESC, status;",
       hints:['Group by <span class="kbd-inline">status</span> and count the rows in each group.','The threshold is on the aggregate, so it goes in <span class="kbd-inline">HAVING COUNT(*) &gt;= 11</span>, not in a <span class="kbd-inline">WHERE</span>.'],
       contract:{columns:['status','orders'], column_order:'ignored', row_order:'exact'},
-      checks:[
-        {label:'Groups by status', code:'AGGREGATION_MISSING', test:function(s){ return /group\s+by[\s\S]*status/i.test(s); }},
-        {label:'Counts the orders', code:'AGGREGATION_MISSING', test:function(s){ return /count\s*\(/i.test(s); }},
-        {label:'Filters the groups with HAVING', code:'FILTER_MISSING', test:function(s){ return /having/i.test(s); }},
-        {label:'Most orders first, ties by status', code:'ROW_ORDER_MISMATCH', test:function(s){ return /order\s+by[\s\S]*orders\s+desc/i.test(s) && /orders\s+desc\s*,\s*status/i.test(s); }}
-      ],
       result:{columns:['status','orders'], rows:[['completed',37],['cancelled',11],['refunded',11],['shipped',11]]}}
   ]}
 ];
@@ -617,11 +482,6 @@ var PLANS_MODULES: CourseModule[] = [
       solution:"SELECT 'customers' AS relation, COUNT(*) AS table_rows FROM customers\nUNION ALL SELECT 'products', COUNT(*) FROM products\nUNION ALL SELECT 'orders', COUNT(*) FROM orders\nUNION ALL SELECT 'order_items', COUNT(*) FROM order_items\nORDER BY table_rows DESC;",
       hints:['Every branch of a <span class="kbd-inline">UNION ALL</span> projects the same two columns in the same order.','The names come from the first branch, so the trailing <span class="kbd-inline">ORDER BY table_rows DESC</span> can use the alias.'],
       contract:{columns:['relation','table_rows'], column_order:'exact', row_order:'exact'},
-      checks:[
-        {label:'Counts all four tables', code:'AGGREGATION_MISSING', test:function(s){ return (s.match(/count\s*\(\s*\*\s*\)/gi) || []).length >= 4 && ['customers','products','orders','order_items'].every(function(t){ return new RegExp('from\\s+'+t+'\\b','i').test(s); }); }},
-        {label:'Stacks the four counts with UNION ALL', code:'COLUMN_MISMATCH', test:function(s){ return /union\s+all/i.test(s) && /\brelation\b/i.test(s) && /\btable_rows\b/i.test(s); }},
-        {label:'Largest table first', code:'ROW_ORDER_MISMATCH', test:function(s){ return /order\s+by[\s\S]*table_rows\s+desc/i.test(s); }}
-      ],
       result:{columns:['relation','table_rows'], rows:[['order_items',20000],['orders',10000],['customers',2000],['products',500]]}}
   ]},
 
@@ -641,11 +501,6 @@ var PLANS_MODULES: CourseModule[] = [
       solution:"SELECT id, ordered_at, status\nFROM orders\nWHERE customer_id = 1\nORDER BY ordered_at DESC\nLIMIT 5;",
       hints:['Filter with <span class="kbd-inline">customer_id = 1</span>.','Newest first is <span class="kbd-inline">ORDER BY ordered_at DESC</span>, and the <span class="kbd-inline">LIMIT</span> turns the sort into a top-N heapsort.'],
       contract:{columns:['id','ordered_at','status'], column_order:'exact', row_order:'exact'},
-      checks:[
-        {label:'Filters to customer 1', code:'FILTER_MISSING', test:function(s){ return /customer_id\s*=\s*1\b/i.test(s); }},
-        {label:'Newest first', code:'ROW_ORDER_MISMATCH', test:function(s){ return /order\s+by[\s\S]*ordered_at\s+desc/i.test(s); }},
-        {label:'Returns five rows', code:'ROW_COUNT_MISMATCH', test:function(s){ return /limit\s+5\b/i.test(s); }}
-      ],
       result:{columns:['id','ordered_at','status'], rows:[[10000,'2026-12-28 01:48','shipped'],[9981,'2026-12-27 09:20','cancelled'],[9962,'2026-12-26 16:52','completed'],[9943,'2026-12-26 00:24','shipped'],[9926,'2026-12-25 09:40','shipped']]}}
   ]},
 
@@ -665,11 +520,6 @@ var PLANS_MODULES: CourseModule[] = [
       solution:"SELECT id, ordered_at, status\nFROM orders\nWHERE status = 'shipped'\nORDER BY ordered_at DESC\nLIMIT 5;",
       hints:['The predicate is <span class="kbd-inline">status = \'shipped\'</span>, on the bare column so the statistics apply.','Newest first is <span class="kbd-inline">ORDER BY ordered_at DESC</span>. With nine thousand matching rows, reading the relation once beats visiting nine thousand heap pages through the index.'],
       contract:{columns:['id','ordered_at','status'], column_order:'exact', row_order:'exact'},
-      checks:[
-        {label:'Filters to shipped orders', code:'FILTER_MISSING', test:function(s){ return /status\s*=\s*'shipped'/i.test(s); }},
-        {label:'Newest first', code:'ROW_ORDER_MISMATCH', test:function(s){ return /order\s+by[\s\S]*ordered_at\s+desc/i.test(s); }},
-        {label:'Returns five rows', code:'ROW_COUNT_MISMATCH', test:function(s){ return /limit\s+5\b/i.test(s); }}
-      ],
       perf:{engine:'postgresql',
         require_nodes:[{node_type:'Seq Scan', relation:'orders', label:'90% of the relation is cheaper to read once, in order, than to revisit page by page'}],
         forbid_nodes:[{node_type:'Index Scan', relation:'orders'},{node_type:'Bitmap Heap Scan', relation:'orders'}],
@@ -693,10 +543,6 @@ var PLANS_MODULES: CourseModule[] = [
       solution:"SELECT COUNT(*) AS refunded\nFROM orders\nWHERE status = 'refunded';",
       hints:['The predicate is <span class="kbd-inline">status = \'refunded\'</span>, on the bare column so the index and the statistics both apply.','One half of one percent of the table does not need a sequential read: the plan should touch orders_status_idx.'],
       contract:{columns:['refunded'], column_order:'exact', row_order:'ignored'},
-      checks:[
-        {label:'Counts the rows', code:'AGGREGATION_MISSING', test:function(s){ return /count\s*\(\s*\*\s*\)/i.test(s); }},
-        {label:'Filters to the rare status', code:'FILTER_MISSING', test:function(s){ return /status\s*=\s*'refunded'/i.test(s); }}
-      ],
       perf:{engine:'postgresql',
         require_indexes:['orders_status_idx'],
         min_index_scans:1,
@@ -721,12 +567,6 @@ var PLANS_MODULES: CourseModule[] = [
       solution:"SELECT p.category, COUNT(oi.id) AS lines\nFROM products p\nLEFT JOIN order_items oi ON oi.product_id = p.id\nGROUP BY p.category\nORDER BY lines DESC, p.category;",
       hints:['A <span class="kbd-inline">LEFT JOIN</span> keeps a category that has no lines, and <span class="kbd-inline">COUNT(oi.id)</span> then counts zero for it instead of one.','Order by the aggregate, with a tie-break so the output is stable: <span class="kbd-inline">ORDER BY lines DESC, p.category</span>.'],
       contract:{columns:['category','lines'], column_order:'ignored', row_order:'exact'},
-      checks:[
-        {label:'Keeps every category with a LEFT JOIN', code:'COLUMN_MISMATCH', test:function(s){ return /left\s+(outer\s+)?join/i.test(s); }},
-        {label:'Joins lines to products on the product key', code:'COLUMN_MISMATCH', test:function(s){ return /product_id\s*=\s*p\.id|p\.id\s*=\s*oi\.product_id/i.test(s); }},
-        {label:'Groups by category', code:'GROUPING_MISSING', test:function(s){ return /group\s+by[\s\S]*category/i.test(s); }},
-        {label:'Most lines first', code:'ROW_ORDER_MISMATCH', test:function(s){ return /order\s+by[\s\S]*desc/i.test(s); }}
-      ],
       result:{columns:['category','lines'], rows:[['Electronics',5705],['Home',4923],['Outdoor',4831],['Kitchen',4541]]}}
   ]},
 
@@ -746,12 +586,6 @@ var PLANS_MODULES: CourseModule[] = [
       solution:"SELECT p.id, p.name, COUNT(*) AS lines\nFROM order_items oi\nJOIN products p ON p.id = oi.product_id\nGROUP BY p.id, p.name\nORDER BY lines DESC, p.id\nLIMIT 3;",
       hints:['Group by <span class="kbd-inline">p.id, p.name</span> so one row per product keeps the name available.','The grouping is a hash and the ranking is a sort on top of it: <span class="kbd-inline">ORDER BY lines DESC, p.id</span>.'],
       contract:{columns:['id','name','lines'], column_order:'exact', row_order:'exact'},
-      checks:[
-        {label:'Joins lines to products', code:'COLUMN_MISMATCH', test:function(s){ return /p\.id\s*=\s*oi\.product_id|oi\.product_id\s*=\s*p\.id/i.test(s); }},
-        {label:'Counts the lines per product', code:'AGGREGATION_MISSING', test:function(s){ return /count\s*\(/i.test(s) && /group\s+by/i.test(s); }},
-        {label:'Most lines first, ties by id', code:'ROW_ORDER_MISMATCH', test:function(s){ return /order\s+by[\s\S]*lines\s+desc/i.test(s) && /lines\s+desc\s*,\s*(p\.)?id\b/i.test(s); }},
-        {label:'Returns three rows', code:'ROW_COUNT_MISMATCH', test:function(s){ return /limit\s+3\b/i.test(s); }}
-      ],
       result:{columns:['id','name','lines'], rows:[[1,'Aurora Wireless Earbuds',895],[2,'Nimbus Headphones',370],[3,'Linen Duvet Cover',285]]}}
   ]},
 
@@ -771,11 +605,6 @@ var PLANS_MODULES: CourseModule[] = [
       solution:"SELECT id, ordered_at, status\nFROM orders\nWHERE customer_id = 7\nORDER BY ordered_at\nLIMIT 5;",
       hints:['Compare the bare column with a typed literal: <span class="kbd-inline">customer_id = 7</span>. A cast on the constant is free; a cast on the column is not.','Nothing indexes <span class="kbd-inline">ordered_at</span>, so the planner cannot stream the answer in order \u2014 it has to collect every row the predicate matched before it can sort them. Reading 184 rows out of 10 000 is what orders_customer_id_idx is for, and the cast takes it away: the wrapped column has no statistic either, so the estimate falls back to 50 rows and the plan reads the whole relation twice over.'],
       contract:{columns:['id','ordered_at','status'], column_order:'exact', row_order:'exact'},
-      checks:[
-        {label:'Compares the bare customer_id column', code:'FILTER_MISSING', test:function(s){ return /customer_id\s*=\s*7\b/i.test(s); }},
-        {label:'Does not cast the column to text', code:'VALUE_MISMATCH', test:function(s){ return !/::\s*text/i.test(s); }},
-        {label:'Returns five rows', code:'ROW_COUNT_MISMATCH', test:function(s){ return /limit\s+5\b/i.test(s); }}
-      ],
       perf:{engine:'postgresql',
         require_indexes:['orders_customer_id_idx'],
         min_index_scans:1,
@@ -799,11 +628,6 @@ var PLANS_MODULES: CourseModule[] = [
       solution:"SELECT o.id AS order_id, o.ordered_at, oi.product_id, oi.quantity\nFROM orders o\nJOIN order_items oi ON oi.order_id = o.id\nWHERE o.id = 1050\n  AND oi.order_id = 1050\nORDER BY oi.product_id;",
       hints:['Compare <span class="kbd-inline">o.id</span> with the number 1050, not with text cast through the column.','Add <span class="kbd-inline">AND oi.order_id = 1050</span> so the join\u2019s inner side is a seek on order_items_order_id_idx instead of a sequential read of all 20 000 lines.'],
       contract:{columns:['order_id','ordered_at','product_id','quantity'], column_order:'exact', row_order:'exact'},
-      checks:[
-        {label:'Compares the primary key without a cast', code:'FILTER_MISSING', test:function(s){ return /o\.id\s*=\s*1050\b/i.test(s); }},
-        {label:'Filters the child rows on the same key', code:'FILTER_MISSING', test:function(s){ return /oi\.order_id\s*=\s*1050\b/i.test(s); }},
-        {label:'Orders by product_id', code:'ROW_ORDER_MISMATCH', test:function(s){ return /order\s+by[\s\S]*product_id/i.test(s); }}
-      ],
       perf:{engine:'postgresql',
         require_nodes:[{node_type:'Index Scan', relation:'orders', index:'orders_pkey', label:'the order is found by its primary key'}],
         forbid_nodes:[{node_type:'Seq Scan', relation:'orders', above_plan_rows:100},{node_type:'Seq Scan', relation:'order_items', above_plan_rows:100}],
@@ -835,11 +659,6 @@ var SQLITE_ESSENTIALS_MODULES: CourseModule[] = [
       solution:"SELECT name\nFROM sqlite_master\nWHERE type = 'index'\nORDER BY name;",
       hints:['Indexes are rows in <span class="kbd-inline">sqlite_master</span> with <span class="kbd-inline">type = \'index\'</span>.','One of the five comes from the <span class="kbd-inline">dataset_meta</span> primary key \u2014 SQLite named it <span class="kbd-inline">sqlite_autoindex_...</span> for you.'],
       contract:{columns:['name'], column_order:'exact', row_order:'exact'},
-      checks:[
-        {label:'Reads the catalog', code:'TABLE_MISSING', test:function(s){ return /sqlite_master|sqlite_schema/i.test(s); }},
-        {label:'Filters to indexes', code:'FILTER_MISSING', test:function(s){ return /type\s*=\s*'index'/i.test(s); }},
-        {label:'Alphabetical by name', code:'ROW_ORDER_MISMATCH', test:function(s){ return /order\s+by[\s\S]*name/i.test(s); }}
-      ],
       result:{columns:['name'], rows:[['order_items_order_id_idx'],['order_items_product_id_idx'],['orders_customer_id_idx'],['orders_status_idx'],['sqlite_autoindex_dataset_meta_1']]}}
   ]},
 
@@ -856,11 +675,6 @@ var SQLITE_ESSENTIALS_MODULES: CourseModule[] = [
       solution:"SELECT id, name,\n       typeof(price) AS stored\nFROM products\nWHERE typeof(price) = 'real'\nORDER BY id;",
       hints:['<span class="kbd-inline">typeof(price)</span> returns the storage class as text: \'integer\', \'real\', \'text\', \'blob\' or \'null\'.','A two-decimal seed value keeps its fraction only when the fraction is non-zero, so filter on the class rather than on the declared type.'],
       contract:{columns:['id','name','stored'], column_order:'exact', row_order:'exact'},
-      checks:[
-        {label:'Reads the storage class', code:'VALUE_MISMATCH', test:function(s){ return /typeof\s*\(/i.test(s); }},
-        {label:'Filters to REAL values', code:'FILTER_MISSING', test:function(s){ return /typeof\s*\([^)]*\)\s*=\s*'real'/i.test(s); }},
-        {label:'Orders by id', code:'ROW_ORDER_MISMATCH', test:function(s){ return /order\s+by[\s\S]*\bid\b/i.test(s); }}
-      ],
       result:{columns:['id','name','stored'], rows:[[4,'Cedar Desk Lamp','real'],[6,'Pulse Fitness Tracker','real'],[7,'Vertex Mechanical Keyboard','real'],[10,'Copper Kettle','real'],[13,'Summit Hiking Poles','real'],[14,'Ceramic Vase','real'],[15,'Espresso Tamper','real'],[17,'Bamboo Shelf','real'],[18,'Noise-Cancel Earmuffs','real'],[19,'Rope Dog Leash','real']]}}
   ]},
 
@@ -877,11 +691,6 @@ var SQLITE_ESSENTIALS_MODULES: CourseModule[] = [
       solution:"SELECT rowid AS rid, id, order_id\nFROM order_items\nORDER BY id DESC\nLIMIT 3;",
       hints:['Say <span class="kbd-inline">rowid AS rid</span> so the two address columns have distinct names.','<span class="kbd-inline">MAX(rowid)</span> is 160, so <span class="kbd-inline">ORDER BY id DESC</span> starts there.'],
       contract:{columns:['rid','id','order_id'], column_order:'exact', row_order:'exact'},
-      checks:[
-        {label:'Selects the rowid', code:'COLUMN_MISMATCH', test:function(s){ return /\browid\b/i.test(s); }},
-        {label:'Highest id first', code:'ROW_ORDER_MISMATCH', test:function(s){ return /order\s+by[\s\S]*\bid\b[\s\S]*desc/i.test(s); }},
-        {label:'Returns three rows', code:'ROW_COUNT_MISMATCH', test:function(s){ return /limit\s+3\b/i.test(s); }}
-      ],
       result:{columns:['rid','id','order_id'], rows:[[160,160,1080],[159,159,1080],[158,158,1079]]}}
   ]},
 
@@ -898,12 +707,6 @@ var SQLITE_ESSENTIALS_MODULES: CourseModule[] = [
       solution:"SELECT strftime('%Y-%m', signup_date) AS month,\n       COUNT(*) AS signups\nFROM customers\nWHERE signup_date >= '2026-01-01'\nGROUP BY month\nORDER BY month;",
       hints:['A date stored as text compares as text: <span class="kbd-inline">signup_date &gt;= \'2026-01-01\'</span> works because the format is fixed.','<span class="kbd-inline">strftime(\'%Y-%m\', ...)</span> gives the year and month; group by the alias.'],
       contract:{columns:['month','signups'], column_order:'exact', row_order:'exact'},
-      checks:[
-        {label:'Truncates with strftime', code:'VALUE_MISMATCH', test:function(s){ return /strftime\s*\(\s*'%Y-%m'/i.test(s); }},
-        {label:'Filters to 2026', code:'FILTER_MISSING', test:function(s){ return /signup_date\s*>=\s*'2026-01-01'/i.test(s); }},
-        {label:'Groups by month', code:'GROUPING_MISSING', test:function(s){ return /group\s+by[\s\S]*month|\bgroup\s+by\s+1\b/i.test(s); }},
-        {label:'Months ascending', code:'ROW_ORDER_MISMATCH', test:function(s){ return /order\s+by[\s\S]*month|\border\s+by\s+1\b/i.test(s); }}
-      ],
       result:{columns:['month','signups'], rows:[['2026-01',2],['2026-02',3],['2026-03',3],['2026-04',2],['2026-05',3],['2026-06',3],['2026-07',3]]}}
   ]},
 
@@ -920,10 +723,6 @@ var SQLITE_ESSENTIALS_MODULES: CourseModule[] = [
       solution:"SELECT (SELECT COUNT(*) FROM products WHERE name LIKE '%AN%') AS like_an,\n       (SELECT COUNT(*) FROM products WHERE name GLOB '*AN*') AS glob_an;",
       hints:['LIKE folds ASCII case, so <span class="kbd-inline">\'%AN%\'</span> finds names spelled with lower-case <span class="kbd-inline">an</span>.','GLOB is exact-case and uses <span class="kbd-inline">*</span>, not <span class="kbd-inline">%</span>, for a run of characters.'],
       contract:{columns:['like_an','glob_an'], column_order:'exact', row_order:'ignored'},
-      checks:[
-        {label:'Uses LIKE for the first count', code:'VALUE_MISMATCH', test:function(s){ return /like\s+'%AN%'/i.test(s); }},
-        {label:'Uses GLOB for the second count', code:'VALUE_MISMATCH', test:function(s){ return /glob\s+'\*AN\*'/i.test(s); }}
-      ],
       result:{columns:['like_an','glob_an'], rows:[[5,0]]}}
   ]},
 
@@ -940,10 +739,6 @@ var SQLITE_ESSENTIALS_MODULES: CourseModule[] = [
       solution:"SELECT id, status, customer_id\nFROM orders\nWHERE customer_id = 3\nORDER BY id;",
       hints:['The predicate is <span class="kbd-inline">customer_id = 3</span>, on the bare column, so <span class="kbd-inline">orders_customer_id_idx</span> can serve it.','Lowest id first is <span class="kbd-inline">ORDER BY id</span> with no DESC.'],
       contract:{columns:['id','status','customer_id'], column_order:'exact', row_order:'exact'},
-      checks:[
-        {label:'Filters to customer 3', code:'FILTER_MISSING', test:function(s){ return /customer_id\s*=\s*3\b/i.test(s); }},
-        {label:'Lowest id first', code:'ROW_ORDER_MISMATCH', test:function(s){ return /order\s+by[\s\S]*\bid\b/i.test(s) && !/\bid\s+desc/i.test(s); }}
-      ],
       result:{columns:['id','status','customer_id'], rows:[[1004,'completed',3],[1009,'completed',3],[1010,'completed',3],[1011,'pending',3]]}}
   ]},
 
@@ -960,11 +755,6 @@ var SQLITE_ESSENTIALS_MODULES: CourseModule[] = [
       solution:"SELECT 'customers' AS relation, COUNT(*) AS table_rows FROM customers\nUNION ALL SELECT 'products', COUNT(*) FROM products\nUNION ALL SELECT 'orders', COUNT(*) FROM orders\nUNION ALL SELECT 'order_items', COUNT(*) FROM order_items\nORDER BY table_rows DESC;",
       hints:['Every branch of a <span class="kbd-inline">UNION ALL</span> projects the same two columns in the same order.','The names come from the first branch, so the trailing <span class="kbd-inline">ORDER BY table_rows DESC</span> can use the alias.'],
       contract:{columns:['relation','table_rows'], column_order:'exact', row_order:'exact'},
-      checks:[
-        {label:'Counts all four tables', code:'AGGREGATION_MISSING', test:function(s){ return (s.match(/count\s*\(\s*\*\s*\)/gi) || []).length >= 4 && ['customers','products','orders','order_items'].every(function(t){ return new RegExp('from\\s+'+t+'\\b','i').test(s); }); }},
-        {label:'Stacks the counts with UNION ALL', code:'COLUMN_MISMATCH', test:function(s){ return /union\s+all/i.test(s) && /\brelation\b/i.test(s) && /\btable_rows\b/i.test(s); }},
-        {label:'Largest table first', code:'ROW_ORDER_MISMATCH', test:function(s){ return /order\s+by[\s\S]*table_rows\s+desc/i.test(s); }}
-      ],
       result:{columns:['relation','table_rows'], rows:[['order_items',160],['orders',80],['customers',30],['products',20]]}}
   ]}
 ];
@@ -984,10 +774,6 @@ var SQLITE_IN_PRODUCTION_MODULES: CourseModule[] = [
       solution:"SELECT (SELECT journal_mode FROM pragma_journal_mode()) AS journal_mode,\n       (SELECT timeout FROM pragma_busy_timeout()) AS busy_timeout;",
       hints:['<span class="kbd-inline">pragma_journal_mode()</span> and <span class="kbd-inline">pragma_busy_timeout()</span> are tables, so each can be a scalar subquery.','The busy-timeout column is called <span class="kbd-inline">timeout</span>, not <span class="kbd-inline">busy_timeout</span>.'],
       contract:{columns:['journal_mode','busy_timeout'], column_order:'exact', row_order:'ignored'},
-      checks:[
-        {label:'Reads the journal mode from the file', code:'VALUE_MISMATCH', test:function(s){ return /pragma_journal_mode|PRAGMA\s+journal_mode/i.test(s); }},
-        {label:'Reads the busy timeout from the connection', code:'VALUE_MISMATCH', test:function(s){ return /pragma_busy_timeout/i.test(s); }}
-      ],
       result:{columns:['journal_mode','busy_timeout'], rows:[['delete',2000]]}}
   ]},
 
@@ -1004,11 +790,6 @@ var SQLITE_IN_PRODUCTION_MODULES: CourseModule[] = [
       solution:"SELECT m.name AS table_name,\n       (SELECT COUNT(*) FROM pragma_table_info(m.name)) AS columns\nFROM sqlite_master m\nWHERE m.type = 'table'\nORDER BY m.name;",
       hints:['<span class="kbd-inline">pragma_table_info()</span> takes the table name as an argument, and an outer column is a fine argument.','<span class="kbd-inline">COUNT(*)</span> over that pragma counts the columns of the table it was handed.'],
       contract:{columns:['table_name','columns'], column_order:'exact', row_order:'exact'},
-      checks:[
-        {label:'Queries the column list as a table', code:'VALUE_MISMATCH', test:function(s){ return /pragma_table_info\s*\(/i.test(s); }},
-        {label:'One row per table with a count', code:'AGGREGATION_MISSING', test:function(s){ return /sqlite_master|pragma_table_list/i.test(s) && /count\s*\(/i.test(s); }},
-        {label:'Alphabetical by table name', code:'ROW_ORDER_MISMATCH', test:function(s){ return /order\s+by[\s\S]*name/i.test(s); }}
-      ],
       result:{columns:['table_name','columns'], rows:[['customers',5],['dataset_meta',2],['order_items',5],['orders',4],['products',6]]}}
   ]},
 
@@ -1025,11 +806,6 @@ var SQLITE_IN_PRODUCTION_MODULES: CourseModule[] = [
       solution:"SELECT m.name AS table_name, p.name AS column_name, p.type AS declared_type\nFROM sqlite_master m\nJOIN pragma_table_info(m.name) p\nWHERE m.type = 'table'\n  AND p.type NOT IN ('INT', 'INTEGER', 'REAL', 'TEXT', 'BLOB', 'ANY')\nORDER BY m.name, p.cid;",
       hints:['<span class="kbd-inline">JOIN pragma_table_info(m.name) p</span> is a correlated table-valued function: one call per row of <span class="kbd-inline">sqlite_master</span>.','The STRICT list is the literal <span class="kbd-inline">IN</span> list from the chapter, and <span class="kbd-inline">p.cid</span> is the column position.'],
       contract:{columns:['table_name','column_name','declared_type'], column_order:'exact', row_order:'exact'},
-      checks:[
-        {label:'Joins the column list per table', code:'JOIN_MISSING', test:function(s){ return /pragma_table_info\s*\(/i.test(s) && /join/i.test(s); }},
-        {label:'Excludes the STRICT type list', code:'FILTER_MISSING', test:function(s){ return /not\s+in\s*\(/i.test(s) && /'TEXT'/i.test(s) && /'BLOB'/i.test(s); }},
-        {label:'Ordered by table, then column position', code:'ROW_ORDER_MISMATCH', test:function(s){ return /order\s+by[\s\S]*cid/i.test(s); }}
-      ],
       result:{columns:['table_name','column_name','declared_type'], rows:[['customers','signup_date','DATE'],['order_items','unit_price','NUMERIC'],['orders','ordered_at','TIMESTAMP'],['products','price','NUMERIC'],['products','active','BOOLEAN']]}}
   ]},
 
@@ -1046,11 +822,6 @@ var SQLITE_IN_PRODUCTION_MODULES: CourseModule[] = [
       solution:"SELECT m.name AS child, f.\"table\" AS parent,\n       f.\"from\" AS child_column, f.\"to\" AS parent_column\nFROM sqlite_master m\nJOIN pragma_foreign_key_list(m.name) f\nWHERE m.type = 'table'\nORDER BY m.name, f.id;",
       hints:['<span class="kbd-inline">pragma_foreign_key_list()</span> is table-valued, exactly like <span class="kbd-inline">pragma_table_info()</span>.','<span class="kbd-inline">"table"</span>, <span class="kbd-inline">"from"</span> and <span class="kbd-inline">"to"</span> are reserved words, so the pragma\u2019s columns are quoted wherever they appear.'],
       contract:{columns:['child','parent','child_column','parent_column'], column_order:'exact', row_order:'exact'},
-      checks:[
-        {label:'Reads the declared keys as a table', code:'VALUE_MISMATCH', test:function(s){ return /pragma_foreign_key_list\s*\(/i.test(s); }},
-        {label:'Names both sides of each key', code:'COLUMN_MISMATCH', test:function(s){ return /child_column|"from"/i.test(s) && /parent_column|"to"/i.test(s); }},
-        {label:'Ordered by child table', code:'ROW_ORDER_MISMATCH', test:function(s){ return /order\s+by[\s\S]*m\.name|order\s+by[\s\S]*child/i.test(s); }}
-      ],
       result:{columns:['child','parent','child_column','parent_column'], rows:[['order_items','products','product_id','id'],['order_items','orders','order_id','id'],['orders','customers','customer_id','id']]}}
   ]},
 
@@ -1067,11 +838,6 @@ var SQLITE_IN_PRODUCTION_MODULES: CourseModule[] = [
       solution:"SELECT category,\n       json_group_array(name) AS products,\n       json_group_array(name) ->> '$[0]' AS first_product\nFROM (SELECT category, name FROM products ORDER BY category, name)\nGROUP BY category\nORDER BY category;",
       hints:['The path for the first element of an array is <span class="kbd-inline">\'$[0]\'</span>.','Use <span class="kbd-inline">->></span> (two characters), not <span class="kbd-inline">-></span>: the second returns the element as JSON, the first as a SQL value.'],
       contract:{columns:['category','products','first_product'], column_order:'exact', row_order:'exact'},
-      checks:[
-        {label:'Builds the array with json_group_array', code:'AGGREGATION_MISSING', test:function(s){ return /json_group_array\s*\(/i.test(s); }},
-        {label:'Unwraps the first element with ->>', code:'VALUE_MISMATCH', test:function(s){ return /->>\s*'\$\[0\]'/i.test(s); }},
-        {label:'Orders the subquery so the array is deterministic', code:'ROW_ORDER_MISMATCH', test:function(s){ return /order\s+by[\s\S]*category\s*,\s*name/i.test(s); }}
-      ],
       result:{columns:['category','products','first_product'], rows:[['Electronics','["Aurora Wireless Earbuds","Nimbus Headphones","Noise-Cancel Earmuffs","Pulse Fitness Tracker","Vertex Mechanical Keyboard"]','Aurora Wireless Earbuds'],['Home','["Bamboo Shelf","Cedar Desk Lamp","Ceramic Vase","Linen Duvet Cover","Wool Throw Blanket"]','Bamboo Shelf'],['Kitchen','["Copper Kettle","Espresso Tamper","Granite Cookware Set","Maple Cutting Board"]','Copper Kettle'],['Outdoor','["Discontinued Camp Stove","Harbor Rain Shell","Rope Dog Leash","Solar Camp Lantern","Summit Hiking Poles","Trail Runner Jacket"]','Discontinued Camp Stove']]}}
   ]},
 
@@ -1088,10 +854,6 @@ var SQLITE_IN_PRODUCTION_MODULES: CourseModule[] = [
       solution:"SELECT (SELECT user_version FROM pragma_user_version()) AS app_user_version,\n       (SELECT version FROM dataset_meta WHERE dataset = 'commerce') AS dataset_version;",
       hints:['Both are scalar subqueries: one against a table-valued pragma, one against a real table.','<span class="kbd-inline">dataset_meta</span> has one row per dataset, keyed by <span class="kbd-inline">dataset</span>.'],
       contract:{columns:['app_user_version','dataset_version'], column_order:'exact', row_order:'ignored'},
-      checks:[
-        {label:'Reads the header counter', code:'VALUE_MISMATCH', test:function(s){ return /pragma_user_version|PRAGMA\s+user_version/i.test(s); }},
-        {label:'Reads the dataset row', code:'VALUE_MISMATCH', test:function(s){ return /dataset_meta/i.test(s) && /version/i.test(s); }}
-      ],
       result:{columns:['app_user_version','dataset_version'], rows:[[0,1]]}}
   ]},
 
@@ -1108,10 +870,6 @@ var SQLITE_IN_PRODUCTION_MODULES: CourseModule[] = [
       solution:"SELECT (SELECT page_size FROM pragma_page_size()) AS page_size,\n       (SELECT page_count FROM pragma_page_count()) AS pages,\n       (SELECT page_size FROM pragma_page_size()) * (SELECT page_count FROM pragma_page_count()) / 1024 AS kib;",
       hints:['Bytes are <span class="kbd-inline">page_size * page_count</span>; divide by 1024 for KiB.','Integer division is exact here: the product is a whole multiple of 1024.'],
       contract:{columns:['page_size','pages','kib'], column_order:'exact', row_order:'ignored'},
-      checks:[
-        {label:'Sizes the file from page_size and page_count', code:'VALUE_MISMATCH', test:function(s){ return /pragma_page_size/i.test(s) && /pragma_page_count/i.test(s); }},
-        {label:'Converts bytes to kibibytes', code:'VALUE_MISMATCH', test:function(s){ return /\/\s*1024/i.test(s); }}
-      ],
       result:{columns:['page_size','pages','kib'], rows:[[4096,11,44]]}}
   ]}
 ];
@@ -1131,11 +889,6 @@ var POSTGRES_TO_SQLITE_MODULES: CourseModule[] = [
       solution:"SELECT id,\n       date(ordered_at) AS ordered_on,\n       status\nFROM orders\nORDER BY ordered_at, id\nLIMIT 3;",
       hints:['<span class="kbd-inline">date(ordered_at)</span> is the port of <span class="kbd-inline">ordered_at::date</span>; there is nothing to cast to.','Add <span class="kbd-inline">id</span> as a second sort key so two orders at the same timestamp have a fixed order.'],
       contract:{columns:['id','ordered_on','status'], column_order:'exact', row_order:'exact'},
-      checks:[
-        {label:'Takes the date part with date()', code:'VALUE_MISMATCH', test:function(s){ return /date\s*\(\s*ordered_at\s*\)/i.test(s); }},
-        {label:'Earliest orders first', code:'ROW_ORDER_MISMATCH', test:function(s){ return /order\s+by[\s\S]*ordered_at/i.test(s) && !/ordered_at\s+desc/i.test(s); }},
-        {label:'Returns three rows', code:'ROW_COUNT_MISMATCH', test:function(s){ return /limit\s+3\b/i.test(s); }}
-      ],
       result:{columns:['id','ordered_on','status'], rows:[[1001,'2026-01-04','completed'],[1006,'2026-01-09','shipped'],[1007,'2026-01-11','refunded']]}}
   ]},
 
@@ -1152,13 +905,6 @@ var POSTGRES_TO_SQLITE_MODULES: CourseModule[] = [
       solution:"WITH ranked AS (\n  SELECT customer_id, id,\n         date(ordered_at) AS ordered_on,\n         ROW_NUMBER() OVER (PARTITION BY customer_id ORDER BY ordered_at DESC, id DESC) AS rn\n  FROM orders\n  WHERE customer_id <= 5\n)\nSELECT customer_id, id AS order_id, ordered_on\nFROM ranked\nWHERE rn = 1\nORDER BY customer_id;",
       hints:['<span class="kbd-inline">DISTINCT ON</span> is a PostgreSQL extension and does not parse here at all.','<span class="kbd-inline">ROW_NUMBER() OVER (PARTITION BY customer_id ORDER BY ...)</span> is the replacement, keeping the same tie-break the PostgreSQL ORDER BY carried.','<span class="kbd-inline">RANK()</span> would let a tie through as two rows; <span class="kbd-inline">ROW_NUMBER()</span> keeps exactly one.'],
       contract:{columns:['customer_id','order_id','ordered_on'], column_order:'exact', row_order:'exact'},
-      checks:[
-        {label:'A window function numbers the orders', code:'WINDOW_MISSING', test:function(s){ return /row_number\s*\(\s*\)\s*over\s*\(/i.test(s); }},
-        {label:'Partitioned by customer', code:'PARTITION_MISSING', test:function(s){ return /partition\s+by\s+customer_id/i.test(s); }},
-        {label:'Newest order first inside the partition', code:'WINDOW_ORDER_MISSING', test:function(s){ return /order\s+by[\s\S]*ordered_at\s+desc/i.test(s); }},
-        {label:'Keeps one row per customer', code:'GROUPING_MISSING', test:function(s){ return /rn\s*=\s*1/i.test(s); }},
-        {label:'Customers ascending', code:'ROW_ORDER_MISMATCH', test:function(s){ return /order\s+by\s+customer_id/i.test(s); }}
-      ],
       result:{columns:['customer_id','order_id','ordered_on'], rows:[[1,1005,'2026-02-11'],[2,1003,'2026-01-22'],[3,1004,'2026-02-02'],[5,1072,'2026-05-02']]}}
   ]},
 
@@ -1175,11 +921,6 @@ var POSTGRES_TO_SQLITE_MODULES: CourseModule[] = [
       solution:"WITH monthly AS (\n  SELECT strftime('%Y-%m-01', o.ordered_at) AS month,\n         ROUND(SUM(oi.quantity * oi.unit_price), 2) AS revenue\n  FROM orders o\n  JOIN order_items oi ON oi.order_id = o.id\n  WHERE o.status = 'completed'\n  GROUP BY month\n)\nSELECT month, revenue,\n       ROUND(SUM(revenue) OVER (ORDER BY month), 2) AS running_revenue\nFROM monthly\nORDER BY month;",
       hints:['The window runs over the already-grouped month list, so one row per month is still the grain.','<span class="kbd-inline">SUM(revenue) OVER (ORDER BY month)</span> is the running total; the outer <span class="kbd-inline">ROUND(..., 2)</span> is what keeps float noise out of the result.','If the months could repeat, the default <span class="kbd-inline">RANGE</span> frame would include every peer of the current row \u2014 an explicit <span class="kbd-inline">ROWS BETWEEN UNBOUNDED PRECEDING AND CURRENT ROW</span> says which one you mean.'],
       contract:{columns:['month','revenue','running_revenue'], column_order:'exact', row_order:'exact'},
-      checks:[
-        {label:'Groups revenue by month first', code:'GROUPING_MISSING', test:function(s){ return /group\s+by[\s\S]*month/i.test(s); }},
-        {label:'Sums over the ordered months', code:'WINDOW_MISSING', test:function(s){ return /sum\s*\(\s*revenue\s*\)\s*over\s*\(\s*order\s+by/i.test(s); }},
-        {label:'Months ascending', code:'ROW_ORDER_MISMATCH', test:function(s){ return /order\s+by[\s\S]*month/i.test(s); }}
-      ],
       result:{columns:['month','revenue','running_revenue'], rows:[['2026-01-01',2132.55,2132.55],['2026-02-01',2311.07,4443.62],['2026-03-01',2456.4,6900.02],['2026-04-01',1803.62,8703.64],['2026-05-01',1537.95,10241.59]]}}
   ]},
 
@@ -1196,12 +937,6 @@ var POSTGRES_TO_SQLITE_MODULES: CourseModule[] = [
       solution:"WITH RECURSIVE months(m) AS (\n  SELECT '2026-01-01'\n  UNION ALL\n  SELECT date(m, '+1 month') FROM months WHERE m < '2026-06-01'\n)\nSELECT months.m AS month,\n       COUNT(orders.id) AS orders\nFROM months\nLEFT JOIN orders\n  ON strftime('%Y-%m', orders.ordered_at) = strftime('%Y-%m', months.m)\nGROUP BY months.m\nORDER BY months.m;",
       hints:['<span class="kbd-inline">LEFT JOIN</span> is what keeps the spine month that has no orders.','Match the months with <span class="kbd-inline">strftime(\'%Y-%m\', ...)</span> on both sides.','Count <span class="kbd-inline">orders.id</span>, not <span class="kbd-inline">*</span>, so a month with no orders counts zero rather than one.'],
       contract:{columns:['month','orders'], column_order:'exact', row_order:'exact'},
-      checks:[
-        {label:'Builds the spine recursively', code:'CTE_MISSING', test:function(s){ return /with\s+recursive/i.test(s) && /union\s+all/i.test(s); }},
-        {label:'Steps a month at a time', code:'VALUE_MISMATCH', test:function(s){ return /date\s*\([^)]*\+\s*1\s+month/i.test(s); }},
-        {label:'Keeps the month with no orders', code:'JOIN_MISSING', test:function(s){ return /left\s+join/i.test(s); }},
-        {label:'Months ascending', code:'ROW_ORDER_MISMATCH', test:function(s){ return /order\s+by[\s\S]*month/i.test(s); }}
-      ],
       result:{columns:['month','orders'], rows:[['2026-01-01',16],['2026-02-01',19],['2026-03-01',18],['2026-04-01',18],['2026-05-01',9],['2026-06-01',0]]}}
   ]},
 
@@ -1218,10 +953,6 @@ var POSTGRES_TO_SQLITE_MODULES: CourseModule[] = [
       solution:"SELECT SUM(CASE WHEN active     THEN 1 ELSE 0 END) AS active_products,\n       SUM(CASE WHEN NOT active THEN 1 ELSE 0 END) AS inactive_products,\n       ROUND(SUM(price * stock), 2) AS stock_value\nFROM products;",
       hints:['<span class="kbd-inline">active</span> holds 1 or 0, so it is already a truth value to <span class="kbd-inline">CASE WHEN</span>.','<span class="kbd-inline">ROUND(SUM(price * stock), 2)</span> keeps a floating sum from arriving with more digits than a money column would have.'],
       contract:{columns:['active_products','inactive_products','stock_value'], column_order:'exact', row_order:'ignored'},
-      checks:[
-        {label:'Counts both flags in one pass', code:'AGGREGATION_MISSING', test:function(s){ return (s.match(/sum\s*\(\s*case/gi) || []).length >= 2; }},
-        {label:'Averages nothing and rounds the money', code:'VALUE_MISMATCH', test:function(s){ return /round\s*\(\s*sum\s*\(\s*price\s*\*\s*stock/i.test(s); }}
-      ],
       result:{columns:['active_products','inactive_products','stock_value'], rows:[[19,1,24949.6]]}}
   ]},
 
@@ -1238,11 +969,6 @@ var POSTGRES_TO_SQLITE_MODULES: CourseModule[] = [
       solution:"SELECT (SELECT COUNT(*) FROM sqlite_master\n        WHERE type = 'table' AND name NOT LIKE 'sqlite_%') AS tables,\n       (SELECT COUNT(*) FROM sqlite_master\n        WHERE type = 'index') AS indexes;",
       hints:['<span class="kbd-inline">sqlite_master</span> holds tables, indexes and views in one namespace; <span class="kbd-inline">type</span> tells them apart.','The catalog table is named <span class="kbd-inline">sqlite_schema</span>, so the <span class="kbd-inline">sqlite_%</span> pattern leaves it out.'],
       contract:{columns:['tables','indexes'], column_order:'exact', row_order:'ignored'},
-      checks:[
-        {label:'Counts the tables', code:'VALUE_MISMATCH', test:function(s){ return /type\s*=\s*'table'/i.test(s); }},
-        {label:'Counts the indexes', code:'VALUE_MISMATCH', test:function(s){ return /type\s*=\s*'index'/i.test(s); }},
-        {label:'Leaves out the catalog itself', code:'FILTER_MISSING', test:function(s){ return /name\s+not\s+like\s+'sqlite_%'|name\s*<>\s*'sqlite_schema'/i.test(s); }}
-      ],
       result:{columns:['tables','indexes'], rows:[[5,5]]}}
   ]},
 
@@ -1259,13 +985,6 @@ var POSTGRES_TO_SQLITE_MODULES: CourseModule[] = [
       solution:"WITH lines AS (\n    SELECT strftime('%Y-%m-01', o.ordered_at) AS month,\n           p.category,\n           o.customer_id,\n           oi.quantity * oi.unit_price AS revenue\n    FROM orders o\n    JOIN order_items oi ON oi.order_id = o.id\n    JOIN products p ON p.id = oi.product_id\n    WHERE o.status = 'completed'\n),\nby_cat AS (\n    SELECT month, category,\n           ROUND(SUM(revenue), 2) AS net_revenue,\n           COUNT(DISTINCT customer_id) AS buyers\n    FROM lines\n    GROUP BY month, category\n),\nranked AS (\n    SELECT month, category, net_revenue, buyers,\n           ROW_NUMBER() OVER (PARTITION BY month ORDER BY net_revenue DESC, category) AS rn\n    FROM by_cat\n)\nSELECT month, category, net_revenue, buyers\nFROM ranked\nWHERE rn = 1\nORDER BY month;",
       hints:['Keep the filter in <span class="kbd-inline">lines</span>, the earliest stage, so the business rule lives in one place.','<span class="kbd-inline">ROW_NUMBER()</span> over the month partition, then <span class="kbd-inline">WHERE rn = 1</span> in the next stage \u2014 a window function cannot be filtered in the SELECT that defines it.','<span class="kbd-inline">ORDER BY net_revenue DESC, category</span> is the tie-break: revenue alone would leave a tie to chance, so two runs could disagree.'],
       contract:{columns:['month','category','net_revenue','buyers'], column_order:'exact', row_order:'exact'},
-      checks:[
-        {label:'Filters to completed orders in the first stage', code:'FILTER_MISSING', test:function(s){ return /status\s*=\s*'completed'/i.test(s); }},
-        {label:'Groups to one row per month and category', code:'GROUPING_MISSING', test:function(s){ return /group\s+by[\s\S]*month\s*,\s*category/i.test(s); }},
-        {label:'Counts distinct buyers', code:'AGGREGATION_MISSING', test:function(s){ return /count\s*\(\s*distinct\s+customer_id\s*\)/i.test(s); }},
-        {label:'Ranks within each month and keeps one row', code:'WINDOW_MISSING', test:function(s){ return /row_number\s*\(\s*\)\s*over\s*\(\s*partition\s+by\s+month/i.test(s) && /rn\s*=\s*1/i.test(s); }},
-        {label:'Ties broken by category', code:'WINDOW_ORDER_MISSING', test:function(s){ return /order\s+by[\s\S]*net_revenue\s+desc\s*,\s*category/i.test(s); }}
-      ],
       result:{columns:['month','category','net_revenue','buyers'], rows:[['2026-01-01','Outdoor',824.4,4],['2026-02-01','Electronics',891.5,4],['2026-03-01','Electronics',868.05,5],['2026-04-01','Electronics',708.55,4],['2026-05-01','Outdoor',589,3]]}}
   ]}
 ];

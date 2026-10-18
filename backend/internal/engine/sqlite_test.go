@@ -36,11 +36,7 @@ var _ Executor = (*SQLiteExecutor)(nil)
 func sqliteDatasetFile(t *testing.T) string {
 	t.Helper()
 	path := filepath.Join(t.TempDir(), "commerce.db")
-	dsn, err := sqliteDSN(path, nil, false)
-	if err != nil {
-		t.Fatalf("build DSN: %v", err)
-	}
-	db, err := sql.Open(SQLiteDriverName, dsn)
+	db, err := sql.Open(SQLiteDriverName, "file:"+path)
 	if err != nil {
 		t.Fatalf("open %s: %v", path, err)
 	}
@@ -57,8 +53,8 @@ func sqliteDatasetFile(t *testing.T) string {
 }
 
 // sqliteExecutor opens the shared dataset the way the gateway serves it to an
-// anonymous learner: read-only, with the pragmas in the DSN. The pool is one
-// connection on purpose, so a test that reuses the executor afterwards proves
+// anonymous learner: read-only, with SQLiteReadOnlyPragmas applied. The pool is
+// one connection on purpose, so a test that reuses the executor afterwards proves
 // the connection came back rather than that a fresh one could be opened.
 func sqliteExecutor(t *testing.T, path string) *SQLiteExecutor {
 	t.Helper()
@@ -94,13 +90,18 @@ func sqliteWritableExecutor(t *testing.T) *SQLiteExecutor {
 		t.Fatalf("NewSQLiteExecutor: %v", err)
 	}
 	t.Cleanup(func() { _ = ex.Close() })
-	if _, err := ex.db.Exec(`CREATE TABLE probe (
+	// The schema runs through Executor.Query because the raw connector answers
+	// QueryContext only; database/sql's Exec would fall back to Prepare, which
+	// the connector refuses.
+	rows, err := ex.Query(context.Background(), `CREATE TABLE probe (
 		id INTEGER PRIMARY KEY,
 		name TEXT NOT NULL UNIQUE,
 		qty INTEGER CHECK (qty >= 0)
-	)`); err != nil {
+	)`)
+	if err != nil {
 		t.Fatalf("create the probe table: %v", err)
 	}
+	rows.Close()
 	return ex
 }
 
@@ -488,20 +489,11 @@ func TestSQLiteDeadlineStopsALongStatement(t *testing.T) {
 	if !errors.Is(rawErr, context.DeadlineExceeded) {
 		t.Errorf("raw deadline error = %v (%T), want it to wrap context.DeadlineExceeded", rawErr, rawErr)
 	}
-	var engineErr *sqliteError
-	if errors.As(rawErr, &engineErr) {
-		// SQLITE_INTERRUPT is 9 in the primary result codes; Code() reports the
-		// extended value, which the profile's "interrupted" rule maps to
-		// QUERY_TIMEOUT.
-		t.Logf("raw engine error: %v (extended code %d)", engineErr, engineErr.Code())
-	} else {
-		// Measured: a deadline arrives as the context's error, not an engine
-		// sentence. The raw driver's step path substitutes ctx.Err() once its
-		// own interrupt fired, so the code layer is not reached for a deadline —
-		// the profile's message rules cover the engine's own errors, where an
-		// *engine.sqliteError (and its Code()) do appear.
-		t.Logf("raw deadline error is not an engine error: %T %v", rawErr, rawErr)
-	}
+	// Measured: a deadline arrives as the context's error, not an engine
+	// sentence. The raw driver's step path substitutes ctx.Err() once its own
+	// interrupt fired, so the engine's sentence is not reached for a deadline;
+	// the profile's message rules cover the engine's own errors instead.
+	t.Logf("raw deadline error: %T %v", rawErr, rawErr)
 }
 
 // TestSQLiteErrorClassification checks the profile's verdict on the errors the
@@ -512,8 +504,7 @@ func TestSQLiteDeadlineStopsALongStatement(t *testing.T) {
 //
 // Each case also proves the message is the engine's own and not a driver's
 // rendering: the read path calls sqlite3_errmsg directly, so the error carries
-// SQLite's sentence with no class prefix and no result-code suffix, and this
-// package's error type carries the result code without re-parsing the text.
+// SQLite's sentence with no class prefix and no result-code suffix.
 func TestSQLiteErrorClassification(t *testing.T) {
 	ex := sqliteExecutor(t, sqliteDatasetFile(t))
 
@@ -541,18 +532,15 @@ func TestSQLiteErrorClassification(t *testing.T) {
 				t.Errorf("%s: %q still carries the driver's framing", tc.statement, err)
 			}
 			// The error is this package's own (sqlite_raw.go's engineError),
-			// reporting SQLite's sentence and its extended result code.
+			// reporting SQLite's sentence.
 			var engineErr *sqliteError
 			if !errors.As(err, &engineErr) {
 				t.Fatalf("%s: %v is not an *engine.sqliteError", tc.statement, err)
 			}
-			if engineErr.Code() == 0 {
-				t.Errorf("%s: result code = 0; the engine's own code should be on the error", tc.statement)
-			}
 			// Both doors agree: the profile's package-level classifier and the
 			// executor's dialect-aware method. A caller holding the Executor can
 			// use the latter without knowing the dialect's profile.
-			if got := dialect.ClassifyError(err); got != tc.want {
+			if got := dialect.SQLite().ClassifyError(err); got != tc.want {
 				t.Fatalf("%s: %q classified as %s, want %s", tc.statement, err, got, tc.want)
 			}
 			got, ok := ex.ClassifyError(err)
@@ -568,7 +556,7 @@ func TestSQLiteErrorClassification(t *testing.T) {
 // or the "SQL logic error: " class prefix. It is the negative half of the test
 // above — the shape the learner must never read.
 func isDriverFramed(msg string) bool {
-	if strings.HasPrefix(msg, "SQL logic error: ") || strings.HasSuffix(msg, sqliteBusyMarker) {
+	if strings.HasPrefix(msg, "SQL logic error: ") || strings.HasSuffix(msg, " (SQLITE_BUSY)") {
 		return true
 	}
 	if i := strings.LastIndex(msg, " ("); i >= 0 && strings.HasSuffix(msg, ")") {
@@ -577,100 +565,6 @@ func isDriverFramed(msg string) bool {
 		}
 	}
 	return false
-}
-
-// TestSQLiteErrorFramingFollowsTheDriverSource pins sqliteUnframe against the
-// two format strings modernc's conn.errstr actually uses (read in v1.38.2,
-// sqlite.go:1417-1430):
-//
-//	msg == sqlite3_errstr(rc)  ->  "<errstr> (<rc>)"
-//	msg != sqlite3_errstr(rc)  ->  "<errstr>: <msg> (<rc>)"
-//
-// The frames here are real — each one was produced by the statement named beside
-// it and recorded from the driver — and the expected value is what the engine
-// reported. The statement column is not decoration: it is how a reader checks
-// that the frame was measured rather than imagined.
-func TestSQLiteErrorFramingFollowsTheDriverSource(t *testing.T) {
-	cases := []struct {
-		frame     string
-		statement string
-		want      string
-		code      int
-	}{
-		{"SQL logic error: incomplete input (1)", "SELECT", "incomplete input", 1},
-		{`SQL logic error: unrecognized token: "#" (1)`, "SELECT * FROM customers WHERE #", `unrecognized token: "#"`, 1},
-		{`SQL logic error: near "SELEC": syntax error (1)`, "SELEC 1", `near "SELEC": syntax error`, 1},
-		{"SQL logic error: no such table: nope (1)", "SELECT * FROM nope", "no such table: nope", 1},
-		{"SQL logic error: ambiguous column name: id (1)", "SELECT id FROM customers JOIN orders ON 1=1", "ambiguous column name: id", 1},
-		{"attempt to write a readonly database (8)", "INSERT INTO customers (id, name, signup_date) VALUES (999, 'x', '2026-01-01')", "attempt to write a readonly database", 8},
-		{"string or blob too big (18)", "SELECT length(zeroblob(1000000001))", "string or blob too big", 18},
-		{"database is locked (5) (SQLITE_BUSY)", "(an EXCLUSIVE lock held by another connection)", "database is locked", 5},
-	}
-	for _, tc := range cases {
-		t.Run(tc.want, func(t *testing.T) {
-			if got := sqliteUnframe(tc.frame, tc.code); got != tc.want {
-				t.Errorf("sqliteUnframe(%q, %d) = %q, want %q", tc.frame, tc.code, got, tc.want)
-			}
-			// The frame is the one the driver produced for that statement, and
-			// the un-framed sentence is what the profile classifies. The live
-			// assertion for each statement lives in the tests that run it; this
-			// table keeps the transcription honest.
-			if tc.statement == "" {
-				t.Errorf("case %q names no statement; frames must be measured", tc.want)
-			}
-		})
-	}
-
-	// A frame whose suffix is not that code's is left entirely alone: guessing
-	// at a prefix would be worse than reporting the driver's own words.
-	untouched := "constraint failed: UNIQUE constraint failed: t.name (2067)"
-	if got := sqliteUnframe(untouched, 1299); got != untouched {
-		t.Errorf("sqliteUnframe(%q, 1299) = %q, want it untouched (the suffix is not code 1299's)", untouched, got)
-	}
-
-	// The live half: for every frame above that a read-only statement can
-	// produce, modernc must hand back exactly that frame.
-	live := []struct {
-		statement string
-		frame     string
-	}{
-		{"SELECT", "SQL logic error: incomplete input (1)"},
-		{"SELECT * FROM customers WHERE #", `SQL logic error: unrecognized token: "#" (1)`},
-		{"SELEC 1", `SQL logic error: near "SELEC": syntax error (1)`},
-		{"SELECT * FROM nope", "SQL logic error: no such table: nope (1)"},
-		{"SELECT id FROM customers JOIN orders ON 1=1", "SQL logic error: ambiguous column name: id (1)"},
-		{"INSERT INTO customers (id, name, signup_date) VALUES (999, 'x', '2026-01-01')", "attempt to write a readonly database (8)"},
-		{"SELECT length(zeroblob(1000000001))", "string or blob too big (18)"},
-	}
-	// These frames are modernc.org/sqlite's, so they are pinned against a
-	// modernc connection — the driver the *write* path (the one-time seed in
-	// internal/httpapi) still uses. The executor's own read driver
-	// (sqlite_raw.go) reports SQLite's sentence with no framing at all, so it
-	// is the wrong instrument for this table. Opening the same file read-only
-	// through the registered driver keeps the transcription honest.
-	dsn, err := sqliteDSN(sqliteDatasetFile(t), []string{"busy_timeout(0)"}, true)
-	if err != nil {
-		t.Fatalf("build the read-only DSN: %v", err)
-	}
-	driver, err := sql.Open(SQLiteDriverName, dsn)
-	if err != nil {
-		t.Fatalf("open the driver connection: %v", err)
-	}
-	driver.SetMaxOpenConns(1)
-	defer func() { _ = driver.Close() }()
-	for _, tc := range live {
-		rows, qerr := driver.Query(tc.statement)
-		if rows != nil {
-			rows.Close()
-		}
-		var driverErr *sqlite.Error
-		if !errors.As(qerr, &driverErr) {
-			t.Fatalf("%s: %v is not a *sqlite.Error", tc.statement, qerr)
-		}
-		if driverErr.Error() != tc.frame {
-			t.Errorf("%s: driver frame = %q, want %q", tc.statement, driverErr.Error(), tc.frame)
-		}
-	}
 }
 
 // firstMatchingRule returns the profile rule that classifies msg, so a test can
@@ -780,21 +674,11 @@ func TestSQLiteBusyIsTheEqualsRuleAndATimeout(t *testing.T) {
 	if got := err.Error(); got != "database is locked" {
 		t.Fatalf("learner message = %q, want %q", got, "database is locked")
 	}
-	// The engine's own result code, so this case cannot pass by accident on a
-	// shorter message: SQLITE_BUSY is 5, and its extended codes share that value
-	// in the low byte.
-	var engineErr *sqliteError
-	if !errors.As(err, &engineErr) {
-		t.Fatalf("%v is not an *engine.sqliteError", err)
-	}
-	if got := engineErr.Code() & 0xff; got != 5 {
-		t.Fatalf("result code = %d, want SQLITE_BUSY (5)", got)
-	}
 	rule, ok := firstMatchingRule(dialect.SQLite(), err.Error())
 	if !ok || rule.Match != "equals" || rule.Pattern != "database is locked" {
 		t.Fatalf("%q matched %s %q, want the equals rule for %q", err, rule.Match, rule.Pattern, "database is locked")
 	}
-	if code := dialect.ClassifyError(err); code != dialect.CodeTimeout {
+	if code := dialect.SQLite().ClassifyError(err); code != dialect.CodeTimeout {
 		t.Fatalf("code = %s, want %s", code, dialect.CodeTimeout)
 	}
 	if code, ok := ex.ClassifyError(err); !ok || code != dialect.CodeTimeout {
@@ -827,7 +711,7 @@ func TestSQLiteConstraintFailuresReachTheLearnerUnframed(t *testing.T) {
 			if isDriverFramed(err.Error()) {
 				t.Errorf("%q still carries the driver's framing", err.Error())
 			}
-			if code := dialect.ClassifyError(err); code != dialect.CodeRuntimeError {
+			if code := dialect.SQLite().ClassifyError(err); code != dialect.CodeRuntimeError {
 				t.Fatalf("code = %s, want %s", code, dialect.CodeRuntimeError)
 			}
 		})
@@ -865,7 +749,7 @@ func TestSQLiteMidIterationErrorIsUnframed(t *testing.T) {
 	if isDriverFramed(rerr.Error()) {
 		t.Errorf("%q still carries the driver's framing", rerr.Error())
 	}
-	if code := dialect.ClassifyError(rerr); code != dialect.CodeRuntimeError {
+	if code := dialect.SQLite().ClassifyError(rerr); code != dialect.CodeRuntimeError {
 		t.Fatalf("code = %s, want %s", code, dialect.CodeRuntimeError)
 	}
 
@@ -899,8 +783,8 @@ func TestSQLiteBlobTooBigIsAResultLimitThroughExecute(t *testing.T) {
 }
 
 // TestSQLiteInterruptRuleCannotArriveAsADriverError records why the profile's
-// seventh rule is not pinned by a live failure, and pins the unframing it still
-// needs.
+// interrupted rule is not pinned by a live failure, and that the sentence it is
+// written against still classifies.
 //
 // The rule matters: SQLITE_INTERRUPT(9) means the host stopped the statement, so
 // it is a timeout and not a learner mistake. But on the read path a real
@@ -908,9 +792,8 @@ func TestSQLiteBlobTooBigIsAResultLimitThroughExecute(t *testing.T) {
 // arms sqlite3_interrupt from a goroutine that watches the statement context
 // and, once its own interrupt fired, returns ctx.Err() rather than the engine's
 // message. The deadline branch of engine.Execute answers first, so the learner
-// sees QUERY_TIMEOUT either way — but the profile still has to be able to read a
-// framed sentence if a driver or a wasm build ever hands one over, and that is
-// what the second half asserts.
+// sees QUERY_TIMEOUT either way. The profile still has to read the engine's own
+// sentence if one ever arrives, so the second half classifies it directly.
 func TestSQLiteInterruptRuleCannotArriveAsADriverError(t *testing.T) {
 	ex := sqliteExecutor(t, sqliteDatasetFile(t))
 	ctx, cancel := context.WithTimeout(context.Background(), 150*time.Millisecond)
@@ -934,12 +817,6 @@ func TestSQLiteInterruptRuleCannotArriveAsADriverError(t *testing.T) {
 		t.Fatalf("Execute code = %v, want %s", qr.Error, CodeTimeout)
 	}
 
-	// The frame a driver would write for code 9, in the shape measured for codes
-	// 8, 18 and 20 ("<errstr> (<rc>)"): the unframer must reduce it to the
-	// sentence the profile's equals rule is written against.
-	if got := sqliteUnframe("interrupted (9)", 9); got != "interrupted" {
-		t.Fatalf("sqliteUnframe(%q, 9) = %q, want %q", "interrupted (9)", got, "interrupted")
-	}
 	if code := dialect.SQLite().ClassifyError(errors.New("interrupted")); code != dialect.CodeTimeout {
 		t.Fatalf("ClassifyError(%q) = %s, want %s", "interrupted", code, dialect.CodeTimeout)
 	}
@@ -1026,7 +903,7 @@ func TestSQLiteExecuteReportsRuntimeFailuresWithTheProfileCode(t *testing.T) {
 // rows; PostgreSQL's extended protocol refuses the second statement outright.
 // The read-only anonymous path stays safe anyway — query_only refuses each write
 // — and the test proves the refusal happens rather than assuming it. A writable
-// environment (M6 step 5) inherits the open question of whether the HTTP layer
+// environment inherits the open question of whether the HTTP layer
 // should reject a multi-statement submission before it reaches the engine.
 func TestSQLiteMultiStatementSubmissionCannotWrite(t *testing.T) {
 	ex := sqliteExecutor(t, sqliteDatasetFile(t))
@@ -1037,7 +914,7 @@ func TestSQLiteMultiStatementSubmissionCannotWrite(t *testing.T) {
 	if err == nil {
 		t.Fatal("a multi-statement submission with a write succeeded, want a refusal")
 	}
-	if code := dialect.ClassifyError(err); code != dialect.CodeRuntimeError {
+	if code := dialect.SQLite().ClassifyError(err); code != dialect.CodeRuntimeError {
 		t.Fatalf("%v classified as %s, want %s", err, code, dialect.CodeRuntimeError)
 	}
 	if !strings.Contains(err.Error(), "readonly") {
@@ -1086,11 +963,11 @@ func TestSQLiteSyntaxErrorThroughExecuteIsSyntaxError(t *testing.T) {
 
 /* ---------- pragmas, pool, health ---------- */
 
-// TestSQLitePragmasComeFromTheDSNAndNotFromAGlobal proves SQLite's defaults are
-// the danger the DSN is there to close: a plain connection to the same file
-// reports foreign_keys OFF while the executor's does not, so nothing is being
-// inherited from a process-wide setting.
-func TestSQLitePragmasComeFromTheDSNAndNotFromAGlobal(t *testing.T) {
+// TestSQLitePragmasAreAppliedPerConnectionNotFromAGlobal proves SQLite's
+// defaults are the danger the per-connection pragmas close: a plain connection
+// to the same file reports foreign_keys OFF while the executor's does not, so
+// nothing is inherited from a process-wide setting.
+func TestSQLitePragmasAreAppliedPerConnectionNotFromAGlobal(t *testing.T) {
 	path := sqliteDatasetFile(t)
 	ex := sqliteExecutor(t, path)
 
@@ -1121,58 +998,6 @@ func TestSQLitePragmasComeFromTheDSNAndNotFromAGlobal(t *testing.T) {
 	}
 	if got := sqliteScalar(t, ex, "PRAGMA query_only"); got != int64(1) {
 		t.Errorf("the executor reports query_only = %v, want 1", got)
-	}
-	if !ex.ReadOnly() {
-		t.Error("ReadOnly() = false, want true")
-	}
-}
-
-// TestSQLiteDSNEscapesThePathAndCarriesThePragmas checks the two things a
-// hand-built URI gets wrong: a relative path must stay relative, and a path or
-// pragma containing URI punctuation must not change the DSN's meaning.
-func TestSQLiteDSNEscapesThePathAndCarriesThePragmas(t *testing.T) {
-	got, err := sqliteDSN("relative/p.db", []string{"foreign_keys(1)"}, false)
-	if err != nil {
-		t.Fatalf("sqliteDSN: %v", err)
-	}
-	if want := "file:relative/p.db?_pragma=foreign_keys%281%29"; got != want {
-		t.Errorf("sqliteDSN = %q, want %q", got, want)
-	}
-	got, err = sqliteDSN("/tmp/x.db", []string{"foreign_keys(1)"}, true)
-	if err != nil {
-		t.Fatalf("sqliteDSN: %v", err)
-	}
-	for _, want := range []string{"mode=ro", "_pragma=query_only%281%29", "_pragma=foreign_keys%281%29"} {
-		if !strings.Contains(got, want) {
-			t.Errorf("read-only DSN %q is missing %q", got, want)
-		}
-	}
-	if _, err := sqliteDSN("  ", nil, false); err == nil {
-		t.Error("sqliteDSN accepted an empty path")
-	}
-
-	// The escaped path round-trips: the file that gets created is the file with
-	// the punctuation in its name.
-	dir := t.TempDir()
-	odd := filepath.Join(dir, "a b?c.db")
-	dsn, err := sqliteDSN(odd, []string{"foreign_keys(1)"}, false)
-	if err != nil {
-		t.Fatalf("sqliteDSN: %v", err)
-	}
-	db, err := sql.Open(SQLiteDriverName, dsn)
-	if err != nil {
-		t.Fatalf("open %q: %v", dsn, err)
-	}
-	defer func() { _ = db.Close() }()
-	if _, err := db.Exec("CREATE TABLE t(i INTEGER); INSERT INTO t VALUES (7)"); err != nil {
-		t.Fatalf("use the odd path: %v", err)
-	}
-	var n int
-	if err := db.QueryRow("SELECT i FROM t").Scan(&n); err != nil || n != 7 {
-		t.Fatalf("odd path read = %d, %v", n, err)
-	}
-	if _, err := os.Stat(odd); err != nil {
-		t.Errorf("the database file is not at %q: %v", odd, err)
 	}
 }
 
@@ -1240,12 +1065,6 @@ func TestSQLiteVersionReadyAndStatsChecks(t *testing.T) {
 	// engine itself reported, read at open.
 	if got := ex.EngineLabel(); !strings.HasPrefix(got, "SQLite 3.") {
 		t.Errorf("EngineLabel = %q, want a SQLite 3.x label", got)
-	}
-	if got, want := EngineLabelOf(ex), ex.EngineLabel(); got != want {
-		t.Errorf("EngineLabelOf = %q, want the executor's own label %q", got, want)
-	}
-	if got, want := DialectOf(ex), "sqlite"; got != want {
-		t.Errorf("DialectOf = %q, want %q", got, want)
 	}
 	// Diagnostics returns nil, which is what the old probe fell back to: with no
 	// server-side session to describe, /diagnostics leaves its learner block out

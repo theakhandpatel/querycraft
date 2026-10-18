@@ -1,6 +1,6 @@
 # Architecture
 
-This document describes the released app, `v0.8.0`. The design source is
+This document describes the released app, `v0.9.0`. The design source is
 [`technical-design.md`](technical-design.md), and the decisions of record are in
 [`adr/`](adr/).
 

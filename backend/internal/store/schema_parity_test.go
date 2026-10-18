@@ -170,7 +170,7 @@ func postgresCatalog(t *testing.T, ctx context.Context, st *Postgres) map[string
 		SELECT table_name, column_name
 		  FROM information_schema.columns
 		 WHERE table_schema = $1
-		 ORDER BY table_name, ordinal_position`, AppSchema)
+		 ORDER BY table_name, ordinal_position`, appSchema)
 	if err != nil {
 		t.Fatalf("read information_schema: %v", err)
 	}

@@ -16,7 +16,7 @@ import type { AiCoursePlan, AiExerciseResult, AiOutcome } from '../api/aiContrac
 import type { Block, BlockType, Course, CourseModule, RowValue } from '../types';
 
 /** One chapter's worth of measured verification. */
-export interface DraftChapterReport {
+interface DraftChapterReport {
   id: string;
   title: string;
   sections: number;
@@ -31,7 +31,7 @@ export interface DraftChapterReport {
   failures: DraftFailure[];
 }
 
-export interface DraftFailure {
+interface DraftFailure {
   id: string;
   title: string;
   stage: string;

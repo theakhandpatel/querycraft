@@ -30,7 +30,7 @@ export interface SearchDoc {
   text: string;
 }
 
-export interface SearchHit {
+interface SearchHit {
   doc: SearchDoc;
   score: number;
 }

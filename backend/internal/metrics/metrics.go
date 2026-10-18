@@ -6,9 +6,9 @@
 // running server is a story rather than evidence. Every counter here is
 // incremented on the code path that owns the event.
 //
-// The surface is deliberately small — counter, gauge, histogram — because that
-// is the whole of what §13.1 asks for, and a metrics client library would be
-// more code than the thing it measures.
+// The surface is deliberately small (counter, gauge, histogram) because that is
+// the whole of what §13.1 asks for, and a metrics client library would be more
+// code than the thing it measures.
 package metrics
 
 import (
@@ -25,10 +25,10 @@ import (
 // which keeps a single-series metric free of braces.
 type Labels map[string]string
 
-// DefaultBuckets are latency buckets in seconds. They straddle the gateway's
+// defaultBuckets are latency buckets in seconds. They straddle the gateway's
 // 5 s default deadline so a timeout is visible as a bucket, not only as an
 // error counter.
-var DefaultBuckets = []float64{0.001, 0.005, 0.01, 0.025, 0.05, 0.1, 0.25, 0.5, 1, 2.5, 5, 10}
+var defaultBuckets = []float64{0.001, 0.005, 0.01, 0.025, 0.05, 0.1, 0.25, 0.5, 1, 2.5, 5, 10}
 
 type kind uint8
 
@@ -142,10 +142,10 @@ func (r *Registry) ensure(name string, l Labels, help string, k kind, buckets []
 }
 
 // Inc adds one to a counter.
-func (r *Registry) Inc(name string, l Labels, help string) { r.Add(name, l, 1, help) }
+func (r *Registry) Inc(name string, l Labels, help string) { r.add(name, l, 1, help) }
 
-// Add adds delta to a counter.
-func (r *Registry) Add(name string, l Labels, delta float64, help string) {
+// add adds delta to a counter.
+func (r *Registry) add(name string, l Labels, delta float64, help string) {
 	r.mu.Lock()
 	defer r.mu.Unlock()
 	r.ensure(name, l, help, kindCounter, nil).value += delta
@@ -159,10 +159,10 @@ func (r *Registry) Set(name string, l Labels, v float64, help string) {
 }
 
 // Observe records one value in a histogram. A nil bucket list means
-// DefaultBuckets.
+// defaultBuckets.
 func (r *Registry) Observe(name string, l Labels, v float64, help string, buckets []float64) {
 	if len(buckets) == 0 {
-		buckets = DefaultBuckets
+		buckets = defaultBuckets
 	}
 	r.mu.Lock()
 	defer r.mu.Unlock()
@@ -316,9 +316,8 @@ func escapeLabel(s string) string {
 	return labelEscaper.Replace(s)
 }
 
-// labelsOnly renders `{a="b"}` or the empty string when there are no labels.
-// (The empty case is what joinLabels returns; the comment used to carry a
-// stray U+201C where the word "nothing" belonged.)
+// labelsOnly renders the label set as `{a="b"}`, or an empty string when the
+// set has no labels. It is joinLabels with no extra pair.
 func labelsOnly(l Labels) string {
 	return joinLabels(l, "", "")
 }

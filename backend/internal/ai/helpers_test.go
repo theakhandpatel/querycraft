@@ -57,7 +57,6 @@ type testDepot struct {
 	patches    map[string]schema.PatchProposal
 	approved   map[string]string
 	runs       map[string]schema.RunTranscript
-	saves      int
 }
 
 func newTestDepot() *testDepot {
@@ -82,10 +81,6 @@ func (d *testDepot) Run(_ context.Context, id string) (schema.RunTranscript, boo
 	defer d.mu.Unlock()
 	rec, ok := d.runs[id]
 	return rec, ok, nil
-}
-
-func (d *testDepot) Runs(_ context.Context) ([]schema.RunSummary, error) {
-	return d.runsFor("")
 }
 
 func (d *testDepot) RunsFor(_ context.Context, ownerID string) ([]schema.RunSummary, error) {
@@ -132,7 +127,6 @@ func (d *testDepot) SaveChallenge(_ context.Context, rec schema.Record) error {
 	}
 	d.mu.Lock()
 	defer d.mu.Unlock()
-	d.saves++
 	d.challenges[rec.Artifact.ID] = rec
 	return nil
 }
@@ -142,10 +136,6 @@ func (d *testDepot) Challenge(_ context.Context, id string) (schema.Record, bool
 	defer d.mu.Unlock()
 	rec, ok := d.challenges[id]
 	return rec, ok, nil
-}
-
-func (d *testDepot) Challenges(_ context.Context) ([]schema.Record, error) {
-	return d.challengesFor("")
 }
 
 func (d *testDepot) ChallengesFor(_ context.Context, ownerID string) ([]schema.Record, error) {
@@ -330,7 +320,7 @@ func (f fixedProvider) Descriptor() provider.ProviderDescriptor {
 }
 
 func (f fixedProvider) Complete(context.Context, provider.ProviderRequest) (provider.ProviderResponse, error) {
-	return provider.ProviderResponse{Text: f.text, Provider: "fixed", Model: "fixed-v1"}, nil
+	return provider.ProviderResponse{Text: f.text}, nil
 }
 
 // failingRunner is a Scratch implementation that cannot produce an environment,
@@ -341,13 +331,26 @@ func (failingRunner) Scratch(context.Context, string) (engine.Executor, func(), 
 	return nil, nil, engine.ErrEnvironmentUnavailable
 }
 
-// service wires a Service for a test. Runners are always ProvidedRunner, which
-// is the documented test seam.
+// providedRunner hands the pipeline an executor directly, so a test can run the
+// pipeline over the cluster it booted. A nil executor is no environment.
+type providedRunner struct{ exec engine.Executor }
+
+func (r providedRunner) Scratch(context.Context, string) (engine.Executor, func(), error) {
+	if r.exec == nil {
+		return nil, nil, engine.ErrEnvironmentUnavailable
+	}
+	return r.exec, func() {}, nil
+}
+
+// service wires a Service for a test, over the executor the test booted. The
+// course agent's conversation rides the provider's own course capability — the
+// scripted agent replays its steps, the built-in provider speaks its chapter
+// policy — so there is nothing to wire beside the provider itself.
 func testService(p provider.Provider, d schema.Depot, ex engine.Executor) *Service {
 	return NewService(Config{
 		Provider:       p,
 		Depot:          d,
-		Runner:         ProvidedRunner{Exec: ex},
+		Runner:         providedRunner{exec: ex},
 		DatasetVersion: 1,
 	})
 }
@@ -367,8 +370,19 @@ func activeID(t *testing.T, d *testDepot) string {
 	return ""
 }
 
+// stageIndex returns the position of a stage in a reported outcome, or -1.
+// It is the package-local copy of the lookup schema.Outcome used to carry.
+func stageIndex(out schema.Outcome, name string) int {
+	for i, st := range out.Stages {
+		if st.Name == name {
+			return i
+		}
+	}
+	return -1
+}
+
 func stageDetail(out schema.Outcome, name string) string {
-	i := out.StageIndex(name)
+	i := stageIndex(out, name)
 	if i < 0 {
 		return ""
 	}
@@ -376,7 +390,7 @@ func stageDetail(out schema.Outcome, name string) string {
 }
 
 func stageState(out schema.Outcome, name string) string {
-	i := out.StageIndex(name)
+	i := stageIndex(out, name)
 	if i < 0 {
 		return ""
 	}

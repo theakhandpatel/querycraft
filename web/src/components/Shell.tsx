@@ -21,14 +21,22 @@ import { useDrawerFocus } from './ui/useDrawerFocus';
  * in the Workbook or the Library.
  */
 
-function TopNavLink({ icon, label, active, badge, onClick }: { icon: string; label: string; active: boolean; badge?: string; onClick: () => void }) {
+function NavLink({ icon, label, active, badge, variant, onClick }: { icon: string; label: string; active?: boolean; badge?: React.ReactNode; variant: 'top' | 'drawer'; onClick: () => void }) {
+  const top = variant === 'top';
   return (
-    <button className={`toplink${active ? ' active' : ''}`} onClick={onClick} aria-current={active ? 'page' : undefined} aria-label={label} title={label}>
+    <button
+      className={`${top ? 'toplink' : 'nav'}${active ? ' active' : ''}`}
+      onClick={onClick}
+      aria-current={top && active ? 'page' : undefined}
+      aria-label={label}
+      title={label}
+    >
       <Icon name={icon} />
-      {/* The label is hidden below 1120px, where the links collapse to icons
-          with the bar's context segment squeezed out. aria-label and title keep
-          the name reachable with a screen reader and a pointer. */}
-      <span className="toplink-label">{label}</span>
+      {/* In the top variant the label is hidden below 1120px, where the links
+          collapse to icons with the bar's context segment squeezed out.
+          aria-label and title keep the name reachable with a screen reader and
+          a pointer. */}
+      <span className={top ? 'toplink-label' : 'navtext'}>{label}</span>
       {badge != null && <span className="navbadge">{badge}</span>}
     </button>
   );
@@ -61,12 +69,12 @@ export function TopBar() {
       </button>
 
       <nav className="topnav" aria-label="Primary">
-        <TopNavLink icon="graduation" label="Home" active={nav === 'home'} onClick={() => s.showScreen('home')} />
-        <TopNavLink icon="search" label="Library" active={nav === 'library'} onClick={() => s.showScreen('library')} />
-        <TopNavLink icon="book" label="Workbook" active={nav === 'workbook'} badge={`${s.pct}%`} onClick={() => s.showScreen('workbook')} />
-        <TopNavLink icon="clock" label="Progress" active={nav === 'progress'} onClick={() => s.showScreen('workbook-progress')} />
-        <TopNavLink icon="flask" label="Challenge lab" active={nav === 'lab'} onClick={() => s.showScreen('challenge-lab')} />
-        {isAdmin && <TopNavLink icon="sparkles" label="Manage" active={nav === 'manage'} onClick={() => s.showScreen('manage')} />}
+        <NavLink variant="top" icon="graduation" label="Home" active={nav === 'home'} onClick={() => s.showScreen('home')} />
+        <NavLink variant="top" icon="search" label="Library" active={nav === 'library'} onClick={() => s.showScreen('library')} />
+        <NavLink variant="top" icon="book" label="Workbook" active={nav === 'workbook'} badge={`${s.pct}%`} onClick={() => s.showScreen('workbook')} />
+        <NavLink variant="top" icon="clock" label="Progress" active={nav === 'progress'} onClick={() => s.showScreen('workbook-progress')} />
+        <NavLink variant="top" icon="flask" label="Challenge lab" active={nav === 'lab'} onClick={() => s.showScreen('challenge-lab')} />
+        {isAdmin && <NavLink variant="top" icon="sparkles" label="Manage" active={nav === 'manage'} onClick={() => s.showScreen('manage')} />}
       </nav>
 
       {onCourseTrack && course.id && (
@@ -110,16 +118,6 @@ export function TopBar() {
         </button>
       </div>
     </header>
-  );
-}
-
-function NavButton({ icon, label, active, badge, onClick }: { icon: string; label: string; active?: boolean; badge?: React.ReactNode; onClick: () => void }) {
-  return (
-    <button className={`nav${active ? ' active' : ''}`} onClick={onClick} aria-label={label} title={label}>
-      <Icon name={icon} />
-      <span className="navtext">{label}</span>
-      {badge != null && <span className="navbadge">{badge}</span>}
-    </button>
   );
 }
 
@@ -177,24 +175,24 @@ export function NavDrawer() {
               matter; the bar keeps the buttons, and the drawer keeps the list. */}
           {screen === 'lesson' && mods.length > 0 && (
             <div className="navgroup">
-              <NavButton icon="list" label="All chapters" onClick={go(() => s.setChaptersOpen(true))} />
-              <NavButton icon="arrow-left" label="Previous chapter" onClick={go(() => s.stepLesson(-1))} />
-              <NavButton icon="arrow-right" label="Next chapter" onClick={go(() => s.stepLesson(1))} />
+              <NavLink variant="drawer" icon="list" label="All chapters" onClick={go(() => s.setChaptersOpen(true))} />
+              <NavLink variant="drawer" icon="arrow-left" label="Previous chapter" onClick={go(() => s.stepLesson(-1))} />
+              <NavLink variant="drawer" icon="arrow-right" label="Next chapter" onClick={go(() => s.stepLesson(1))} />
             </div>
           )}
           <div className="navgroup">
-            <NavButton icon="graduation" label="Home" active={nav === 'home'} onClick={go(() => s.showScreen('home'))} />
-            <NavButton icon="layers" label={courseShort(course)} active={nav === 'course'} onClick={go(() => s.showScreen('course'))} />
-            <NavButton icon="search" label="Library" active={nav === 'library'} onClick={go(() => s.showScreen('library'))} />
+            <NavLink variant="drawer" icon="graduation" label="Home" active={nav === 'home'} onClick={go(() => s.showScreen('home'))} />
+            <NavLink variant="drawer" icon="layers" label={courseShort(course)} active={nav === 'course'} onClick={go(() => s.showScreen('course'))} />
+            <NavLink variant="drawer" icon="search" label="Library" active={nav === 'library'} onClick={go(() => s.showScreen('library'))} />
           </div>
           <div className="navgroup">
-            <NavButton icon="book" label="Workbook" active={nav === 'workbook'} badge={`${s.pct}%`} onClick={go(() => s.showScreen('workbook'))} />
-            <NavButton icon="clock" label="Progress" active={nav === 'progress'} onClick={go(() => s.showScreen('workbook-progress'))} />
-            <NavButton icon="flask" label="Challenge lab" active={nav === 'lab'} onClick={go(() => s.showScreen('challenge-lab'))} />
+            <NavLink variant="drawer" icon="book" label="Workbook" active={nav === 'workbook'} badge={`${s.pct}%`} onClick={go(() => s.showScreen('workbook'))} />
+            <NavLink variant="drawer" icon="clock" label="Progress" active={nav === 'progress'} onClick={go(() => s.showScreen('workbook-progress'))} />
+            <NavLink variant="drawer" icon="flask" label="Challenge lab" active={nav === 'lab'} onClick={go(() => s.showScreen('challenge-lab'))} />
           </div>
           {isAdmin && (
             <div className="navgroup">
-              <NavButton icon="sparkles" label="Manage courses" active={nav === 'manage'} onClick={go(() => s.showScreen('manage'))} />
+              <NavLink variant="drawer" icon="sparkles" label="Manage courses" active={nav === 'manage'} onClick={go(() => s.showScreen('manage'))} />
             </div>
           )}
           {recent.length > 0 && (
@@ -215,7 +213,7 @@ export function NavDrawer() {
             </div>
           )}
           <div className="navgroup">
-            <NavButton icon="settings" label="Appearance" active={nav === 'appearance'} onClick={go(() => s.showScreen('appearance-settings'))} />
+            <NavLink variant="drawer" icon="settings" label="Appearance" active={nav === 'appearance'} onClick={go(() => s.showScreen('appearance-settings'))} />
           </div>
         </div>
         <div className="drawerfoot">

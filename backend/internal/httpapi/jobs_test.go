@@ -15,6 +15,7 @@ import (
 	"github.com/querycraft/sqlquery/backend/internal/pgtest"
 	"github.com/querycraft/sqlquery/backend/internal/schema"
 	"github.com/querycraft/sqlquery/backend/internal/store"
+	piai "github.com/sky-valley/pi/ai"
 )
 
 /* The asynchronous generation surface, from the transport's point of view.
@@ -31,10 +32,9 @@ import (
  * field. */
 
 type jobStage struct {
-	Name   string  `json:"name"`
-	State  string  `json:"state"`
-	Detail string  `json:"detail"`
-	MS     float64 `json:"ms"`
+	Name   string `json:"name"`
+	State  string `json:"state"`
+	Detail string `json:"detail"`
 }
 
 // jobView is the wire shape of one job. Decoding into the test's own struct
@@ -65,7 +65,6 @@ type jobView struct {
 	} `json:"error"`
 	CourseID    string `json:"course_id"`
 	ChallengeID string `json:"challenge_id"`
-	CreatedAt   string `json:"created_at"`
 	FinishedAt  string `json:"finished_at"`
 }
 
@@ -123,6 +122,30 @@ type jobEnvelope struct {
 // provider down the same path.
 const asyncCourseBody = `{"topics":["joins","aggregation","window functions"],"difficulty":"beginner","scenario":"Count what each customer ordered, then rank the results.","constraints":["one statement per exercise"]}`
 
+// pausingProvider holds every completion for a moment, so a submission can be
+// polled while the run is still in flight. It forwards the built-in provider's
+// chapter conversation unchanged; only the pipeline's own calls wait.
+type pausingProvider struct {
+	inner *ai.FakeProvider
+	delay time.Duration
+}
+
+func (p *pausingProvider) Descriptor() provider.ProviderDescriptor { return p.inner.Descriptor() }
+
+func (p *pausingProvider) Complete(ctx context.Context, req provider.ProviderRequest) (provider.ProviderResponse, error) {
+	select {
+	case <-time.After(p.delay):
+	case <-ctx.Done():
+		return provider.ProviderResponse{}, ctx.Err()
+	}
+	return p.inner.Complete(ctx, req)
+}
+
+func (p *pausingProvider) Course() provider.CourseCapability {
+	capability, _ := provider.CourseCapabilityOf(p.inner)
+	return capability
+}
+
 // jobServer is a gateway with real PostgreSQL behind it and generation wired to
 // the deterministic provider, paused long enough that a submission can be
 // polled while it is still running.
@@ -131,7 +154,7 @@ func jobServer(t *testing.T) *Server {
 	// The pause is what makes "while it runs" observable rather than raced: it
 	// is between turns, so the run stays pollable for a while after each
 	// chapter lands.
-	return jobServerWith(t, &ai.FakeProvider{Delay: 300 * time.Millisecond})
+	return jobServerWith(t, &pausingProvider{inner: &ai.FakeProvider{}, delay: 300 * time.Millisecond})
 }
 
 // jobServerWith is jobServer with the provider under test named by the caller,
@@ -158,10 +181,21 @@ func jobServerWith(t *testing.T, provider provider.Provider) *Server {
 	s.UseAI(ai.Config{
 		Provider:       provider,
 		Depot:          st,
-		Runner:         ai.ProvidedRunner{Exec: ex},
+		Runner:         providedRunner{exec: ex},
 		DatasetVersion: 1,
 	})
 	return s
+}
+
+// providedRunner hands the pipeline an executor directly, so a test can run the
+// pipeline over the cluster it booted. A nil executor is no environment.
+type providedRunner struct{ exec engine.Executor }
+
+func (r providedRunner) Scratch(context.Context, string) (engine.Executor, func(), error) {
+	if r.exec == nil {
+		return nil, nil, engine.ErrEnvironmentUnavailable
+	}
+	return r.exec, func() {}, nil
 }
 
 // pollJob reads one job view over the real route.
@@ -468,8 +502,8 @@ func TestACourseIsReadableWhileLaterChaptersAreStillBeingWritten(t *testing.T) {
 	}
 
 	// The stored row is the record the finished run will carry, still being
-	// written: same id, the whole planned shape, and only the chapters that
-	// already passed carrying content.
+	// written: same id, the whole planned shape. Which chapters carry content
+	// mid-run is the ai pipeline's own promise, tested in its package.
 	if seen.Course.Status != schema.StatusBuilding {
 		t.Fatalf("the course read mid-run is %q, want %q", seen.Course.Status, schema.StatusBuilding)
 	}
@@ -479,27 +513,8 @@ func TestACourseIsReadableWhileLaterChaptersAreStillBeingWritten(t *testing.T) {
 	if len(seen.Course.Plan.Chapters) != planned {
 		t.Fatalf("the building course carries %d chapter(s), the job planned %d", len(seen.Course.Plan.Chapters), planned)
 	}
-	if seen.written() != seenAt {
-		t.Fatalf("the building course carries content for %d chapter(s), the job verified %d", seen.written(), seenAt)
-	}
 	if seenAt >= planned {
 		t.Fatalf("every planned chapter (%d) already verified: this is not a mid-run read", planned)
-	}
-	for i, ch := range seen.Course.Plan.Chapters {
-		if len(ch.Sections) == 0 {
-			continue
-		}
-		if len(ch.Exercises) == 0 {
-			t.Fatalf("verified chapter %s was stored with no exercise", ch.ID)
-		}
-		for _, exercise := range ch.Exercises {
-			if exercise.Expected == nil || len(exercise.Expected.Rows) == 0 {
-				t.Fatalf("chapter %s exercise %s has no measured rows: the grader has nothing to compare against", ch.ID, exercise.ID)
-			}
-		}
-		if i > seenAt {
-			t.Fatalf("chapter %s carries content but the job only verified %d chapter(s)", ch.ID, seenAt)
-		}
 	}
 
 	// The same id is the active course once the run is over, with every
@@ -526,35 +541,61 @@ func TestACourseIsReadableWhileLaterChaptersAreStillBeingWritten(t *testing.T) {
 // it is asked to save so the cross-check cannot agree with the reference. The
 // gateway must refuse the run instead of storing it, because a course with an
 // unverified exercise in it is worse than no course at all.
-type crossCheckBreaker struct{ inner provider.Provider }
+// crossCheckBreaker serves the built-in provider's chapter conversation and
+// corrupts every save_chapter's cross-check solutions: they run, return rows,
+// and disagree, which is the honest reason a course is refused — the engine's,
+// not the transport's.
+type crossCheckBreaker struct{ inner *ai.FakeProvider }
 
 func (a *crossCheckBreaker) Descriptor() provider.ProviderDescriptor { return a.inner.Descriptor() }
 
 func (a *crossCheckBreaker) Complete(ctx context.Context, req provider.ProviderRequest) (provider.ProviderResponse, error) {
-	resp, err := a.inner.Complete(ctx, req)
-	if err != nil {
-		return resp, err
+	return a.inner.Complete(ctx, req)
+}
+
+func (a *crossCheckBreaker) Course() provider.CourseCapability {
+	capability, _ := provider.CourseCapabilityOf(a.inner)
+	inner := capability.StreamFn
+	capability.StreamFn = func(ctx context.Context, model *piai.Model, req piai.TranscriptContext, opts *piai.SimpleStreamOptions) *piai.AssistantMessageEventStream {
+		src := inner(ctx, model, req, opts)
+		out := piai.NewAssistantMessageEventStream()
+		go func() {
+			defer out.End()
+			for ev, ok := src.Next(); ok; ev, ok = src.Next() {
+				if ev.Type == piai.EventDone && ev.Message != nil {
+					for i, c := range ev.Message.Content {
+						tc, ok := c.(piai.ToolCall)
+						if !ok || tc.Name != "save_chapter" {
+							continue
+						}
+						raw, merr := json.Marshal(tc.Arguments)
+						if merr != nil {
+							continue
+						}
+						var ch schema.CourseChapter
+						if json.Unmarshal(raw, &ch) != nil {
+							continue
+						}
+						for j := range ch.Exercises {
+							ch.Exercises[j].CrossCheckSolution = `SELECT 1 AS n`
+						}
+						fixed, merr := json.Marshal(ch)
+						if merr != nil {
+							continue
+						}
+						var args map[string]any
+						if json.Unmarshal(fixed, &args) != nil {
+							continue
+						}
+						ev.Message.Content[i] = piai.ToolCall{ID: tc.ID, Name: tc.Name, Arguments: args}
+					}
+				}
+				out.Push(ev)
+			}
+		}()
+		return out
 	}
-	for i, call := range resp.ToolCalls {
-		if call.Function.Name != "save_chapter" {
-			continue
-		}
-		var ch schema.CourseChapter
-		if json.Unmarshal([]byte(call.Function.Arguments), &ch) != nil {
-			continue
-		}
-		for j := range ch.Exercises {
-			// Runs, returns rows, and disagrees: the honest reason a course is
-			// refused is the engine's, not the transport's.
-			ch.Exercises[j].CrossCheckSolution = `SELECT 1 AS n`
-		}
-		raw, merr := json.Marshal(ch)
-		if merr != nil {
-			continue
-		}
-		resp.ToolCalls[i].Function.Arguments = string(raw)
-	}
-	return resp, nil
+	return capability
 }
 
 // TestARefusedCourseLeavesNoRowBehind: the outline's row is real while the run
@@ -585,17 +626,6 @@ func TestARefusedCourseLeavesNoRowBehind(t *testing.T) {
 	if done.Job.ChaptersVerified != 0 {
 		t.Fatalf("a refused run reports %d verified chapter(s)", done.Job.ChaptersVerified)
 	}
-	// Every chapter was attempted and dropped, and the report says so: the
-	// rejection has to name what it refused.
-	if len(done.Job.Chapters) == 0 {
-		t.Fatal("a refused course carries no per-chapter report")
-	}
-	for _, ch := range done.Job.Chapters {
-		if ch.Status != "dropped" {
-			t.Fatalf("chapter %s = %q, want %q", ch.ID, ch.Status, "dropped")
-		}
-	}
-
 	// Nothing is stored: the row the outline wrote is gone, not left as a
 	// course with no chapters in it.
 	w = doAs(t, s, token, http.MethodGet, "/courses", "")
@@ -672,16 +702,17 @@ func TestAPausedCourseIsApprovedOverTheRealRoutes(t *testing.T) {
 		t.Fatalf("the paused run's transcript violates contracts/run.schema.json:\n%s", formatViolations(vs))
 	}
 
-	// The stored record is a building course carrying the outline's chapters,
-	// with no content yet: this is what the learner approves.
+	// The stored record is a paused course carrying the outline's chapters,
+	// with no content yet: this is what the learner approves. The row says
+	// `awaiting_approval`, not `building`: a pause is its own state.
 	w = doAs(t, s, token, http.MethodGet, "/courses/"+paused.Job.CourseID, "")
 	if w.Code != http.StatusOK {
 		t.Fatalf("GET /courses/%s status = %d body = %s", paused.Job.CourseID, w.Code, w.Body.String())
 	}
 	var index courseEnvelope
 	mustDecode(t, w, &index)
-	if index.Course.Status != schema.StatusBuilding {
-		t.Fatalf("the stored course is %q, want %q", index.Course.Status, schema.StatusBuilding)
+	if index.Course.Status != schema.StatusAwaitingApproval {
+		t.Fatalf("the stored course is %q, want %q", index.Course.Status, schema.StatusAwaitingApproval)
 	}
 	if len(index.Course.Plan.Chapters) == 0 {
 		t.Fatal("the stored outline has no chapters to approve")
@@ -883,5 +914,95 @@ func TestBuildCourseRoutesAreHonestWithAIOff(t *testing.T) {
 	// And an anonymous caller is refused before any work starts.
 	if w := do(t, s, http.MethodPost, "/courses/c1/build", ""); w.Code != http.StatusUnauthorized {
 		t.Fatalf("anonymous build status = %d, want 401", w.Code)
+	}
+}
+
+// TestAnInterruptedCourseIsResumedOverTheRealRoutes: a build the gateway
+// stopped writing (a crash, a dead provider) is not a ghost. The row keeps the
+// chapters that verified, the list says `interrupted`, and the build route
+// continues from them to an active course.
+func TestAnInterruptedCourseIsResumedOverTheRealRoutes(t *testing.T) {
+	s := jobServer(t)
+	token := signupUser(t, s, "interrupted-owner@example.test")
+	ctx := context.Background()
+
+	// A real paused run first, so the row carries a real outline and the
+	// request beside it; then the state a crash leaves behind: interrupted.
+	w := doAs(t, s, token, http.MethodPost, "/courses/generate?async=1", approvalCourseBody)
+	if w.Code != http.StatusAccepted {
+		t.Fatalf("async submit status = %d, want 202; body = %s", w.Code, w.Body.String())
+	}
+	var submitted jobEnvelope
+	mustDecode(t, w, &submitted)
+	paused := waitJob(t, s, token, submitted.Job.ID)
+	if paused.Job.Status != schema.StatusAwaitingApproval || paused.Job.CourseID == "" {
+		t.Fatalf("the run stopped at %q with course %q, want a paused outline", paused.Job.Status, paused.Job.CourseID)
+	}
+
+	depot := s.aiCourseDepot()
+	if depot == nil {
+		t.Fatal("the server has no course depot")
+	}
+	rec, found, err := depot.Course(ctx, paused.Job.CourseID)
+	if err != nil || !found {
+		t.Fatalf("read the paused course: found = %v err = %v", found, err)
+	}
+	rec.Status = schema.StatusInterrupted
+	rec.Outcome.Status = schema.StatusInterrupted
+	if err := depot.SaveCourse(ctx, rec); err != nil {
+		t.Fatalf("flip to interrupted: %v", err)
+	}
+
+	// The list says interrupted, so the library can offer the resume.
+	w = doAs(t, s, token, http.MethodGet, "/courses", "")
+	if w.Code != http.StatusOK {
+		t.Fatalf("GET /courses status = %d body = %s", w.Code, w.Body.String())
+	}
+	var list struct {
+		Courses []struct {
+			Plan struct {
+				ID string `json:"id"`
+			} `json:"plan"`
+			Status string `json:"status"`
+		} `json:"courses"`
+	}
+	mustDecode(t, w, &list)
+	saw := ""
+	for _, c := range list.Courses {
+		if c.Plan.ID == paused.Job.CourseID {
+			saw = c.Status
+		}
+	}
+	if saw != schema.StatusInterrupted {
+		t.Fatalf("the interrupted course lists as %q, want %q", saw, schema.StatusInterrupted)
+	}
+
+	// Resume: the build route accepts the interrupted row and finishes it.
+	w = doAs(t, s, token, http.MethodPost, "/courses/"+paused.Job.CourseID+"/build?async=1", "")
+	if w.Code != http.StatusAccepted {
+		t.Fatalf("resume status = %d, want 202; body = %s", w.Code, w.Body.String())
+	}
+	var resumed jobEnvelope
+	mustDecode(t, w, &resumed)
+	done := waitJob(t, s, token, resumed.Job.ID)
+	if done.Job.Status != schema.StatusActive {
+		t.Fatalf("the resumed build ended %q, want %q (error = %+v)", done.Job.Status, schema.StatusActive, done.Job.Error)
+	}
+	if done.Job.CourseID != paused.Job.CourseID {
+		t.Fatalf("the resumed build names %q, want the same course %q", done.Job.CourseID, paused.Job.CourseID)
+	}
+
+	// The record reads back active, with every planned chapter carrying content.
+	w = doAs(t, s, token, http.MethodGet, "/courses/"+paused.Job.CourseID, "")
+	if w.Code != http.StatusOK {
+		t.Fatalf("GET /courses/%s status = %d body = %s", paused.Job.CourseID, w.Code, w.Body.String())
+	}
+	var final courseEnvelope
+	mustDecode(t, w, &final)
+	if final.Course.Status != schema.StatusActive {
+		t.Fatalf("the resumed course is %q, want %q", final.Course.Status, schema.StatusActive)
+	}
+	if final.written() != len(final.Course.Plan.Chapters) || final.written() == 0 {
+		t.Fatalf("the resumed course carries content for %d of %d chapter(s)", final.written(), len(final.Course.Plan.Chapters))
 	}
 }

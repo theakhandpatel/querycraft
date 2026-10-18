@@ -41,7 +41,6 @@ func TestValidateRequest(t *testing.T) {
 		{name: "blank title and no topics", req: schema.GenerationRequest{Title: "  "}, field: "title"},
 		{name: "empty topic", req: schema.GenerationRequest{Topics: []string{"joins", " "}}, field: "topics"},
 		{name: "unknown difficulty", req: schema.GenerationRequest{Title: "x", Difficulty: schema.Difficulty("expert")}, field: "difficulty"},
-		{name: "unknown kind", req: schema.GenerationRequest{Title: "x", Kind: "summary"}, field: "kind"},
 		{name: "too many topics", req: schema.GenerationRequest{Topics: filledTopics(maxTopics + 1)}, field: "topics"},
 		{name: "oversized title", req: schema.GenerationRequest{Title: strings.Repeat("a", limits.MaxPromptChars+1)}, field: "title"},
 		{name: "oversized scenario", req: schema.GenerationRequest{Title: "x", Scenario: strings.Repeat("a", limits.MaxPromptChars+1)}, field: "scenario"},

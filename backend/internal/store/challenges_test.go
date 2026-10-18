@@ -94,7 +94,7 @@ func TestMemoryChallengesAreNewestFirst(t *testing.T) {
 			t.Fatalf("save %s: %v", id, err)
 		}
 	}
-	list, err := m.Challenges(ctx)
+	list, err := m.ChallengesFor(ctx, "")
 	if err != nil {
 		t.Fatalf("list: %v", err)
 	}
@@ -183,7 +183,7 @@ func TestPostgresChallengesSurviveARestart(t *testing.T) {
 		t.Fatalf("provenance = %+v", got.Artifact.Provenance)
 	}
 
-	list, err := second.Challenges(ctx)
+	list, err := second.ChallengesFor(ctx, "")
 	if err != nil {
 		t.Fatalf("list: %v", err)
 	}
@@ -204,7 +204,7 @@ func TestPostgresChallengesSurviveARestart(t *testing.T) {
 	if _, ok, _ := second.Challenge(ctx, "ch_restart"); ok {
 		t.Fatalf("the challenge survived a reset")
 	}
-	if list, _ := second.Challenges(ctx); len(list) != 0 {
+	if list, _ := second.ChallengesFor(ctx, ""); len(list) != 0 {
 		t.Fatalf("reset left %d record(s) behind", len(list))
 	}
 }
@@ -232,7 +232,7 @@ func TestPostgresChallengeSaveIsAnUpsert(t *testing.T) {
 	if !ok || got.Artifact.Title != "Second" {
 		t.Fatalf("got %+v, want the updated title", got.Artifact)
 	}
-	if list, _ := st.Challenges(ctx); len(list) != 1 {
+	if list, _ := st.ChallengesFor(ctx, ""); len(list) != 1 {
 		t.Fatalf("upsert produced %d rows", len(list))
 	}
 }

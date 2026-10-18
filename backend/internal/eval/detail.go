@@ -1,3 +1,7 @@
+// Per-rule contract verdicts. compare.go holds the value and row primitives;
+// this file turns them into the structured Comparison the lesson checklist
+// renders, keeping each §6.1 rule its own boolean so a caller can say which
+// rule failed rather than only that something did.
 package eval
 
 import "github.com/querycraft/sqlquery/backend/internal/engine"
@@ -7,19 +11,20 @@ import "github.com/querycraft/sqlquery/backend/internal/engine"
 // web/src/api/compare.ts so every adapter renders the same checklist, and so a
 // green row means the database really returned the right thing.
 type Comparison struct {
-	OK           bool
-	Codes        []string
-	ColumnsOK    bool
-	RowsCountOK  *bool
-	ValuesOK     *bool
-	RowOrderOK   *bool
-	RowsCompared bool
+	OK          bool
+	Codes       []string
+	ColumnsOK   bool
+	RowsCountOK *bool
+	ValuesOK    *bool
+	RowOrderOK  *bool
 }
 
+// boolPtr boxes a bool, so an unset rule stays distinct from a rule that ran
+// and passed.
 func boolPtr(v bool) *bool { return &v }
 
-// CompareColumnsDetailed mirrors CompareColumns but reports the column rule on
-// its own instead of collapsing everything into one boolean.
+// CompareColumnsDetailed reports the column rule on its own instead of
+// collapsing everything into one boolean.
 func CompareColumnsDetailed(contract Contract, qr engine.QueryResult) Comparison {
 	if qr.Status != "succeeded" || qr.Truncated {
 		return Comparison{Codes: []string{CodeValueMismatch}}
@@ -32,8 +37,8 @@ func CompareColumnsDetailed(contract Contract, qr engine.QueryResult) Comparison
 	return Comparison{OK: ok, Codes: codes, ColumnsOK: ok}
 }
 
-// CompareDetailed mirrors Compare but keeps the per-rule verdicts. RowsCountOK,
-// ValuesOK and RowOrderOK are nil when the rule does not apply to this contract.
+// CompareDetailed reports the per-rule verdicts. RowsCountOK, ValuesOK and
+// RowOrderOK are nil when the rule does not apply to this contract.
 func CompareDetailed(expected ExpectedResult, contract Contract, qr engine.QueryResult) Comparison {
 	if qr.Status != "succeeded" {
 		return Comparison{}
@@ -60,7 +65,7 @@ func CompareDetailed(expected ExpectedResult, contract Contract, qr engine.Query
 	order := alignColumns(wantCols, gotCols, contract.ColumnOrder)
 	actRows := projectRows(qr.Rows, order)
 
-	cmp := Comparison{OK: true, ColumnsOK: true, RowsCompared: true}
+	cmp := Comparison{OK: true, ColumnsOK: true}
 	rowsCountOK, valuesOK, rowOrderOK, ok, codes := compareRowsDetailed(expected.Rows, actRows, contract)
 	cmp.RowsCountOK = rowsCountOK
 	cmp.ValuesOK = valuesOK
@@ -73,8 +78,7 @@ func CompareDetailed(expected ExpectedResult, contract Contract, qr engine.Query
 }
 
 // compareRowsDetailed applies the row rules and returns each verdict. It is the
-// single implementation of the row rules — the boolean Compare/CompareColumns
-// above are thin wrappers over the *Detailed forms, so a §6.1 change lands once.
+// single implementation of the row rules, so a §6.1 change lands once.
 func compareRowsDetailed(expected, actual [][]any, contract Contract) (*bool, *bool, *bool, bool, []string) {
 	tol := contract.NumericTolerance
 	exact := contract.RowOrder == "exact"

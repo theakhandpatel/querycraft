@@ -114,6 +114,7 @@ UI, or read `backend/README.md` for the endpoints and every configuration key.
 | --- | --- |
 | How do the parts fit together, with diagrams? | [`docs/architecture.md`](docs/architecture.md) |
 | How do I build, test, and extend it? | [`docs/development.md`](docs/development.md) |
+| How do I run it on a server, and what should I back up? | [`docs/self-hosting.md`](docs/self-hosting.md) |
 | What does the product do, and what is unfinished? | [`docs/features.md`](docs/features.md) |
 | How do the endpoints and settings work? | [`backend/README.md`](backend/README.md) |
 | Where is every document indexed? | [`docs/README.md`](docs/README.md) |

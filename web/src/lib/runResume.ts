@@ -16,7 +16,7 @@
  * view for work that is not theirs.
  */
 
-export interface RunBreadcrumb {
+interface RunBreadcrumb {
   /** The id the gateway returned when the run was submitted. */
   jobId: string;
   /** The account the run belongs to. A breadcrumb from another account is dropped. */

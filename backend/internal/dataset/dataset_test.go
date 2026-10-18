@@ -280,7 +280,7 @@ func TestSchemaSQLUpToDate(t *testing.T) {
 }
 
 func TestQuoteIdentAndLiteral(t *testing.T) {
-	if got := quoteIdent(`we"ird`); got != `"we""ird"` {
+	if got := QuoteIdent(`we"ird`); got != `"we""ird"` {
 		t.Fatalf("quoteIdent = %s", got)
 	}
 	if got := quoteLiteral(`O'Brien`); got != `'O''Brien'` {

@@ -8,7 +8,7 @@ export interface FoundExercise {
   block: Block;
 }
 
-export interface OutlineGroup {
+interface OutlineGroup {
   kind: 'concept' | 'practice';
   title: string;
   items: Block[];
@@ -25,8 +25,10 @@ export function currentCourse(state: UiState): Course {
 export function activeModules(course?: Course | null): CourseModule[] {
   return (course && course.modules) || COURSES[0].modules || MODULES;
 }
-export function builtCourses(): Course[] {
-  return COURSES.filter((c) => c.built);
+/* The courses the learner is taking: shipped and enrolled. A preview course is
+   neither, so it is not offered as a switch. */
+export function enrolledCourses(): Course[] {
+  return COURSES.filter((c) => c.enrolled && c.built);
 }
 export function courseShort(c: Course | null | undefined): string {
   if (!c) return '';
@@ -46,6 +48,12 @@ export function courseExerciseTotal(c: Course | null | undefined): number {
 export function moduleExerciseBlocks(m: CourseModule): Block[] {
   return (m.blocks || []).filter((b) => b.type === 'exercise');
 }
+/** Exercises in a course that carry a reference query we can actually run. */
+export function exercisesWithReference(course: Course): Block[] {
+  return (course.modules ?? [])
+    .flatMap((m) => moduleExerciseBlocks(m))
+    .filter((b) => typeof b.solution === 'string' && b.solution.trim().length > 0);
+}
 export function allModules(): CourseModule[] {
   const out: CourseModule[] = [];
   COURSES.forEach((c) => (c.modules || []).forEach((m) => out.push(m)));
@@ -61,10 +69,6 @@ export function findExercise(id: string): FoundExercise | null {
     ),
   );
   return out;
-}
-export function moduleIndexOfExercise(id: string): number | null {
-  const f = findExercise(id);
-  return f ? f.index : null;
 }
 export function eventTitle(id: string): string {
   let prompt: string | null = null;

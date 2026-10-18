@@ -1,3 +1,11 @@
+// compress.go serves the embedded SPA's immutable, content-hashed assets with
+// gzip from a small in-process cache, and maps the asset suffixes the build
+// emits to their Content-Type. It is the transfer half of package webui;
+// webui.go owns routing and the embedded filesystem.
+//
+// Only immutable assets take this path. index.html is unhashed and keeps
+// no-store semantics, so webui.go serves it raw.
+
 package webui
 
 import (
@@ -6,6 +14,7 @@ import (
 	"io"
 	"io/fs"
 	"net/http"
+	"strconv"
 	"strings"
 	"sync"
 )
@@ -40,9 +49,9 @@ var (
 	gzCache = map[string][]byte{}
 )
 
-// compressed reads the embedded asset once and caches its gzip form. The
-// extra memory is bounded by the compressed size of the text assets — a few
-// hundred kilobytes against megabytes of transfer saved per learner.
+// compressed reads the embedded asset once and caches its gzip form. The extra
+// memory is bounded by the compressed size of the text assets, a few hundred
+// kilobytes against megabytes of transfer saved per learner.
 func compressed(name string) ([]byte, bool) {
 	gzMu.RLock()
 	b, ok := gzCache[name]
@@ -71,9 +80,9 @@ func compressed(name string) ([]byte, bool) {
 	return out, true
 }
 
-// serveCompressed answers a gzip-negotiating client from the cache. Assets
-// are immutable and content-hashed, so the response also carries a long-lived
-// immutable cache header — the browser downloads each file once.
+// serveCompressed answers a gzip-negotiating client from the cache. Assets are
+// immutable and content-hashed, so the response also carries a long-lived
+// immutable cache header, and the browser downloads each file once.
 func serveCompressed(w http.ResponseWriter, r *http.Request, name string) bool {
 	if !compressible(name) || !strings.Contains(r.Header.Get("Accept-Encoding"), "gzip") {
 		return false
@@ -86,14 +95,14 @@ func serveCompressed(w http.ResponseWriter, r *http.Request, name string) bool {
 	w.Header().Set("Vary", "Accept-Encoding")
 	w.Header().Set("Cache-Control", "public, max-age=31536000, immutable")
 	w.Header().Set("Content-Type", contentType(name))
-	w.Header().Set("Content-Length", fmtInt(len(body)))
+	w.Header().Set("Content-Length", strconv.Itoa(len(body)))
 	w.WriteHeader(http.StatusOK)
 	_, _ = w.Write(body)
 	return true
 }
 
 // contentType maps the asset suffixes the build emits. http.DetectContentType
-// is avoided for JS because it sniffs "text/plain; charset=utf-8" — a body
+// is avoided for JS because it sniffs "text/plain; charset=utf-8", a body
 // browsers refuse to execute under strict MIME checking.
 func contentType(name string) string {
 	switch {
@@ -114,28 +123,4 @@ func contentType(name string) string {
 	default:
 		return "application/octet-stream"
 	}
-}
-
-// fmtInt renders n in decimal without strconv, which this package would
-// otherwise import for one call.
-func fmtInt(n int) string {
-	if n == 0 {
-		return "0"
-	}
-	neg := n < 0
-	if neg {
-		n = -n
-	}
-	var b [20]byte
-	i := len(b)
-	for n > 0 {
-		i--
-		b[i] = byte('0' + n%10)
-		n /= 10
-	}
-	if neg {
-		i--
-		b[i] = '-'
-	}
-	return string(b[i:])
 }

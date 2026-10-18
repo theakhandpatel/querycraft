@@ -137,13 +137,13 @@ func TestClassifyKeepsOutagesAsUnavailable(t *testing.T) {
 // The two paths must not be interchangeable: connectErr is the only place that
 // decides, and it decides on the cause rather than on the call site.
 func TestConnectErrDistinguishesDeadlineFromRefusal(t *testing.T) {
-	if !errors.Is(connectErr(context.Canceled), ErrPoolTimeout) {
+	if !errors.Is(connectErr(context.Canceled), errPoolTimeout) {
 		t.Error("a cancelled wait for a connection is not a pool timeout")
 	}
-	if !errors.Is(connectErr(context.DeadlineExceeded), ErrPoolTimeout) {
+	if !errors.Is(connectErr(context.DeadlineExceeded), errPoolTimeout) {
 		t.Error("an expired wait for a connection is not a pool timeout")
 	}
-	if errors.Is(connectErr(errors.New("boom")), ErrPoolTimeout) {
+	if errors.Is(connectErr(errors.New("boom")), errPoolTimeout) {
 		t.Error("an arbitrary failure is reported as a pool timeout")
 	}
 }

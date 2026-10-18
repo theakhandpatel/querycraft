@@ -5,23 +5,23 @@ import type { CheckResult, ResultContract, RowValue } from '../types';
    way the gateway does: correctness comes from comparing the real result to the
    contract, never from matching SQL text. See docs/technical-design.md §6.1. */
 
-export const CODE_VALUE_MISMATCH = 'VALUE_MISMATCH';
-export const CODE_COLUMN = 'COLUMN_MISMATCH';
-export const CODE_COLUMN_ORDER = 'COLUMN_ORDER_MISMATCH';
-export const CODE_ROW_COUNT = 'ROW_COUNT_MISMATCH';
-export const CODE_ROW_ORDER = 'ROW_ORDER_MISMATCH';
+const CODE_VALUE_MISMATCH = 'VALUE_MISMATCH';
+const CODE_COLUMN = 'COLUMN_MISMATCH';
+const CODE_COLUMN_ORDER = 'COLUMN_ORDER_MISMATCH';
+const CODE_ROW_COUNT = 'ROW_COUNT_MISMATCH';
+const CODE_ROW_ORDER = 'ROW_ORDER_MISMATCH';
 
 export interface ExpectedResult {
   columns: string[];
   rows: RowValue[][];
 }
 
-export interface ActualResult {
+interface ActualResult {
   columns: string[];
   rows: RowValue[][];
 }
 
-export interface NormalizedContract {
+interface NormalizedContract {
   columns: string[];
   columnOrder: 'exact' | 'ignored';
   rowOrder: 'exact' | 'ignored';
@@ -30,7 +30,7 @@ export interface NormalizedContract {
 }
 
 /** Unknown or empty enum values default per §6.1: order ignored, duplicates preserved. */
-export function normalizeContract(contract?: Partial<ResultContract> | null): NormalizedContract {
+function normalizeContract(contract?: Partial<ResultContract> | null): NormalizedContract {
   const c = contract || {};
   const tolerance = typeof c.numeric_tolerance === 'number' && c.numeric_tolerance > 0 ? c.numeric_tolerance : 0;
   return {

@@ -22,7 +22,7 @@ export const DATASETS: readonly DatasetId[] = ['commerce', 'perf'];
 /** What a caller knows about the workspace a statement belongs to. Same shape
     as `QueryContext` in ../types, restated here so this module has no import
     cycle with the adapter that consumes it. */
-export interface DatasetRef {
+interface DatasetRef {
   dataset?: unknown;
   course?: Course | null;
   block?: Block | null;
@@ -54,13 +54,13 @@ export function asDataset(value: unknown): DatasetId | undefined {
     this" and "you got the default because I could not read you". */
 export type DatasetReason = 'explicit' | 'block' | 'exercise' | 'course' | 'unknown-dataset' | 'default';
 
-export interface DatasetChoice {
+interface DatasetChoice {
   dataset: DatasetId;
   reason: DatasetReason;
 }
 
 /** The one dataset a statement runs on, with the reason it was chosen. */
-export function datasetChoice(ref?: DatasetRef | null): DatasetChoice {
+function datasetChoice(ref?: DatasetRef | null): DatasetChoice {
   if (isDataset(ref?.dataset)) return { dataset: ref.dataset, reason: 'explicit' };
   if (isDataset(ref?.block?.dataset)) return { dataset: ref.block.dataset, reason: 'block' };
   if (ref?.exercise?.perf) return { dataset: 'perf', reason: 'exercise' };
@@ -85,11 +85,4 @@ export function datasetFor(ref?: DatasetRef | null): DatasetId {
     "unknown-name is reported, not swallowed" rule. */
 export function datasetReason(ref?: DatasetRef | null): DatasetReason {
   return datasetChoice(ref).reason;
-}
-
-/** The words a learner reads for a dataset. The dataset is a *workspace*, not a
-    product name — a screen says "the 10 000-row practice workspace", not
-    "perf", and this is where that sentence is written once. */
-export function datasetLabel(dataset: DatasetId): string {
-  return dataset === 'perf' ? 'the large practice workspace' : 'the commerce workspace';
 }

@@ -5,7 +5,7 @@
 // prebuilt PostgreSQL binaries once, initialises a data directory inside the
 // repo, starts the server, and applies the shared commerce dataset. Everything
 // above this package talks the ordinary PostgreSQL wire protocol, so pointing
-// QC_DATABASE_URL at a container or a managed server replaces it with no code
+// database_url at a container or a managed server replaces it with no code
 // change at all.
 package localdb
 
@@ -43,11 +43,6 @@ type Server struct {
 	pg  *embeddedpostgres.EmbeddedPostgres
 	DSN string
 
-	// adopted is true when this Server attached to a postmaster that was already
-	// running for the same data directory instead of starting one. We do not own
-	// an adopted server, so Stop leaves it alone.
-	adopted bool
-
 	// learnerPassword is the password the restricted execution role is given,
 	// so the learner DSN differs from the admin DSN only by username.
 	learnerPassword string
@@ -69,12 +64,12 @@ func (c Config) DSNFor() string {
 // The dataset is applied once: re-applying it on every boot would drop and
 // recreate the tables, discarding anything the learner has stored alongside it.
 func Start(ctx context.Context, log *slog.Logger, cfg Config) (*Server, error) {
-	// A previous gateway may have died without a clean shutdown — a SIGHUP when
-	// its parent shell exits, or a SIGKILL — which leaves the postmaster
-	// running. Adopting it is the right move for a restart: the cluster, the
-	// dataset and everything saved to it are still there. Only adopt a server
-	// whose data directory proves it is ours, so we never attach to an
-	// unrelated PostgreSQL that happens to hold the port.
+	// A previous gateway may have died without a clean shutdown, a SIGHUP when
+	// its parent shell exits or a SIGKILL, and left the postmaster running.
+	// Adopting it is right for a restart: the cluster, the dataset and
+	// everything saved to it are still there. Adoption requires proof that the
+	// data directory is ours, so an unrelated PostgreSQL that happens to hold
+	// the port is never taken over.
 	if srv, ok, err := adopt(ctx, log, cfg); err != nil {
 		return nil, err
 	} else if ok {
@@ -120,8 +115,8 @@ func Start(ctx context.Context, log *slog.Logger, cfg Config) (*Server, error) {
 // tempDirMu serializes the process-wide $TMPDIR swap in startWithTempDir.
 //
 // The embedded-postgres library creates its postgres log with
-// os.CreateTemp("", "embedded_postgres_log") — which resolves os.TempDir(),
-// i.e. $TMPDIR at the moment of the call — and never removes the file. Every
+// os.CreateTemp("", "embedded_postgres_log"), which resolves os.TempDir(),
+// i.e. $TMPDIR at the moment of the call, and never removes the file. Every
 // boot that lets it use the OS temp directory therefore leaves a log behind:
 // one `go test ./...` of this repository accumulates one per cluster, and a
 // few hundred runs leave thousands of them in /tmp. Pointing $TMPDIR at a
@@ -167,7 +162,7 @@ func adopt(ctx context.Context, log *slog.Logger, cfg Config) (*Server, bool, er
 	if _, err := os.Stat(filepath.Join(cfg.DataPath, "postmaster.pid")); err != nil {
 		return nil, false, nil
 	}
-	srv := &Server{DSN: cfg.DSNFor(), adopted: true, log: log, learnerPassword: cfg.Password}
+	srv := &Server{DSN: cfg.DSNFor(), log: log, learnerPassword: cfg.Password}
 	if err := srv.waitReady(ctx, 3*time.Second); err != nil {
 		// A pid file with nothing behind it is stale, not ours.
 		return nil, false, nil
@@ -205,15 +200,16 @@ func (s *Server) waitReady(ctx context.Context, timeout time.Duration) error {
 	return fmt.Errorf("embedded postgres did not become ready: %w", last)
 }
 
-// legacyPublicTables are the table names an earlier layout created in `public`
-// before the dataset and the gateway metadata moved into their own schemas.
-// legacyPublicTable names a pre-migration table, its authoritative replacement,
-// and which schema that replacement lives in.
+// A database created before the dataset and the gateway metadata moved into
+// their own schemas holds duplicates of those tables in `public`.
+// legacyPublicTable names one such table and the authoritative schema its
+// replacement lives in.
 type legacyPublicTable struct {
 	name      string
 	authority string // schema holding the real table
 }
 
+// legacyPublicTables is the list dropLegacyPublicTables removes, in drop order.
 // Order matters: children before the rows they reference, because order_items
 // holds foreign keys to orders and products, so dropping a parent first fails
 // with a dependency error. CASCADE covers anything else attached to them.
@@ -287,9 +283,9 @@ func (s *Server) applyDataset(ctx context.Context) error {
 	s.log.Info("applying commerce dataset")
 	// Schema and seed are multi-statement scripts with their own BEGIN/COMMIT,
 	// so they must run over the simple query protocol. The order is load-bearing
-	// and iteration over a map is randomized — use a slice, or the seed fails
-	// with "relation dataset.customers does not exist" roughly half the time and
-	// the gateway boots into ENVIRONMENT_UNAVAILABLE.
+	// and iteration over a map is randomized, so a slice holds the steps: with a
+	// map the seed fails with "relation dataset.customers does not exist"
+	// roughly half the time and the gateway boots into ENVIRONMENT_UNAVAILABLE.
 	for _, step := range []struct{ name, script string }{
 		{"schema", dataset.SchemaSQL()},
 		{"seed", dataset.SeedSQL()},
@@ -301,8 +297,9 @@ func (s *Server) applyDataset(ctx context.Context) error {
 	return nil
 }
 
-// Stop shuts the server down. Safe to call on a nil receiver, and a no-op for a
-// server this process adopted rather than started.
+// Stop shuts the server down. Safe to call on a nil receiver. A server this
+// process adopted rather than started carries no handle, so Stop leaves it
+// alone.
 func (s *Server) Stop() error {
 	if s == nil || s.pg == nil {
 		return nil
@@ -314,14 +311,11 @@ func (s *Server) Stop() error {
 }
 
 // DefaultDataDir returns the cluster directory used when none is configured.
-func DefaultDataDir(root string) string {
-	if root == "" {
-		root = ".data/pg"
-	}
-	return root
+func DefaultDataDir() string {
+	return ".data/pg"
 }
 
 // BinariesDir is where the PostgreSQL binaries are cached between runs.
-func BinariesDir(root string) string {
-	return filepath.Join(DefaultDataDir(root), "binaries")
+func BinariesDir() string {
+	return filepath.Join(DefaultDataDir(), "binaries")
 }

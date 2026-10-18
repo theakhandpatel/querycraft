@@ -368,6 +368,41 @@ async function startStubProvider({ title = 'A course written one chapter at a ti
         replyChapter,
       });
       if (delayMs > 0) await new Promise((resolve) => setTimeout(resolve, delayMs));
+      /* Two consumers speak this endpoint: the outline call goes through the
+         gateway's own HTTP provider, which wants one plain JSON completion, and
+         the chapter conversation goes through pi's loop, which always streams.
+         The stub answers whichever shape the request asked for — `stream: true`
+         gets SSE chunks (one delta, the finish_reason, [DONE]), anything else
+         gets the whole completion as JSON. */
+      if (parsed.stream === true) {
+        const chunk = (delta, finish) => JSON.stringify({
+          id: 'stub',
+          object: 'chat.completion.chunk',
+          created: 0,
+          model: 'stub',
+          choices: [{ index: 0, delta, finish_reason: finish ?? null }],
+        });
+        const events = [];
+        if (message.tool_calls) {
+          events.push(chunk({
+            role: 'assistant',
+            tool_calls: message.tool_calls.map((tc, i) => ({
+              index: i,
+              id: tc.id,
+              type: 'function',
+              function: { name: tc.function.name, arguments: tc.function.arguments },
+            })),
+          }));
+          events.push(chunk({}, 'tool_calls'));
+        } else {
+          events.push(chunk({ role: 'assistant', content: message.content }));
+          events.push(chunk({}, 'stop'));
+        }
+        events.push('[DONE]');
+        res.writeHead(200, { 'content-type': 'text/event-stream' });
+        res.end(events.map((e) => `data: ${e}\n\n`).join(''));
+        return;
+      }
       res.writeHead(200, { 'content-type': 'application/json' });
       res.end(JSON.stringify({
         choices: [{ message, finish_reason: message.tool_calls ? 'tool_calls' : 'stop' }],

@@ -49,7 +49,7 @@ function probe(api: ExecutionApi): Promise<EngineCapabilities | null> {
 
 /** Where SQL actually runs, as the adapter reported it. `null` means the engine
     has not answered yet — never a claim about the engine. */
-export function useEngineCapabilities(): EngineCapabilities | null {
+function useEngineCapabilities(): EngineCapabilities | null {
   const s = useStore();
   const [probed, setProbed] = useState<EngineCapabilities | null>(null);
   const caps = s.engineCaps ?? probed;

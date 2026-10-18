@@ -9,6 +9,7 @@ import (
 	"github.com/jackc/pgx/v5"
 
 	"github.com/querycraft/sqlquery/backend/internal/dataset"
+	"github.com/querycraft/sqlquery/backend/internal/envdb"
 	"github.com/querycraft/sqlquery/backend/internal/pgtest"
 )
 
@@ -46,7 +47,7 @@ func TestPerfDatasetIsDeterministic(t *testing.T) {
 
 	loads := map[string]*pgx.Conn{}
 	for _, name := range []string{"qc_perf_a", "qc_perf_b"} {
-		if err := dataset.CreateDatabase(ctx, admin, name); err != nil {
+		if err := envdb.CreateDatabase(ctx, admin, name); err != nil {
 			t.Fatalf("create %s: %v", name, err)
 		}
 		if err := dataset.LoadPerfIntoTemplate(ctx, admin, name, pgtest.Password); err != nil {
@@ -113,7 +114,7 @@ func TestPerfDatasetCarriesTheTaughtFacts(t *testing.T) {
 	defer func() { _ = admin.Close(context.WithoutCancel(ctx)) }()
 
 	const db = "qc_perf_facts"
-	if err := dataset.CreateDatabase(ctx, admin, db); err != nil {
+	if err := envdb.CreateDatabase(ctx, admin, db); err != nil {
 		t.Fatalf("create %s: %v", db, err)
 	}
 	if err := dataset.LoadPerfIntoTemplate(ctx, admin, db, pgtest.Password); err != nil {
@@ -256,14 +257,49 @@ func TestPerfDatasetCarriesTheTaughtFacts(t *testing.T) {
 // re-indexed or edited), and a preview that invented five rows would be the one
 // thing this endpoint must never do.
 func TestTablesServesBothDatasets(t *testing.T) {
+	// perf is the same four relations as commerce at a larger scale, but perf's
+	// `orders` carries the columns a real order carries (carrier, tracking code,
+	// two addresses, a handling note). The drawer must describe perf.sql, not
+	// commerce's narrower schema, so the expected columns are pinned here rather
+	// than borrowed from the other dataset.
 	want := []struct {
-		name string
-		rows int
+		name    string
+		rows    int
+		columns [][3]string
 	}{
-		{"customers", 2000},
-		{"products", 500},
-		{"orders", dataset.PerfScaleFactorOrders},
-		{"order_items", 20000},
+		{"customers", 2000, [][3]string{
+			{"id", "integer", "PK"},
+			{"name", "text", ""},
+			{"email", "text", "nullable"},
+			{"city", "text", "nullable"},
+			{"signup_date", "date", ""},
+		}},
+		{"products", 500, [][3]string{
+			{"id", "integer", "PK"},
+			{"name", "text", ""},
+			{"category", "text", ""},
+			{"price", "numeric", ""},
+			{"stock", "integer", ""},
+			{"active", "boolean", ""},
+		}},
+		{"orders", dataset.PerfScaleFactorOrders, [][3]string{
+			{"id", "integer", "PK"},
+			{"customer_id", "integer", "FK"},
+			{"ordered_at", "timestamp", ""},
+			{"status", "text", ""},
+			{"carrier", "text", ""},
+			{"tracking_code", "text", ""},
+			{"shipping_address", "text", ""},
+			{"billing_address", "text", ""},
+			{"notes", "text", ""},
+		}},
+		{"order_items", 20000, [][3]string{
+			{"id", "integer", "PK"},
+			{"order_id", "integer", "FK"},
+			{"product_id", "integer", "FK"},
+			{"quantity", "integer", ""},
+			{"unit_price", "numeric", ""},
+		}},
 	}
 
 	commerce, ok := dataset.Tables("commerce")
@@ -280,13 +316,10 @@ func TestTablesServesBothDatasets(t *testing.T) {
 	if len(perf.Tables) != len(want) {
 		t.Fatalf("perf tables = %d relations, want %d", len(perf.Tables), len(want))
 	}
-
-	// Same relations, same columns: the two fixtures are one schema at two
-	// scales, and a drawer that described them differently would be describing
-	// a schema that does not exist.
-	if len(perf.Tables) != len(commerce.Tables) {
-		t.Fatalf("perf has %d relations, commerce %d", len(perf.Tables), len(commerce.Tables))
+	if len(commerce.Tables) != len(want) {
+		t.Fatalf("commerce tables = %d relations, want %d", len(commerce.Tables), len(want))
 	}
+
 	for i, expect := range want {
 		got := perf.Tables[i]
 		if got.Name != expect.name {
@@ -298,19 +331,25 @@ func TestTablesServesBothDatasets(t *testing.T) {
 		if len(got.Preview) != 1 {
 			t.Errorf("%s preview = %d rows, want the header alone (no invented rows)", got.Name, len(got.Preview))
 		}
-		source := commerce.Tables[i]
-		if source.Name != expect.name {
-			t.Fatalf("commerce relation %d is %q, not %q; the two fixtures have drifted", i, source.Name, expect.name)
-		}
-		if len(got.Cols) != len(source.Cols) {
-			t.Errorf("%s has %d columns, commerce has %d", got.Name, len(got.Cols), len(source.Cols))
+		if len(got.Cols) != len(expect.columns) {
+			t.Errorf("%s has %d columns, want %d", got.Name, len(got.Cols), len(expect.columns))
 			continue
 		}
-		for c := range got.Cols {
-			if got.Cols[c][0] != source.Cols[c][0] || got.Cols[c][1] != source.Cols[c][1] {
-				t.Errorf("%s column %d = %v, want %v", got.Name, c, got.Cols[c], source.Cols[c])
+		for c, col := range expect.columns {
+			if got.Cols[c][0] != col[0] || got.Cols[c][1] != col[1] || got.Cols[c][2] != col[2] {
+				t.Errorf("%s column %d = %v, want %v", got.Name, c, got.Cols[c], col)
 			}
 		}
+	}
+
+	// The perf `orders` is wider than commerce's: that width is what puts the
+	// relation at the page count the access-path lessons reason about, so the
+	// drawer must report it rather than commerce's four columns.
+	if len(perf.Tables[2].Cols) != 9 {
+		t.Errorf("perf orders has %d columns, want 9 (carrier, tracking code, two addresses, notes)", len(perf.Tables[2].Cols))
+	}
+	if len(commerce.Tables[2].Cols) != 4 {
+		t.Errorf("commerce orders has %d columns, want 4", len(commerce.Tables[2].Cols))
 	}
 
 	// The declared scale is the one a plan reports, so the drawer and the plan

@@ -2,7 +2,6 @@ package eval
 
 import (
 	"context"
-	"encoding/json"
 	"slices"
 	"testing"
 
@@ -110,15 +109,15 @@ func mustFail(t *testing.T, ok bool, codes []string, wantCode string) {
 func TestCompareEmptyResultValid(t *testing.T) {
 	exp := ExpectedResult{Columns: []string{"n"}, Rows: [][]any{}}
 	qr := makeQR([]string{"n"}, [][]any{})
-	ok, codes := Compare(exp, baseContract("n"), qr)
-	mustPass(t, ok, codes)
+	cmp := CompareDetailed(exp, baseContract("n"), qr)
+	mustPass(t, cmp.OK, cmp.Codes)
 }
 
 func TestCompareColumnMismatch(t *testing.T) {
 	exp := ExpectedResult{Columns: []string{"name"}, Rows: [][]any{{"a"}}}
 	qr := makeQR([]string{"nombre"}, [][]any{{"a"}})
-	ok, codes := Compare(exp, baseContract("name"), qr)
-	mustFail(t, ok, codes, CodeColumn)
+	cmp := CompareDetailed(exp, baseContract("name"), qr)
+	mustFail(t, cmp.OK, cmp.Codes, CodeColumn)
 }
 
 func TestCompareColumnOrderExactVsIgnored(t *testing.T) {
@@ -127,13 +126,13 @@ func TestCompareColumnOrderExactVsIgnored(t *testing.T) {
 
 	exact := baseContract("a", "b")
 	exact.ColumnOrder = "exact"
-	ok, codes := Compare(exp, exact, qr)
-	mustFail(t, ok, codes, CodeColumnOrder)
+	cmp := CompareDetailed(exp, exact, qr)
+	mustFail(t, cmp.OK, cmp.Codes, CodeColumnOrder)
 
 	ignored := baseContract("a", "b")
 	ignored.ColumnOrder = "ignored"
-	ok, codes = Compare(exp, ignored, qr)
-	mustPass(t, ok, codes)
+	cmp = CompareDetailed(exp, ignored, qr)
+	mustPass(t, cmp.OK, cmp.Codes)
 }
 
 func TestCompareRowOrderIgnoredVsExact(t *testing.T) {
@@ -142,13 +141,13 @@ func TestCompareRowOrderIgnoredVsExact(t *testing.T) {
 
 	ignored := baseContract("n")
 	ignored.RowOrder = "ignored"
-	ok, codes := Compare(exp, ignored, qr)
-	mustPass(t, ok, codes)
+	cmp := CompareDetailed(exp, ignored, qr)
+	mustPass(t, cmp.OK, cmp.Codes)
 
 	exact := baseContract("n")
 	exact.RowOrder = "exact"
-	ok, codes = Compare(exp, exact, qr)
-	mustFail(t, ok, codes, CodeRowOrder)
+	cmp = CompareDetailed(exp, exact, qr)
+	mustFail(t, cmp.OK, cmp.Codes, CodeRowOrder)
 }
 
 func TestCompareDuplicatesPreservedVsIgnored(t *testing.T) {
@@ -159,25 +158,25 @@ func TestCompareDuplicatesPreservedVsIgnored(t *testing.T) {
 	ignored := baseContract("n")
 	ignored.Duplicates = "ignored"
 
-	ok, codes := Compare(exp, preserved, qr)
-	mustFail(t, ok, codes, CodeRowCount)
+	cmp := CompareDetailed(exp, preserved, qr)
+	mustFail(t, cmp.OK, cmp.Codes, CodeRowCount)
 
-	ok, codes = Compare(exp, ignored, qr)
-	mustPass(t, ok, codes)
+	cmp = CompareDetailed(exp, ignored, qr)
+	mustPass(t, cmp.OK, cmp.Codes)
 }
 
 func TestCompareRowCount(t *testing.T) {
 	exp := ExpectedResult{Columns: []string{"n"}, Rows: [][]any{{1}, {2}}}
 	qr := makeQR([]string{"n"}, [][]any{{1}})
-	ok, codes := Compare(exp, baseContract("n"), qr)
-	mustFail(t, ok, codes, CodeRowCount)
+	cmp := CompareDetailed(exp, baseContract("n"), qr)
+	mustFail(t, cmp.OK, cmp.Codes, CodeRowCount)
 }
 
 func TestCompareValueMismatch(t *testing.T) {
 	exp := ExpectedResult{Columns: []string{"n"}, Rows: [][]any{{"a"}}}
 	qr := makeQR([]string{"n"}, [][]any{{"b"}})
-	ok, codes := Compare(exp, baseContract("n"), qr)
-	mustFail(t, ok, codes, CodeValueMismatch)
+	cmp := CompareDetailed(exp, baseContract("n"), qr)
+	mustFail(t, cmp.OK, cmp.Codes, CodeValueMismatch)
 }
 
 func TestCompareNullDistinct(t *testing.T) {
@@ -209,13 +208,13 @@ func TestCompareNumericTolerance(t *testing.T) {
 	qr := makeQR([]string{"p"}, [][]any{{59.4}})
 
 	tight := baseContract("p")
-	ok, codes := Compare(exp, tight, qr)
-	mustFail(t, ok, codes, CodeValueMismatch)
+	cmp := CompareDetailed(exp, tight, qr)
+	mustFail(t, cmp.OK, cmp.Codes, CodeValueMismatch)
 
 	loose := baseContract("p")
 	loose.NumericTolerance = 0.5
-	ok, codes = Compare(exp, loose, qr)
-	mustPass(t, ok, codes)
+	cmp = CompareDetailed(exp, loose, qr)
+	mustPass(t, cmp.OK, cmp.Codes)
 }
 
 func TestCompareNumericStringCoercionAndNoTextNormalization(t *testing.T) {
@@ -223,83 +222,38 @@ func TestCompareNumericStringCoercionAndNoTextNormalization(t *testing.T) {
 	// number is numeric. Two real strings are compared verbatim.
 	exp := ExpectedResult{Columns: []string{"p"}, Rows: [][]any{{"59.00"}}}
 	qr := makeQR([]string{"p"}, [][]any{{59.0}})
-	ok, codes := Compare(exp, baseContract("p"), qr)
-	mustPass(t, ok, codes)
+	cmp := CompareDetailed(exp, baseContract("p"), qr)
+	mustPass(t, cmp.OK, cmp.Codes)
 
 	// "042" as text must not equal "42" as text.
 	exp2 := ExpectedResult{Columns: []string{"code"}, Rows: [][]any{{"042"}}}
 	qr2 := makeQR([]string{"code"}, [][]any{{"42"}})
-	ok, codes = Compare(exp2, baseContract("code"), qr2)
-	mustFail(t, ok, codes, CodeValueMismatch)
+	cmp = CompareDetailed(exp2, baseContract("code"), qr2)
+	mustFail(t, cmp.OK, cmp.Codes, CodeValueMismatch)
 }
 
 func TestCompareExecutionErrorIsNotWrongAnswer(t *testing.T) {
 	exp := ExpectedResult{Columns: []string{"n"}, Rows: [][]any{{1}}}
 	qr := engine.QueryResult{Status: "failed", Columns: []engine.Column{}, Rows: [][]any{}, Error: engine.NewError(engine.CodeSyntax, "syntax", "")}
-	ok, codes := Compare(exp, baseContract("n"), qr)
-	if ok {
+	cmp := CompareDetailed(exp, baseContract("n"), qr)
+	if cmp.OK {
 		t.Fatalf("expected fail")
 	}
-	if len(codes) != 0 {
-		t.Fatalf("execution failure must not emit value/column codes, got %v", codes)
+	if len(cmp.Codes) != 0 {
+		t.Fatalf("execution failure must not emit value/column codes, got %v", cmp.Codes)
 	}
 }
 
 func TestCompareColumnsOnly(t *testing.T) {
 	qr := makeQR([]string{"name", "category", "price"}, [][]any{{"a", "b", 1}})
-	ok, codes := CompareColumns(baseContract("name", "category", "price"), qr)
-	mustPass(t, ok, codes)
+	cmp := CompareColumnsDetailed(baseContract("name", "category", "price"), qr)
+	mustPass(t, cmp.OK, cmp.Codes)
 
-	ok, codes = CompareColumns(baseContract("name", "category"), qr)
-	mustFail(t, ok, codes, CodeColumn)
+	cmp = CompareColumnsDetailed(baseContract("name", "category"), qr)
+	mustFail(t, cmp.OK, cmp.Codes, CodeColumn)
 }
 
-func TestEvaluateContractAndChecks(t *testing.T) {
-	ex := &fakeExec{def: &frows{cols: colsOf("name", "category", "price"), rows: [][]any{{"Aurora", "Electronics", 59.0}}}}
-	req := Request{
-		SQL: "SELECT name, category, price FROM products WHERE category = 'Electronics'",
-		Exercise: Exercise{
-			ID:       "ex.1.1",
-			Contract: Contract{Columns: []string{"name", "category", "price"}, ColumnOrder: "exact", RowOrder: "exact"},
-			Result:   &ExpectedResult{Columns: []string{"name", "category", "price"}, Rows: [][]any{{"Aurora", "Electronics", 59.0}}},
-			Checks: []Check{
-				{Label: "Filters to Electronics", Code: "FILTER_MISSING", Pattern: `category\s*=\s*'electronics'`},
-				{Label: "Projects columns", Code: "COLUMN_MISMATCH", Test: json.RawMessage(`"select[\\s\\S]*name[\\s\\S]*price"`)},
-			},
-		},
-	}
-	resp := Evaluate(context.Background(), ex, req)
-	if !resp.Passed {
-		t.Fatalf("expected passed, got %+v", resp)
-	}
-	if len(resp.Checks) != 2 || !resp.Checks[0].OK || !resp.Checks[1].OK {
-		t.Fatalf("checks not ok: %+v", resp.Checks)
-	}
-	if resp.QR.Status != "succeeded" {
-		t.Fatalf("qr status = %q", resp.QR.Status)
-	}
-}
-
-func TestEvaluateContractPassesButCheckPatternFails(t *testing.T) {
-	ex := &fakeExec{def: &frows{cols: colsOf("n"), rows: [][]any{{1}}}}
-	req := Request{
-		SQL: "SELECT n FROM t",
-		Exercise: Exercise{
-			Contract: baseContract("n"),
-			Result:   &ExpectedResult{Columns: []string{"n"}, Rows: [][]any{{1}}},
-			Checks:   []Check{{Label: "Uses a join", Code: "JOIN_MISSING", Pattern: `join\s+order_items`}},
-		},
-	}
-	resp := Evaluate(context.Background(), ex, req)
-	if resp.Passed {
-		t.Fatalf("expected failed because check pattern does not match")
-	}
-	if resp.Checks[0].OK {
-		t.Fatalf("check should be not ok")
-	}
-}
-
-func TestEvaluateNoChecksSynthesizesContractChecklist(t *testing.T) {
+func TestEvaluateSynthesizesContractChecklist(t *testing.T) {
 	ex := &fakeExec{def: &frows{cols: colsOf("n"), rows: [][]any{{2}}}}
 	req := Request{
 		SQL: "SELECT n FROM t",
@@ -334,8 +288,8 @@ func TestEvaluateFailingReferenceIsLoudNotSilent(t *testing.T) {
 	req := Request{
 		SQL: "SELECT answer",
 		Exercise: Exercise{
-			Contract: baseContract("n"),
-			Solution: "SELECT ref",
+			Contract:          baseContract("n"),
+			ReferenceSolution: "SELECT ref",
 		},
 	}
 	resp := Evaluate(context.Background(), ex, req)
@@ -361,8 +315,8 @@ func TestEvaluateUsesReferenceSolution(t *testing.T) {
 	req := Request{
 		SQL: "SELECT answer",
 		Exercise: Exercise{
-			Contract: baseContract("n"),
-			Solution: "SELECT ref",
+			Contract:          baseContract("n"),
+			ReferenceSolution: "SELECT ref",
 		},
 	}
 	resp := Evaluate(context.Background(), ex, req)
@@ -378,7 +332,6 @@ func TestEvaluateExecutionError(t *testing.T) {
 		Exercise: Exercise{
 			Contract: baseContract("n"),
 			Result:   &ExpectedResult{Columns: []string{"n"}, Rows: [][]any{{1}}},
-			Checks:   []Check{{Label: "ok", Code: "VALUE_MISMATCH"}},
 		},
 	}
 	resp := Evaluate(context.Background(), ex, req)
@@ -388,8 +341,8 @@ func TestEvaluateExecutionError(t *testing.T) {
 	if resp.QR.Status != "failed" {
 		t.Fatalf("qr status = %q, want failed", resp.QR.Status)
 	}
-	if resp.Checks[0].OK {
-		t.Fatalf("checks must be not ok on execution failure")
+	if len(resp.Checks) == 0 || resp.Checks[0].OK {
+		t.Fatalf("checks must be not ok on execution failure: %+v", resp.Checks)
 	}
 }
 
@@ -424,28 +377,5 @@ func TestEvaluateLimitAboveDefaultSurvives(t *testing.T) {
 	}
 	if !resp.Passed {
 		t.Errorf("expected the full result to pass, got %+v", resp.Checks)
-	}
-}
-
-func TestNormalizeCode(t *testing.T) {
-	if got := NormalizeCode("filter_missing"); got != "FILTER_MISSING" {
-		t.Fatalf("got %q", got)
-	}
-	if got := NormalizeCode("NOT_A_CODE"); got != CodeValueMismatch {
-		t.Fatalf("got %q", got)
-	}
-}
-
-func TestMatchPatternFromJSFunction(t *testing.T) {
-	ok, err := matchPattern(`function(s){ return /select[\s\S]*\bname\b/i.test(s); }`, "SELECT name FROM products")
-	if err != nil || !ok {
-		t.Fatalf("matchPattern err=%v ok=%v", err, ok)
-	}
-	ok, err = matchPattern(`category\s*=\s*'electronics'`, "WHERE category = 'Electronics'")
-	if err != nil || !ok {
-		t.Fatalf("case-insensitive match failed err=%v ok=%v", err, ok)
-	}
-	if _, err := matchPattern(`(unclosed`, "x"); err == nil {
-		t.Fatalf("expected compile error for invalid pattern")
 	}
 }

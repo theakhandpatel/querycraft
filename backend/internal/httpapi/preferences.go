@@ -13,7 +13,7 @@ import (
  * The gateway stores and returns the document; it does not interpret it. That
  * is the honest division: the client knows what a theme id means, and a
  * future preference must not become a gateway schema change. Ownership is
- * enforced the same way progress is — the account comes from the session,
+ * enforced the same way progress is: the account comes from the session,
  * never from the body.
  */
 

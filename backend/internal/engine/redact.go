@@ -1,3 +1,7 @@
+// Secret redaction for anything that can reach a log line or an error envelope.
+// engine.NewError and the access log call RedactSecrets; pgx redacts the password
+// it was handed, and this catches the shapes a proxy, wrapper or hand-built error
+// can quote verbatim.
 package engine
 
 import "regexp"

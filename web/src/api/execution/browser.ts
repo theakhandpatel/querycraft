@@ -27,10 +27,9 @@ import { EXPORT_FORMAT_VERSION } from '../../lib/exportBundle';
 import { datasetFor } from '../../lib/dataset';
 import { dialectFor } from '../../lib/dialect';
 import { datasetVersion } from '../dataset';
-import { BUNDLED_CONTENT } from '../content';
 import { DEFAULT_DATASET, DEFAULT_DIALECT } from '../../types';
 import type { ApiConfig, Course, DatasetId, Dialect, EnvironmentInfo } from '../../types';
-import { ExecutionService, clearAuthToken, nowMs } from './shared';
+import { ExecutionService, clearAuthToken, nowMs, offlineDraft } from './shared';
 import type { ExecutionServiceShape, NoteFn } from './shared';
 
 /* The browser layer: PGlite runs PostgreSQL chapters and the SQLite WASM
@@ -67,7 +66,7 @@ export const PGLITE_CONFIG: ApiConfig = {
    keeps one honest store: a snapshot read back on the next boot, and a
    failed write that surfaces as PERSISTENCE_FAILED instead of a silent
    { ok: true }. Course generation stays in memory; it is a draft, not data. */
-type LocalMethods = Pick<ExecutionServiceShape, 'getProgress' | 'saveProgress' | 'logEvent' | 'draftCourse' | 'draftChallenge' | 'getContent'>;
+type LocalMethods = Pick<ExecutionServiceShape, 'getProgress' | 'saveProgress' | 'logEvent' | 'draftCourse' | 'draftChallenge'>;
 
 const READ_FAILURE = 'Could not read your saved progress in this browser (storage unavailable).';
 const SAVE_FAILURE = 'Could not save your progress in this browser (storage unavailable or full).';
@@ -160,23 +159,14 @@ function localMethods(config: ApiConfig, note: NoteFn): LocalMethods {
         const t0 = nowMs();
         yield* Effect.sleep(delayMs(config));
         note('POST', '/courses/generate', 201, nowMs() - t0);
-        return { title: req.title, chapters: (req.steps ?? []).length, exercises: req.exercises, datasetVersion: 1 };
+        return offlineDraft(req).course;
       }),
-    draftChallenge: () =>
+    draftChallenge: (req) =>
       Effect.gen(function* () {
         const t0 = nowMs();
         yield* Effect.sleep(delayMs(config));
         note('POST', '/challenges/generate', 201, nowMs() - t0);
-        return { ok: true };
-      }),
-    /* The gateway adapter serves the same authored markdown; only the
-       PGlite adapter reads it back out of the database. */
-    getContent: (moduleId) =>
-      Effect.gen(function* () {
-        const t0 = nowMs();
-        yield* Effect.sleep(delayMs(config));
-        note('GET', `/content/${moduleId}`, 200, nowMs() - t0);
-        return BUNDLED_CONTENT[moduleId] ?? [];
+        return offlineDraft(req).challenge;
       }),
   };
 }
@@ -407,7 +397,8 @@ export function pgliteLayer(config: ApiConfig = PGLITE_CONFIG, note: NoteFn = ()
         };
       }),
     ...localMethods(config, note),
-    /* Overrides the bundled fallback: content comes out of the database. */
+    /* Chapter content comes out of the database, not the bundled markdown the
+       gateway adapter serves: this layer has a real Postgres to read it from. */
     getContent: (moduleId) =>
       Effect.gen(function* () {
         const t0 = nowMs();

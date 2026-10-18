@@ -12,7 +12,7 @@
  */
 import { createRequire } from 'node:module';
 const require = createRequire('/tmp/');
-const x = require('/tmp/export-bundle.cjs');
+const x = require('/tmp/export-bundle-for-export.cjs');
 
 let failed = 0;
 function check(name, cond, detail) {

@@ -55,9 +55,20 @@ export default function LibraryScreen() {
 
       <div className="grid3">
         {courses.map((c) => {
-          const tag = c.source === 'created' ? <span className="enrolltag mine">You built this</span> : c.enrolled ? <span className="enrolltag">Enrolled</span> : null;
+          /* A build the gateway stopped writing, or one still waiting for the
+             learner's approval: its own state, with resume as the action. A
+             live `building` course is just in progress and reads normally. */
+          const interrupted = c.recordStatus === 'interrupted';
+          const awaitingBuild = c.recordStatus === 'awaiting_approval';
+          const paused = interrupted || awaitingBuild;
+          const tag = c.source === 'created'
+            ? <span className="enrolltag mine">You built this</span>
+            : paused
+              ? <span className="enrolltag">{interrupted ? 'Interrupted' : 'Waiting for approval'}</span>
+              : c.enrolled ? <span className="enrolltag">Enrolled</span> : null;
           let btn;
-          if (c.built && c.enrolled) btn = <button className="small primary" onClick={() => { s.selectCourse(c.id); s.showScreen('course'); }}><Icon name="play" />Continue</button>;
+          if (paused) btn = <button className="small primary" onClick={() => s.resumeStoredCourse(c.id, c.title)}><Icon name="play" />Resume</button>;
+          else if (c.built && c.enrolled) btn = <button className="small primary" onClick={() => { s.selectCourse(c.id); s.showScreen('course'); }}><Icon name="play" />Continue</button>;
           else if (c.built) btn = <button className="small primary" onClick={() => s.enrollCourse(c.id)}>Enroll<Icon name="plus" /></button>;
           else btn = <button className="small" onClick={() => s.toast('Preview: this course would generate with the same pipeline.')}><Icon name="eye" />Preview</button>;
           return (
