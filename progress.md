@@ -2972,3 +2972,12 @@ The full flow walkthrough, the findings, and the fixes are written up in
   eval/perf; httpapi; platform). Comments only, guards per package.
 - Still to do: full gates, rebuild, refresh the lesson/exercise screenshots,
   commit, push, tag `v0.9.0`.
+
+## v0.9.0 shipped (2026-10-18)
+
+Commit `4b843d873` on `main`, tag `v0.9.0`, pushed to origin. The release
+covers the cleanup wave, the deep user session and its fixes, the test-speed
+work, the backend comment pass, and the docs refresh. Gates on the released
+tree: `make test` (23 audits) and `make verify` (build, suite, smoke on real
+PostgreSQL). Remaining open items are listed in `docs/features.md` section 10
+and `docs/reviews/2026-10-18/user-session.md`.
