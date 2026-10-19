@@ -19,7 +19,7 @@ type storeFactory func(t *testing.T) Store
 // reference and the opt-in SQLite implementation. This pins the additive
 // backend to the contract already used by Postgres.
 func TestPersistentStoreParity(t *testing.T) {
-	srv := pgtest.Start(t)
+	srv := pgtest.Shared(t)
 	factories := map[string]storeFactory{
 		"postgres": func(t *testing.T) Store {
 			st, err := NewPostgres(context.Background(), srv.DSN)

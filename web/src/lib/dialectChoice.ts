@@ -1,3 +1,4 @@
+import { Option, Schema } from 'effect';
 import { dialectFor, dialectLabel, isDialect } from './dialect';
 import type { Course, CourseModule, Dialect } from '../types';
 
@@ -31,6 +32,12 @@ const CHOICE_KEY = 'qc.dialectChoice';
 
 type ChoiceMap = Record<string, Dialect>;
 
+/* The stored preference is JSON keyed by module id. Its values are decoded one
+   at a time below, so a hand-edited entry is dropped rather than dropped the
+   whole map. */
+const StoredChoicesSchema = Schema.Record(Schema.String, Schema.Json);
+const storedChoicesFromString = Schema.fromJsonString(StoredChoicesSchema);
+
 let cache: ChoiceMap | null = null;
 let version = 0;
 const listeners = new Set<() => void>();
@@ -38,18 +45,16 @@ const listeners = new Set<() => void>();
 /** The stored choices, decoded once. An unreadable entry is dropped rather
     than guessed at, so a hand-edited localStorage cannot put the UI on a
     dialect the app does not have. */
-function load(): ChoiceMap {
+function load() {
   if (cache) return cache;
   const map: ChoiceMap = {};
   try {
     if (typeof window !== 'undefined' && window.localStorage) {
       const raw = window.localStorage.getItem(CHOICE_KEY);
       if (raw) {
-        const parsed: unknown = JSON.parse(raw);
-        if (parsed && typeof parsed === 'object') {
-          for (const [id, value] of Object.entries(parsed as Record<string, unknown>)) {
-            if (isDialect(value)) map[id] = value;
-          }
+        const parsed = Option.getOrNull(Schema.decodeUnknownOption(storedChoicesFromString)(raw));
+        for (const [id, value] of Object.entries(parsed ?? {})) {
+          if (isDialect(value)) map[id] = value;
         }
       }
     }
@@ -88,16 +93,6 @@ export function chooseDialect(moduleId: string, dialect: Dialect): void {
   const current = load();
   if (current[moduleId] === dialect) return;
   save({ ...current, [moduleId]: dialect });
-}
-
-/** Forget a learner's choice for a chapter, putting it back on the dialect it
-    was authored for. */
-export function resetDialectChoice(moduleId: string): void {
-  const current = load();
-  if (!(moduleId in current)) return;
-  const next = { ...current };
-  delete next[moduleId];
-  save(next);
 }
 
 /** The dialect a chapter runs on: the learner's own choice when they made one,

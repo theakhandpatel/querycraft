@@ -2,6 +2,7 @@ package httpapi
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"net/http"
 	"strings"
@@ -248,17 +249,22 @@ func (s *Server) handleEnvironmentReset(w http.ResponseWriter, r *http.Request) 
 	// The stored plan was verified in a scratch environment that had its setup
 	// applied; the learner's environment is the same database, so it must have
 	// the same setup or an exercise that verified green dies with "relation
-	// does not exist". A statement that fails is reported, never swallowed: a
-	// reset that did not take must not be reported as one.
+	// does not exist". The apply goes through the same once-per-generation path
+	// the prepare route uses, so it also leaves the mark that makes a later
+	// course open a no-op. A statement that fails is reported, never swallowed:
+	// a reset that did not take must not be reported as one.
 	applied := 0
 	if courseID != "" {
-		exec, execErr := s.envs.Ensure(r.Context(), u.ID)
-		if execErr != nil {
-			environmentUnavailable(w, execErr)
-			return
-		}
-		applied, err = applyCourseSetup(r.Context(), exec, setup)
+		_, err = s.envs.PrepareCourse(r.Context(), u.ID, courseID, func(exec engine.Executor) error {
+			var applyErr error
+			applied, applyErr = applyCourseSetup(r.Context(), exec, setup)
+			return applyErr
+		})
 		if err != nil {
+			if errors.Is(err, engine.ErrEnvironmentUnavailable) {
+				environmentUnavailable(w, err)
+				return
+			}
 			courseSetupFailed(w, err)
 			return
 		}
@@ -283,6 +289,103 @@ func (s *Server) handleEnvironmentReset(w http.ResponseWriter, r *http.Request) 
 	})
 }
 
+// handleEnvironmentPrepare ensures the caller's workspace exists and applies a
+// stored course's own setup to it once per environment generation.
+//
+// A stored course's exercises were verified in a scratch environment that had
+// the course's setup applied. Opening the course issued no such request before,
+// so the learner's first exercise died with "relation does not exist" until
+// they reset by hand. This route is what the course-open warm-up calls: it
+// resolves the course owner-scoped, ensures the workspace, and applies the
+// setup through the manager's once-per-generation mark.
+//
+// The route is idempotent. A second call for the same course and workspace
+// reports `setup_statements: 0` because it applied nothing, not because the
+// setup is missing. A `reset` clears the mark, so the course is prepared again.
+//
+// When no workspace can be provided the answer is the contract's
+// ENVIRONMENT_UNAVAILABLE and nothing is invented; the course still opens and
+// the first Run reports the same code.
+func (s *Server) handleEnvironmentPrepare(w http.ResponseWriter, r *http.Request) {
+	u, ok := s.requireUser(w, r)
+	if !ok {
+		return
+	}
+	courseID := strings.TrimSpace(r.URL.Query().Get("course"))
+	if courseID == "" {
+		errorEnvelope(w, http.StatusBadRequest, engine.CodeEnvironmentUnavailable,
+			"Name a stored course to prepare its workspace.")
+		return
+	}
+	// Resolve the course before touching the workspace, the same rule the reset
+	// route uses: a course this caller does not own is refused with 404 and
+	// prepares nothing, so it cannot be probed for existence.
+	setup, ok := s.resolveCourseSetup(w, r, u.ID, courseID)
+	if !ok {
+		return
+	}
+	dialect := requestedDialect(r.URL.Query().Get("dialect"))
+	if dialect == engine.DialectSQLite {
+		s.prepareSQLiteEnvironment(w, r, u.ID, courseID, setup)
+		return
+	}
+	if dialect != engine.DialectPostgres {
+		errorEnvelope(w, http.StatusBadRequest, engine.CodeDialectMismatch,
+			fmt.Sprintf("This gateway cannot prepare a %s workspace; it serves %s here.", dialect, engine.DialectPostgres))
+		return
+	}
+	if s.envs == nil {
+		environmentUnavailable(w, fmt.Errorf("%w: no writable workspace manager is configured", engine.ErrEnvironmentUnavailable))
+		return
+	}
+	applied := 0
+	_, err := s.envs.PrepareCourse(r.Context(), u.ID, courseID, func(exec engine.Executor) error {
+		var applyErr error
+		applied, applyErr = applyCourseSetup(r.Context(), exec, setup)
+		return applyErr
+	})
+	if err != nil {
+		if errors.Is(err, engine.ErrEnvironmentUnavailable) {
+			environmentUnavailable(w, err)
+			return
+		}
+		courseSetupFailed(w, err)
+		return
+	}
+	writeJSON(w, http.StatusOK, map[string]any{
+		"ok":               true,
+		"setup_statements": applied,
+	})
+}
+
+// prepareSQLiteEnvironment is the SQLite half of prepare. It resolves nothing
+// itself: the caller has already resolved the course and its setup, and this
+// applies it once per SQLite file generation.
+func (s *Server) prepareSQLiteEnvironment(w http.ResponseWriter, r *http.Request, ownerID, courseID string, setup schema.SetupPlan) {
+	if s.sqlite == nil {
+		environmentUnavailable(w, fmt.Errorf("%w: no SQLite workspace store is configured", engine.ErrEnvironmentUnavailable))
+		return
+	}
+	applied := 0
+	_, err := s.sqlite.PrepareCourse(r.Context(), ownerID, courseID, func(exec engine.Executor) error {
+		var applyErr error
+		applied, applyErr = applyCourseSetup(r.Context(), exec, setup)
+		return applyErr
+	})
+	if err != nil {
+		if errors.Is(err, engine.ErrEnvironmentUnavailable) {
+			environmentUnavailable(w, err)
+			return
+		}
+		courseSetupFailed(w, err)
+		return
+	}
+	writeJSON(w, http.StatusOK, map[string]any{
+		"ok":               true,
+		"setup_statements": applied,
+	})
+}
+
 // resetSQLiteEnvironment restores a signed-in learner's SQLite workspace file
 // to the committed fixture. It is the SQLite half of ADR 0003's reset, and it
 // resolves the course and applies its setup by the same rules the PostgreSQL
@@ -304,15 +407,23 @@ func (s *Server) resetSQLiteEnvironment(w http.ResponseWriter, r *http.Request, 
 	if !ok {
 		return
 	}
-	ex, took, err := s.sqlite.Reset(r.Context(), ownerID)
+	_, took, err := s.sqlite.Reset(r.Context(), ownerID)
 	if err != nil {
 		environmentUnavailable(w, err)
 		return
 	}
 	applied := 0
 	if courseID != "" {
-		applied, err = applyCourseSetup(r.Context(), ex, setup)
+		_, err = s.sqlite.PrepareCourse(r.Context(), ownerID, courseID, func(exec engine.Executor) error {
+			var applyErr error
+			applied, applyErr = applyCourseSetup(r.Context(), exec, setup)
+			return applyErr
+		})
 		if err != nil {
+			if errors.Is(err, engine.ErrEnvironmentUnavailable) {
+				environmentUnavailable(w, err)
+				return
+			}
 			courseSetupFailed(w, err)
 			return
 		}

@@ -55,12 +55,12 @@ func (s *Server) handleExplain(w http.ResponseWriter, r *http.Request) {
 	limits := s.limits(req.Limits)
 	// The concurrency budget is spent out of the same deadline the plan gets, so
 	// a gateway at capacity answers QUERY_TIMEOUT instead of queueing unbounded.
-	ctx, cancel := context.WithTimeout(r.Context(), limits.Timeout())
-	defer cancel()
+	admission, cancelAdmission := context.WithTimeout(r.Context(), limits.Timeout())
+	defer cancelAdmission()
 
-	release, admitted := s.enter(ctx)
+	release, admitted := s.enter(admission)
 	if !admitted {
-		bundle := s.refusedPlan(ctx, start, req.SQL, engine.CodeTimeout, s.busyResult(ctx, start).Error.Message, "")
+		bundle := s.refusedPlan(admission, start, req.SQL, engine.CodeTimeout, s.busyResult(admission, start).Error.Message, "")
 		s.recordPlan(bundle, req.Analyze)
 		writePlan(w, http.StatusBadRequest, bundle)
 		return
@@ -74,7 +74,7 @@ func (s *Server) handleExplain(w http.ResponseWriter, r *http.Request) {
 	// refusal is EVALUATION_ERROR, the same code a chapter authored for another
 	// dialect gets.
 	if dialect := requestedDialect(req.Dialect); dialect != engine.DialectPostgres {
-		bundle := s.refusedPlan(ctx, start, req.SQL, engine.CodeEvaluationError,
+		bundle := s.refusedPlan(admission, start, req.SQL, engine.CodeEvaluationError,
 			s.planDialectRefusal(dialect), "")
 		s.recordPlan(bundle, req.Analyze)
 		writePlan(w, http.StatusBadRequest, bundle)
@@ -83,7 +83,7 @@ func (s *Server) handleExplain(w http.ResponseWriter, r *http.Request) {
 
 	if req.Exercise != nil && req.Exercise.Perf != nil {
 		if dialect := strings.TrimSpace(req.Exercise.Perf.Engine); dialect != "" && dialect != perf.EnginePostgres {
-			bundle := s.refusedPlan(ctx, start, req.SQL, engine.CodeEvaluationError,
+			bundle := s.refusedPlan(admission, start, req.SQL, engine.CodeEvaluationError,
 				s.planDialectRefusal(dialect), "")
 			s.recordPlan(bundle, req.Analyze)
 			writePlan(w, http.StatusBadRequest, bundle)
@@ -97,15 +97,20 @@ func (s *Server) handleExplain(w http.ResponseWriter, r *http.Request) {
 	// dataset, not an unknown id.
 	datasetID := resolveDataset(req.Dataset, req.Exercise)
 
-	exec, reason, err := s.planExecutor(ctx, r, datasetID, req.Analyze)
+	exec, reason, err := s.planExecutor(r.Context(), r, datasetID, req.Analyze)
 	if err != nil {
-		bundle := s.refusedPlan(ctx, start, req.SQL, engine.CodeEnvironmentUnavailable,
+		bundle := s.refusedPlan(admission, start, req.SQL, engine.CodeEnvironmentUnavailable,
 			reason, engine.RedactSecrets(err.Error()))
 		s.recordPlan(bundle, req.Analyze)
 		writePlan(w, http.StatusBadRequest, bundle)
 		return
 	}
 
+	// The plan gets its full deadline from here: choosing the executor above
+	// may have provisioned the perf workspace, which the environment manager
+	// bounds on its own provisioning deadline rather than this one.
+	ctx, cancel := context.WithTimeout(r.Context(), limits.Timeout())
+	defer cancel()
 	bundle := perf.Explain(ctx, exec, req.SQL, perf.ExplainOptions{
 		Analyze: req.Analyze,
 		Limits:  limits,

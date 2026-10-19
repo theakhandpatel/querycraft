@@ -16,6 +16,8 @@
  * view for work that is not theirs.
  */
 
+import { Option, Schema } from 'effect';
+
 interface RunBreadcrumb {
   /** The id the gateway returned when the run was submitted. */
   jobId: string;
@@ -29,6 +31,23 @@ interface RunBreadcrumb {
 
 const KEY = 'qc.run';
 
+/* The stored breadcrumb as JSON. Every field is optional so a partial or older
+   record still decodes, and the caller decides what a missing field reads as. */
+interface StoredRun {
+  jobId?: string;
+  ownerId?: string;
+  goal?: string;
+  startedAt?: number;
+}
+
+const StoredRunSchema = Schema.Struct({
+  jobId: Schema.optional(Schema.String),
+  ownerId: Schema.optional(Schema.String),
+  goal: Schema.optional(Schema.String),
+  startedAt: Schema.optional(Schema.Number),
+});
+const storedRunFromString = Schema.fromJsonString(StoredRunSchema);
+
 function storage(): Storage | null {
   try {
     return window.localStorage;
@@ -39,7 +58,7 @@ function storage(): Storage | null {
   }
 }
 
-function readRaw(): Record<string, unknown> | null {
+function readRaw(): StoredRun | null {
   const store = storage();
   if (!store) return null;
   let raw: string | null = null;
@@ -49,12 +68,7 @@ function readRaw(): Record<string, unknown> | null {
     return null;
   }
   if (!raw) return null;
-  try {
-    const parsed: unknown = JSON.parse(raw);
-    return parsed && typeof parsed === 'object' && !Array.isArray(parsed) ? (parsed as Record<string, unknown>) : null;
-  } catch {
-    return null;
-  }
+  return Option.getOrNull(Schema.decodeUnknownOption(storedRunFromString)(raw));
 }
 
 /** The run this account was watching, or null when there is none to resume.
@@ -67,7 +81,7 @@ export function readRun(ownerId: string | null): RunBreadcrumb | null {
     clearRun();
     return null;
   }
-  const jobId = typeof record.jobId === 'string' ? record.jobId : '';
+  const jobId = record.jobId ?? '';
   if (!jobId) {
     clearRun();
     return null;
@@ -79,8 +93,8 @@ export function readRun(ownerId: string | null): RunBreadcrumb | null {
   return {
     jobId,
     ownerId,
-    goal: typeof record.goal === 'string' ? record.goal : '',
-    startedAt: typeof record.startedAt === 'number' ? record.startedAt : 0,
+    goal: record.goal ?? '',
+    startedAt: record.startedAt ?? 0,
   };
 }
 
@@ -99,7 +113,7 @@ export function writeRun(run: RunBreadcrumb): void {
 export function clearRun(jobId?: string): void {
   if (jobId !== undefined) {
     const record = readRaw();
-    if (record && typeof record.jobId === 'string' && record.jobId !== jobId) return;
+    if (record && record.jobId !== undefined && record.jobId !== jobId) return;
   }
   const store = storage();
   if (!store) return;

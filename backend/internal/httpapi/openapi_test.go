@@ -59,3 +59,53 @@ func TestDocumentedSecurityMatchesTheHandlers(t *testing.T) {
 		}
 	}
 }
+
+// TestOperationIDsFollowTheRouteTable pins the one formula the document uses:
+// lower(method) + "_" + the route's access-log operation. The route table is
+// the source, so a new route that forgets its operationId, a renamed log
+// operation, and a stale document entry all fail here.
+func TestOperationIDsFollowTheRouteTable(t *testing.T) {
+	var doc struct {
+		Paths map[string]map[string]json.RawMessage `json:"paths"`
+	}
+	if err := json.Unmarshal(apidocs.Document, &doc); err != nil {
+		t.Fatalf("decode the OpenAPI document: %v", err)
+	}
+
+	want := make(map[string]string, 44)
+	for _, rt := range (&Server{}).routes() {
+		// The SPA catch-all is a page, not an API operation: the document
+		// describes the JSON surface.
+		if rt.path == "/" || rt.path == "/{$}" {
+			continue
+		}
+		// The mux answers /docs and /docs/ with one operation.
+		path := strings.TrimSuffix(rt.path, "/")
+		want[rt.method+" "+path] = strings.ToLower(rt.method) + "_" + rt.operation
+	}
+
+	for path, ops := range doc.Paths {
+		for method, raw := range ops {
+			key := strings.ToUpper(method) + " " + path
+			wantID, ok := want[key]
+			if !ok {
+				t.Errorf("%s is documented but no route serves it", key)
+				continue
+			}
+			var op struct {
+				OperationID string `json:"operationId"`
+			}
+			if err := json.Unmarshal(raw, &op); err != nil {
+				t.Errorf("%s: %v", key, err)
+				continue
+			}
+			if op.OperationID != wantID {
+				t.Errorf("%s operationId = %q, want %q", key, op.OperationID, wantID)
+			}
+			delete(want, key)
+		}
+	}
+	for key, id := range want {
+		t.Errorf("%s is served but not documented with operationId %q", key, id)
+	}
+}

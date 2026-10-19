@@ -49,6 +49,15 @@ const sharedSQLiteFile = "commerce.db"
 // connections.
 const sqlitePoolConns = 4
 
+// sqliteSetupMarkSuffix names the sidecar file that records the stored course
+// whose setup has already been applied to an account's database file. The mark
+// is a file beside the workspace, not a row in it: learner SQL can drop or
+// rewrite any table in its own file, and a mark it could delete would let a
+// second prepare run a setup that is not idempotent. Reset removes the mark
+// with the file, because the reseeded file carries none of the course's
+// objects.
+const sqliteSetupMarkSuffix = ".setup"
+
 // defaultMaxAccounts and defaultSQLiteIdleTTL mirror envdb's
 // defaultMaxEnvironments and defaultIdleTTL: a file per account is a bounded
 // promise, not an unbounded map (ADR 0006).
@@ -122,6 +131,10 @@ type SQLiteEnvironments struct {
 	shared    *engine.SQLiteExecutor
 	byAccount map[string]*accountEnvironment
 	closed    bool
+	// setupMu serialises course preparation for the same reason the PostgreSQL
+	// manager does: two prepares for one file must not both run a setup that is
+	// not idempotent.
+	setupMu sync.Mutex
 }
 
 // NewSQLiteEnvironmentsWithOptions prepares the data root and returns the store
@@ -266,8 +279,10 @@ func (s *SQLiteEnvironments) Reset(ctx context.Context, accountID string) (*engi
 	}
 	// A SQLite file may exist beside its rollback journal and its WAL/SHM
 	// companions; a stale -journal left behind would be replayed over the fresh
-	// seed and resurrect the learner's writes. Remove the whole family.
-	for _, suffix := range []string{"", "-journal", "-wal", "-shm"} {
+	// seed and resurrect the learner's writes. Remove the whole family,
+	// including the course-setup mark: the reseeded file carries none of a
+	// prepared course's objects, so its mark must not survive either.
+	for _, suffix := range []string{"", "-journal", "-wal", "-shm", sqliteSetupMarkSuffix} {
 		if err := os.Remove(path + suffix); err != nil && !errors.Is(err, os.ErrNotExist) {
 			return nil, 0, fmt.Errorf("remove the SQLite workspace: %w", err)
 		}
@@ -281,6 +296,53 @@ func (s *SQLiteEnvironments) Reset(ctx context.Context, accountID string) (*engi
 		return nil, 0, err
 	}
 	return ex, time.Since(start), nil
+}
+
+// PrepareCourse applies a stored course's setup to the account's SQLite file
+// once, and reports whether it ran.
+//
+// The workspace is the file, so its mark must outlive the cached pool: evicting
+// or reaping a pool leaves the file and its objects in place, and a mark kept
+// only in memory would let a later prepare re-run a non-idempotent `CREATE
+// TABLE`. The mark therefore lives in a sidecar file beside the database and is
+// removed only by Reset, which reseeds the file and drops every object the
+// setup built.
+//
+// apply runs over the account's own writable executor. A failure leaves the
+// mark unwritten, so a retry runs the setup again rather than reporting a
+// workspace that was never prepared.
+func (s *SQLiteEnvironments) PrepareCourse(ctx context.Context, accountID, courseID string, apply func(engine.Executor) error) (bool, error) {
+	id := strings.TrimSpace(accountID)
+	if id == "" {
+		return false, fmt.Errorf("%w: no account id for a SQLite environment", engine.ErrEnvironmentUnavailable)
+	}
+	if strings.TrimSpace(courseID) == "" {
+		return false, fmt.Errorf("%w: no course id to prepare", engine.ErrEnvironmentUnavailable)
+	}
+	s.setupMu.Lock()
+	defer s.setupMu.Unlock()
+
+	path := filepath.Join(s.accounts, digest(id)[:32]+".db")
+	mark := path + sqliteSetupMarkSuffix
+	if recorded, err := os.ReadFile(mark); err == nil {
+		if strings.TrimSpace(string(recorded)) == courseID {
+			return false, nil
+		}
+	} else if !errors.Is(err, os.ErrNotExist) {
+		return false, fmt.Errorf("read the SQLite course setup mark: %w", err)
+	}
+
+	ex, err := s.ForAccount(ctx, id)
+	if err != nil {
+		return false, err
+	}
+	if err := apply(ex); err != nil {
+		return false, err
+	}
+	if err := os.WriteFile(mark, []byte(courseID), 0o644); err != nil {
+		return false, fmt.Errorf("record the SQLite course setup mark: %w", err)
+	}
+	return true, nil
 }
 
 // forAccountLocked seeds path if needed and opens the learner's writable

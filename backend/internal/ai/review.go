@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"strconv"
 	"strings"
+	"unicode/utf8"
 
 	"github.com/querycraft/sqlquery/backend/internal/ai/provider"
 	"github.com/querycraft/sqlquery/backend/internal/engine"
@@ -34,7 +35,8 @@ func feedbackSystemPrompt() string {
 	return "You are a SQL tutor. The learner reads your reply as plain text, not as JSON. Write for a beginner: short sentences, active voice, present tense, one idea per line. Say what is wrong and what to change. Never write the full solution. No praise, no preamble, no closing summary."
 }
 
-// Tutor answers with a hint that never reveals the reference solution.
+// Tutor answers with a hint that never reveals the reference solution. It serves
+// both the one-shot hint (no turns) and a conversation (turns, oldest first).
 func (s *Service) Tutor(ctx context.Context, req TutorRequest) (TutorResponse, error) {
 	if err := s.requireAvailable(); err != nil {
 		return TutorResponse{}, err
@@ -44,21 +46,44 @@ func (s *Service) Tutor(ctx context.Context, req TutorRequest) (TutorResponse, e
 			"A hint needs the learner's SQL and the objective.", "sql/objective")
 	}
 	limits := s.cfg.Limits
+	if len(req.Turns) > limits.MaxTutorTurns {
+		return TutorResponse{}, NewError(CodeInvalidRequest, "",
+			fmt.Sprintf("A tutor conversation is capped at %d turns.", limits.MaxTutorTurns), "turns")
+	}
+	for i, t := range req.Turns {
+		if t.Role != "learner" && t.Role != "tutor" {
+			return TutorResponse{}, NewError(CodeInvalidRequest, "",
+				fmt.Sprintf("Turn %d has an unknown role; use learner or tutor.", i), "turns")
+		}
+		if utf8.RuneCountInString(t.Text) > limits.MaxPromptChars {
+			return TutorResponse{}, NewError(CodeInvalidRequest, "",
+				fmt.Sprintf("Turn %d is longer than the limit of %d characters.", i, limits.MaxPromptChars), "turns")
+		}
+	}
+	if len(req.Context) > limits.MaxTutorContextBytes {
+		return TutorResponse{}, NewError(CodeInvalidRequest, "",
+			fmt.Sprintf("The tutor context exceeds the limit of %d bytes.", limits.MaxTutorContextBytes), "context")
+	}
 	level := clampInt(req.HintLevel, 0, limits.MaxHints)
 
-	text, terr := s.complete(ctx, provider.ProviderRequest{
+	// A tutor turn is one provider call, not a generation run: it gets the
+	// shorter tutor budget, and the reply carries only prose.
+	runCtx, cancel := context.WithTimeout(ctx, limits.TutorTimeout)
+	defer cancel()
+
+	text, terr := s.complete(runCtx, provider.ProviderRequest{
 		Kind:   "tutor",
 		System: feedbackSystemPrompt(),
-		// Only the learner's own material. The reference solution is absent by
-		// construction, so this request cannot leak it even if the model wanted
-		// to quote it back.
+		// Only the learner's own material and the gateway-assembled context.
+		// The reference query is absent by construction; the request's guards
+		// carry it for the no-solution check and never reach the prompt.
 		Prompt:         tutorPrompt(req, level),
 		MaxOutputBytes: limits.MaxOutputBytes,
 	})
 	if terr != nil {
 		return TutorResponse{}, terr
 	}
-	if err := s.guardSolutions(ctx, req.ChallengeID, text); err != nil {
+	if err := s.guardSolutions(ctx, req.ChallengeID, text, req.Guards...); err != nil {
 		return TutorResponse{}, err
 	}
 	return TutorResponse{
@@ -105,20 +130,28 @@ func (s *Service) Critique(ctx context.Context, req CritiqueRequest) (CritiqueRe
 // (or a future prompt change that accidentally includes the artifact) from
 // regressing that property. When there is no stored challenge there is nothing
 // to compare against, which is not a silent pass on the property; the request
-// itself still carried no solution.
-func (s *Service) guardSolutions(ctx context.Context, challengeID, text string) *schema.Error {
+// itself still carried no solution, and the caller's own guards carry the rest.
+func (s *Service) guardSolutions(ctx context.Context, challengeID, text string, extra ...string) *schema.Error {
 	art, ok, err := s.storedArtifact(ctx, challengeID)
-	if err != nil || !ok {
+	if err != nil {
 		return nil
 	}
-	for field, solution := range map[string]string{
-		"reference_solution":   art.ReferenceSolution,
-		"cross_check_solution": art.CrossCheckSolution,
-	} {
+	guards := map[string]string{}
+	if ok {
+		guards["reference_solution"] = art.ReferenceSolution
+		guards["cross_check_solution"] = art.CrossCheckSolution
+	}
+	// The request's own guards arm the check for an authored exercise, which
+	// has no stored artifact: the client sends its reference solution to
+	// /answers/evaluate, and the tutor route keeps it for this comparison only.
+	for i, g := range extra {
+		guards[fmt.Sprintf("reference_solution_%d", i)] = g
+	}
+	for field, solution := range guards {
 		if containsSolution(text, solution) {
 			return NewError(CodeInvalidArtifact, "",
 				"The provider reply contained a solution and was discarded.",
-				field+": the reply reveals a stored solution, so it was not returned")
+				field+": the reply reveals a known solution, so it was not returned")
 		}
 	}
 	return nil
@@ -399,28 +432,6 @@ func (s *Service) prepareScratch(ctx context.Context, ex engine.Executor, art sc
 	limits := s.cfg.Limits
 	p := newPipeline(s, schema.GenerationRequest{Kind: "challenge"}, limits)
 	return p.prepare(ctx, ex, art)
-}
-
-// tutorPrompt renders the hint request from the learner's own material: SQL,
-// objective, the error context, and the requested level.
-func tutorPrompt(req TutorRequest, level int) string {
-	var b strings.Builder
-	b.WriteString("Learner SQL:\n")
-	b.WriteString(req.SQL)
-	b.WriteString("\nObjective:\n")
-	b.WriteString(req.Objective)
-	b.WriteString("\n" + hintLevelLine(level) + "\n")
-	if req.ErrorCode != "" {
-		b.WriteString("Error code: " + req.ErrorCode + "\n")
-	}
-	if req.ErrorMessage != "" {
-		b.WriteString("Error message: " + req.ErrorMessage + "\n")
-	}
-	if req.ResultSummary != "" {
-		b.WriteString("Result summary: " + req.ResultSummary + "\n")
-	}
-	b.WriteString("Give one hint at that level. Do not write the full solution.")
-	return b.String()
 }
 
 // hintLevelPrefix is the one spelling of the hint level. The tutor prompt writes

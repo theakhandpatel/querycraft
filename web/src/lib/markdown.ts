@@ -4,16 +4,16 @@ import { Marked, Renderer, type Tokens } from 'marked';
 const MERMAID_LANG = 'mermaid';
 const MERMAID_CLASS = 'qc-mermaid';
 
-const HTML_ESCAPES: Record<string, string> = {
-  '&': '&amp;',
-  '<': '&lt;',
-  '>': '&gt;',
-  '"': '&quot;',
-  "'": '&#39;',
-};
+const HTML_ESCAPES = new Map<string, string>([
+  ['&', '&amp;'],
+  ['<', '&lt;'],
+  ['>', '&gt;'],
+  ['"', '&quot;'],
+  ["'", '&#39;'],
+]);
 
 export function escapeHtmlAttribute(value: string): string {
-  return value.replace(/[&<>"']/g, (ch) => HTML_ESCAPES[ch] ?? ch);
+  return value.replace(/[&<>"']/g, (ch) => HTML_ESCAPES.get(ch) ?? ch);
 }
 
 function isMermaidFence(lang: string | undefined): boolean {

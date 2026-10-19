@@ -45,6 +45,7 @@ import (
 	"github.com/jackc/pgx/v5"
 
 	"github.com/querycraft/sqlquery/backend/internal/ai"
+	"github.com/querycraft/sqlquery/backend/internal/aiconfig"
 	"github.com/querycraft/sqlquery/backend/internal/auth"
 	"github.com/querycraft/sqlquery/backend/internal/config"
 	"github.com/querycraft/sqlquery/backend/internal/dataset"
@@ -74,7 +75,7 @@ func run(settings config.Settings) int {
 		MaxBytes:      settings.MaxBytes,
 		TimeoutMS:     settings.TimeoutMS,
 		MaxConcurrent: settings.MaxConcurrent,
-		// Failed sign-in throttling (see login_throttle.go). The defaults are the
+		// Failed sign-in throttling (see auth.NewThrottle). The defaults are the
 		// shipped ones, so an install that sets nothing is still limited.
 		LoginMaxFailures: settings.LoginMaxFailures,
 		LoginWindowMS:    settings.LoginWindowMS,
@@ -394,7 +395,7 @@ func wireAI(ctx context.Context, log *slog.Logger, settings config.Settings, dbs
 	if raw, found, err := dbs.store.Setting(ctx, "ai"); err != nil {
 		log.Warn("could not read the persisted AI setting; the config file's provider stays live", "err", err)
 	} else if found {
-		cfg, err := httpapi.AIConfigFromSetting(raw, aiCfg, log)
+		cfg, err := aiconfig.AIConfigFromSetting(raw, aiCfg, log)
 		if err != nil {
 			log.Warn("the persisted AI setting is not readable; the config file's provider stays live", "err", err)
 		} else {

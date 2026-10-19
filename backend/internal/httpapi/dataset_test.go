@@ -229,7 +229,7 @@ func TestExplainHonoursAnExplicitDataset(t *testing.T) {
 // datasets are different databases, which is what lets a plan lesson CREATE
 // INDEX without touching the challenge tables.
 func TestPerfDatasetIsServedToASignedInLearner(t *testing.T) {
-	srv := pgtest.Start(t)
+	srv := pgtest.Shared(t)
 	ctx, cancel := context.WithTimeout(context.Background(), 4*time.Minute)
 	defer cancel()
 
@@ -256,20 +256,12 @@ func TestPerfDatasetIsServedToASignedInLearner(t *testing.T) {
 	token := signupUser(t, s, "perf-dataset@example.test")
 
 	/* The perf workspace is provisioned on first use: the gateway copies the
-	   large perf template inside the request, and on a loaded machine that
-	   first copy can outlast the request deadline. Retry the first query a
-	   bounded number of times; once the copy exists, the query answers at
-	   once, and the assertions below run against the real result. */
-	var (
-		status int
-		perf   engine.QueryResult
-	)
-	for attempt := 0; attempt < 3; attempt++ {
-		status, perf = queryBody(t, s, token, `{"sql":"SELECT count(*) AS n FROM orders","dataset":"perf"}`)
-		if status == http.StatusOK && perf.Status == "succeeded" {
-			break
-		}
-	}
+	   large perf template inside the request. That copy runs on envdb's own
+	   provisioning deadline, not this request's statement deadline, so one
+	   request provisions and runs. The retry that used to live here papered
+	   over the copy outliving the statement timeout, which cancelled the copy
+	   and left the manager's admin connection closed ("conn closed"). */
+	status, perf := queryBody(t, s, token, `{"sql":"SELECT count(*) AS n FROM orders","dataset":"perf"}`)
 	if status != http.StatusOK || perf.Status != "succeeded" {
 		t.Fatalf("signed-in perf /query: status = %d, result = %+v", status, perf)
 	}
@@ -298,7 +290,7 @@ func TestPerfDatasetIsServedToASignedInLearner(t *testing.T) {
 // lesson reported success and left the learner's re-indexed perf tables exactly
 // as they were.
 func TestEnvironmentResetServesBothDatasets(t *testing.T) {
-	srv := pgtest.Start(t)
+	srv := pgtest.Shared(t)
 	ctx, cancel := context.WithTimeout(context.Background(), 4*time.Minute)
 	defer cancel()
 

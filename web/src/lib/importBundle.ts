@@ -20,6 +20,7 @@
  * export exactly — which is what `scripts/import-audit.mjs` proves.
  */
 import Ajv2020 from 'ajv/dist/2020';
+import type { Schema } from 'effect';
 import exportSchema from '../../../contracts/export.schema.json';
 import type { EventKind, NoteItem, Progress, ProgressEvent, SavedItem } from '../types';
 import { EXPORT_FORMAT_VERSION, type ExportBundle } from './exportBundle';
@@ -64,7 +65,18 @@ interface ImportSuccess {
 export type ImportOutcome = ImportSuccess | ImportFailure;
 
 const ajv = new Ajv2020({ allErrors: true, strict: true });
-const validateAgainstSchema = ajv.compile(exportSchema as Record<string, unknown>);
+const validateAgainstSchema = ajv.compile(exportSchema);
+
+/** A parsed JSON object: the only body the export validator accepts. */
+function isJsonObject(value: Schema.Json): value is Schema.JsonObject {
+  return value !== null && typeof value === 'object' && !Array.isArray(value);
+}
+
+/** The contract predicate. Ajv is the validator; this names the type it proves,
+    so the validated document needs no assertion on the way out. */
+function isExportBundle(value: Schema.JsonObject): value is ExportBundle & Schema.JsonObject {
+  return validateAgainstSchema(value);
+}
 
 function fail(code: ImportErrorCode, message: string): ImportFailure {
   return { ok: false, code, message };
@@ -88,11 +100,11 @@ function describeSchemaError(): string {
  * export: the schema is exact, so a stray credential field is a rejection, not
  * something quietly kept.
  */
-export function validateBundle(raw: unknown): { ok: true; bundle: ExportBundle } | ImportFailure {
-  if (!raw || typeof raw !== 'object' || Array.isArray(raw)) {
+export function validateBundle(raw: Schema.Json): { ok: true; bundle: ExportBundle } | ImportFailure {
+  if (!isJsonObject(raw)) {
     return fail('NOT_A_DOCUMENT', 'This file is not a Querycraft export. Expected a single JSON object.');
   }
-  const claimed = (raw as { format_version?: unknown }).format_version;
+  const claimed = raw.format_version;
   if (!Number.isInteger(claimed)) {
     return fail('NOT_A_DOCUMENT', 'This file has no format_version, so it is not a Querycraft export.');
   }
@@ -105,7 +117,12 @@ export function validateBundle(raw: unknown): { ok: true; bundle: ExportBundle }
   if (!validateAgainstSchema(raw)) {
     return fail('MALFORMED_DOCUMENT', `This export is not readable — ${describeSchemaError()}.`);
   }
-  const bundle = raw as ExportBundle;
+  /* Ajv has just proved the schema; `isExportBundle` is the same call under the
+     contract's name. */
+  if (!isExportBundle(raw)) {
+    return fail('MALFORMED_DOCUMENT', `This export is not readable — ${describeSchemaError()}.`);
+  }
+  const bundle = raw;
   /* A snapshot layout from the future cannot be interpreted, only guessed at. */
   if (bundle.content_versions.progress_version > PROGRESS_VERSION) {
     return fail(
@@ -118,7 +135,7 @@ export function validateBundle(raw: unknown): { ok: true; bundle: ExportBundle }
 
 /** Parse the file's text, then validate it. Never throws. */
 export function readImport(text: string): { ok: true; bundle: ExportBundle } | ImportFailure {
-  let raw: unknown;
+  let raw: Schema.Json;
   try {
     raw = JSON.parse(text);
   } catch (e) {
@@ -157,17 +174,17 @@ function savedKey(s: { course: string; lesson: number; name: string; sql?: strin
 }
 
 /** True wins on a union, so importing can never un-pass or un-complete anything. */
-function unionFlags(a: Record<string, boolean>, b: Record<string, boolean>): Record<string, boolean> {
-  const out: Record<string, boolean> = { ...a };
+function unionFlags(a: Record<string, boolean>, b: Record<string, boolean>) {
+  const out = { ...a };
   for (const [k, v] of Object.entries(b)) out[k] = !!out[k] || !!v;
   return out;
 }
 
 /** Study time is only ever added to, and re-importing the same export must not
     double it, so the merge takes the larger measured total per course. */
-function unionTime(a: Record<string, number>, b: Record<string, number>): Record<string, number> {
+function unionTime(a: Record<string, number>, b: Record<string, number>) {
   if (Object.keys(a).length === 0) return { ...b };
-  const out: Record<string, number> = { ...a };
+  const out = { ...a };
   for (const [k, v] of Object.entries(b)) out[k] = Math.max(out[k] ?? 0, v);
   return out;
 }
@@ -265,11 +282,8 @@ function mergeProgress(current: Progress, incoming: Progress): MergeResult {
  * screen right now is the learner's latest, so an import only fills cells that
  * have no draft yet.
  */
-function mergeDrafts(
-  current: Record<string, string>,
-  incoming: Record<string, string>,
-): { drafts: Record<string, string>; filled: number } {
-  const drafts: Record<string, string> = { ...incoming, ...current };
+function mergeDrafts(current: Record<string, string>, incoming: Record<string, string>) {
+  const drafts = { ...incoming, ...current };
   const filled = Object.keys(incoming).filter((k) => incoming[k] !== '' && (current[k] === undefined || current[k] === '')).length;
   return { drafts, filled };
 }

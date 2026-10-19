@@ -22,6 +22,11 @@
  *   QC_GATEWAY=http://localhost:18077 node scripts/adversarial-audit.mjs
  *   node scripts/adversarial-audit.mjs --markdown   # print the results table
  *
+ * The ten named cases are followed by a seeded fuzz phase. `FUZZ_SEED` changes
+ * the generation (the default is printed in the run banner) and `FUZZ_CASES`
+ * changes the count. A failing case prints the seed and the input that produced
+ * it, so one line reproduces it exactly.
+ *
  * `docs/adversarial-suite.md` is the published result of a run of this script,
  * including the cases that are not protected.
  */
@@ -46,6 +51,7 @@ const CLOSED_CODES = new Set([
   'QUERY_TIMEOUT',
   'RESULT_LIMIT_EXCEEDED',
   'ENVIRONMENT_UNAVAILABLE',
+  'DIALECT_MISMATCH',
   'PERSISTENCE_FAILED',
   'EVALUATION_ERROR',
 ]);
@@ -405,6 +411,381 @@ async function caseRunawayWhileServing(maxConcurrent) {
     `${summarize(run)}; health and a real query both 200 during the run`, `${run.elapsedMS} ms`, 'yes');
 }
 
+/* ---------- seeded resource-exhaustion fuzz phase ---------- */
+
+const FUZZ_SEED = Number.isFinite(Number.parseInt(process.env.FUZZ_SEED ?? '', 10))
+  ? Number.parseInt(process.env.FUZZ_SEED, 10)
+  : 20261019;
+const FUZZ_CASES = Math.max(1, Number.parseInt(process.env.FUZZ_CASES ?? '40', 10) || 40);
+
+const fuzzSummary = { cases: 0, seed: FUZZ_SEED, failures: 0, generators: new Set(), elapsedMS: 0 };
+
+/** mulberry32 is a small deterministic PRNG: one integer in, one stream out. */
+function mulberry32(seed) {
+  let a = seed >>> 0;
+  return function next() {
+    a = (a + 0x6d2b79f5) >>> 0;
+    let t = a;
+    t = Math.imul(t ^ (t >>> 15), t | 1);
+    t ^= t + Math.imul(t ^ (t >>> 7), t | 61);
+    return ((t ^ (t >>> 14)) >>> 0) / 4294967296;
+  };
+}
+
+const pick = (rand, values) => values[Math.floor(rand() * values.length)];
+const randInt = (rand, lo, hi) => lo + Math.floor(rand() * (hi - lo + 1));
+
+/**
+ * SQL generators. Each returns a complete request body, a client bound and,
+ * when it asks for a row cap, the cap the response must honour. Every one stays
+ * below the gateway's 8 MiB body limit; the timeout is short because a bounded
+ * outcome is the claim, not a fast one.
+ */
+const SQL_GENERATORS = [
+  (rand) => {
+    const depth = randInt(rand, 200, 700);
+    return {
+      label: 'deep parenthesis nesting',
+      sql: 'select ' + '('.repeat(depth) + '1' + ')'.repeat(depth),
+      limits: { timeout_ms: 800 },
+      bound: 5000,
+    };
+  },
+  (rand) => {
+    const n = randInt(rand, 5000, 20000);
+    const items = Array.from({ length: n }, (_, i) => String(i + 1)).join(',');
+    return {
+      label: 'very long IN list',
+      sql: `select 1 as v where 1 in (${items})`,
+      limits: { timeout_ms: 1500 },
+      bound: 6000,
+    };
+  },
+  (rand) => {
+    const arms = randInt(rand, 400, 1200);
+    const sql = Array.from({ length: arms }, (_, i) => `select ${i + 1} as v`).join(' union all ');
+    const maxRows = randInt(rand, 20, 60);
+    return {
+      label: 'many UNION ALL arms',
+      sql,
+      limits: { max_rows: maxRows, timeout_ms: 3000 },
+      maxRows,
+      bound: 6000,
+    };
+  },
+  (rand) => {
+    const size = randInt(rand, 1_200_000, 3_000_000);
+    return {
+      label: 'multi-megabyte string literal',
+      sql: "select '" + 'a'.repeat(size) + "' as blob",
+      limits: { timeout_ms: 3000 },
+      bound: 8000,
+    };
+  },
+  (rand) => {
+    const depth = randInt(rand, 120, 500);
+    return {
+      label: 'deeply nested subqueries',
+      sql: 'select ' + '(select '.repeat(depth) + '1' + ')'.repeat(depth),
+      limits: { timeout_ms: 800 },
+      bound: 5000,
+    };
+  },
+  (rand) => {
+    const tokens = ['select', 'from', 'where', '(', ')', ',', ';', '--', '/*', '*/', "'", '$$',
+      'λ', '漢字', '🙂', '\\u0000', '\\x00', 'nul', '1', '+', '*', '::int', '"x"'];
+    const n = randInt(rand, 80, 400);
+    let sql = '';
+    for (let i = 0; i < n; i++) sql += pick(rand, tokens) + ' ';
+    return { label: 'random token soup', sql, limits: { timeout_ms: 600 }, bound: 5000 };
+  },
+  (rand) => {
+    const huge = ['1000000000', '999999999999', '9223372036854775807'];
+    const limit = pick(rand, huge);
+    const offset = pick(rand, huge);
+    return {
+      label: 'huge LIMIT/OFFSET',
+      sql: `select x from generate_series(1, 1000) x limit ${limit} offset ${offset}`,
+      limits: { timeout_ms: 1000 },
+      bound: 5000,
+    };
+  },
+  (rand) => {
+    const a = randInt(rand, 80, 3000);
+    const b = randInt(rand, 80, 3000);
+    const maxRows = randInt(rand, 25, 100);
+    return {
+      label: 'random generate_series cross join',
+      sql: `select a.n, b.n from generate_series(1, ${a}) as a(n), generate_series(1, ${b}) as b(n)`,
+      limits: { max_rows: maxRows, timeout_ms: 3000 },
+      maxRows,
+      bound: 7000,
+    };
+  },
+  (rand) => {
+    const maxRows = randInt(rand, 30, 90);
+    return {
+      label: 'recursive CTE, streamed',
+      sql: 'with recursive t(n) as (select 1 union all select n + 1 from t) select n from t',
+      limits: { max_rows: maxRows, timeout_ms: 2000 },
+      maxRows,
+      bound: 6000,
+    };
+  },
+  (rand) => ({
+    label: 'recursive CTE behind an aggregate',
+    sql: 'select count(*) from (with recursive t(n) as (select 1 union all select n + 1 from t) select n from t) s',
+    limits: { timeout_ms: randInt(rand, 400, 800) },
+    bound: 6000,
+  }),
+  (rand) => {
+    const n = randInt(rand, 20, 100);
+    const sql = Array.from({ length: n }, (_, i) => `select ${i + 1} as v;`).join(' ');
+    return { label: 'multi-statement script', sql, limits: { timeout_ms: 2000 }, bound: 6000 };
+  },
+];
+
+// The oversized body is the only allocation above 8 MiB, built once and reused
+// by every run of that case. `fetch` gets the string directly, so nothing copies
+// it into a second JSON encoding.
+let oversizedBody = null;
+function getOversizedBody() {
+  if (oversizedBody === null) oversizedBody = '{"sql":"' + 'x'.repeat(9 << 20) + '"}';
+  return oversizedBody;
+}
+
+/**
+ * Raw request generators. These do not produce SQL; they probe the decoder and
+ * the limit merge before a statement ever runs.
+ */
+const RAW_GENERATORS = [
+  (rand) => ({
+    label: 'malformed JSON',
+    payload: pick(rand, ['{"sql": "select 1"', '{"sql":}', 'not json at all', '{"sql":"select 1",}']),
+    bound: 5000,
+  }),
+  () => ({ label: 'wrong field type (sql is a number)', payload: '{"sql":42}', bound: 5000 }),
+  () => ({
+    label: 'wrong limit type (max_rows is a string)',
+    payload: '{"sql":"select 1","limits":{"max_rows":"ten"}}',
+    bound: 5000,
+  }),
+  () => ({
+    label: 'negative limits',
+    payload: { sql: 'select generate_series(1, 10)', limits: { max_rows: -5, max_bytes: -1, timeout_ms: -100 } },
+    bound: 5000,
+  }),
+  () => ({
+    label: 'huge limits (clamped to the server caps)',
+    payload: {
+      sql: 'select generate_series(1, 100000)',
+      limits: { max_rows: 1e12, max_bytes: 1e12, timeout_ms: 1e9 },
+    },
+    maxRows: 500,
+    bound: 6000,
+  }),
+  () => ({
+    label: 'deeply nested JSON',
+    payload: '{"sql":"select 1","junk":' + '['.repeat(12000) + ']'.repeat(12000) + '}',
+    bound: 5000,
+  }),
+  () => ({
+    label: 'unknown fields',
+    payload: {
+      sql: 'select 1 as ok',
+      limits: { max_rows: 5, bogus_limit: true },
+      extra: { nested: [1, 2, 3] },
+      exercise: { nonsense: true },
+    },
+    bound: 5000,
+  }),
+  () => ({
+    label: 'huge dataset name',
+    payload: { sql: 'select 1', dataset: 'd'.repeat(100_000) },
+    bound: 6000,
+  }),
+  () => ({
+    label: 'huge dialect name',
+    payload: { sql: 'select 1', dialect: 'd'.repeat(100_000) },
+    bound: 6000,
+  }),
+  () => ({
+    label: 'duplicate keys',
+    payload: '{"sql":"select 1 as first","sql":"select 2 as second"}',
+    bound: 5000,
+  }),
+  () => ({ label: 'oversized body (9 MiB)', payload: getOversizedBody(), bound: 15_000 }),
+];
+
+/** truncateInput keeps a failure readable without dumping a multi-MB body. */
+function truncateInput(text, max = 600) {
+  const value = String(text);
+  return value.length > max ? `${value.slice(0, max)}… (${value.length} chars)` : value;
+}
+
+/** describePayload prints the shape that failed, with the long parts shortened. */
+function describePayload(payload) {
+  if (typeof payload === 'string') return truncateInput(payload);
+  if (payload && typeof payload === 'object') {
+    const copy = { ...payload };
+    if (typeof copy.sql === 'string') copy.sql = truncateInput(copy.sql, 400);
+    if (typeof copy.dataset === 'string') copy.dataset = truncateInput(copy.dataset, 80);
+    if (typeof copy.dialect === 'string') copy.dialect = truncateInput(copy.dialect, 80);
+    return truncateInput(JSON.stringify(copy), 800);
+  }
+  return String(payload);
+}
+
+/**
+ * fuzzCase sends one generated request and checks the same bounded-outcome rule
+ * as runCase, without a health probe per case: the batch probes below cover it.
+ */
+async function fuzzCase(spec, index) {
+  const name = `fuzz ${index + 1} ${spec.label}`;
+  const started = Date.now();
+  let res;
+  try {
+    res = await postJSON(`${base}/query`, spec.payload, spec.bound + 5000);
+  } catch (err) {
+    res = { error: err.message };
+  }
+  const elapsed = Date.now() - started;
+  const failuresBefore = r.failed;
+
+  r.check(`${name}: returned`, !res.error, res.error);
+  r.check(`${name}: within ${spec.bound} ms`, elapsed <= spec.bound, `${elapsed} ms`);
+  r.check(`${name}: not a 5xx`, !res.error && res.status < 500, res.status);
+  r.check(`${name}: body decoded`, res.json !== null, truncateInput(res.body ?? '', 120));
+  const succeeded = res.json?.status === 'succeeded';
+  const code = res.json?.error?.code;
+  r.check(`${name}: outcome is succeeded or a contract code`, succeeded || CLOSED_CODES.has(code), code ?? res.json?.status);
+  if (spec.maxRows) {
+    r.check(`${name}: truncated at max_rows ${spec.maxRows}`,
+      succeeded && res.json?.truncated === true && res.json?.row_count === spec.maxRows,
+      succeeded ? { truncated: res.json.truncated, row_count: res.json.row_count } : code);
+    r.check(`${name}: body stays small`, res.body.length < 200_000, res.body.length);
+  }
+
+  if (r.failed > failuresBefore) {
+    fuzzSummary.failures += r.failed - failuresBefore;
+    console.log(`  seed=${FUZZ_SEED} case=${index + 1} input=${describePayload(spec.payload)}`);
+  }
+  fuzzSummary.cases++;
+  fuzzSummary.generators.add(spec.label);
+  return res;
+}
+
+/**
+ * fuzzConcurrency fills the admission budget and then asks for two more, so the
+ * waiting requests must time out rather than queue forever. Afterwards a normal
+ * statement must still run.
+ */
+async function fuzzConcurrency(maxConcurrent) {
+  const count = maxConcurrent + 2;
+  const name = `fuzz concurrency (${count} heavy statements)`;
+  const payload = {
+    sql: 'select count(*) from generate_series(1, 50000) a, generate_series(1, 50000) b',
+    limits: { timeout_ms: 300 },
+  };
+  const bound = 8000;
+  const started = Date.now();
+  const results = await Promise.all(Array.from({ length: count }, async () => {
+    const sent = Date.now();
+    try {
+      const res = await postJSON(`${base}/query`, payload, bound + 7000);
+      return { ...res, elapsedMS: Date.now() - sent };
+    } catch (err) {
+      return { error: err.message, elapsedMS: Date.now() - sent };
+    }
+  }));
+  const elapsed = Date.now() - started;
+  const failuresBefore = r.failed;
+
+  r.check(`${name}: all ${count} requests settled`, results.every((res) => !res.error),
+    results.filter((res) => res.error).map((res) => res.error));
+  r.check(`${name}: every request returned within ${bound} ms`, results.every((res) => res.elapsedMS <= bound),
+    results.map((res) => res.elapsedMS).sort((a, b) => b - a).slice(0, 3));
+  r.check(`${name}: no response was a 5xx`, results.every((res) => !res.error && res.status < 500),
+    results.filter((res) => res.error || res.status >= 500).length);
+  r.check(`${name}: every body decoded`, results.every((res) => res.json !== null),
+    results.filter((res) => res.json === null).length);
+  r.check(`${name}: every outcome is succeeded or a contract code`,
+    results.every((res) => res.json?.status === 'succeeded' || CLOSED_CODES.has(res.json?.error?.code)),
+    results.map((res) => res.json?.error?.code ?? res.json?.status).filter(Boolean).slice(0, 5));
+  const health = await healthy();
+  r.check(`${name}: a normal query is answered afterwards`, health === '', health);
+
+  if (r.failed > failuresBefore) {
+    fuzzSummary.failures += r.failed - failuresBefore;
+    console.log(`  seed=${FUZZ_SEED} input=${describePayload(payload)} (${count} concurrent)`);
+  }
+  fuzzSummary.cases++;
+  fuzzSummary.generators.add('concurrency burst');
+}
+
+/**
+ * planFuzz guarantees at least one case per generator before it repeats. A
+ * seeded shuffle decides the order, so a failure's case number is repeatable.
+ */
+function planFuzz(seed, requested) {
+  const rand = mulberry32(seed);
+  const base = [
+    ...SQL_GENERATORS.map((make) => ({ kind: 'sql', make })),
+    ...RAW_GENERATORS.map((make) => ({ kind: 'raw', make })),
+  ];
+  for (let i = base.length - 1; i > 0; i--) {
+    const j = Math.floor(rand() * (i + 1));
+    [base[i], base[j]] = [base[j], base[i]];
+  }
+  const total = Math.max(requested, base.length + 1);
+  const plan = [];
+  for (let i = 0; i < total; i++) {
+    if (i === total - 1) plan.push({ kind: 'concurrency' });
+    else if (i < base.length) plan.push(base[i]);
+    else plan.push(base[Math.floor(rand() * base.length)]);
+  }
+  return plan;
+}
+
+async function caseFuzz(maxConcurrent) {
+  r.section(`fuzz. seeded resource exhaustion (seed ${FUZZ_SEED})`);
+  const plan = planFuzz(FUZZ_SEED, FUZZ_CASES);
+  const started = Date.now();
+  console.log(`fuzz:    seed ${FUZZ_SEED}, ${plan.length} cases (FUZZ_SEED / FUZZ_CASES override)`);
+
+  const rand = mulberry32(FUZZ_SEED ^ 0x9e3779b9);
+  let batch = 0;
+  for (let i = 0; i < plan.length; i++) {
+    const entry = plan[i];
+    if (entry.kind === 'concurrency') {
+      await fuzzConcurrency(maxConcurrent);
+      continue;
+    }
+    const generated = entry.make(rand);
+    const spec = entry.kind === 'sql'
+      ? {
+        label: generated.label,
+        payload: generated.limits ? { sql: generated.sql, limits: generated.limits } : { sql: generated.sql },
+        maxRows: generated.maxRows,
+        bound: generated.bound,
+      }
+      : { label: generated.label, payload: generated.payload, maxRows: generated.maxRows, bound: generated.bound };
+    await fuzzCase(spec, i);
+    if ((i + 1) % 10 === 0) {
+      batch++;
+      const health = await healthy();
+      r.check(`fuzz batch ${batch}: service healthy`, health === '', health);
+      if (health !== '') fuzzSummary.failures++;
+    }
+  }
+
+  const health = await healthy();
+  r.check('fuzz: service healthy at the end', health === '', health);
+  if (health !== '') fuzzSummary.failures++;
+  fuzzSummary.elapsedMS = Date.now() - started;
+  console.log(`fuzz:    ${fuzzSummary.cases} cases, ${fuzzSummary.failures} failure(s), ${(fuzzSummary.elapsedMS / 1000).toFixed(1)} s`);
+}
+
 async function datasetIntegrity() {
   r.section('dataset integrity after all cases');
   const counts = await ask(
@@ -455,6 +836,7 @@ try {
   await caseLargeValues();
   await caseConnectionExhaustion(maxConcurrent, learner.token);
   await caseRunawayWhileServing(maxConcurrent);
+  await caseFuzz(maxConcurrent);
   await datasetIntegrity();
 } catch (err) {
   r.failed++;
@@ -466,5 +848,15 @@ try {
 if (markdown) {
   console.log('\n--- markdown ---');
   console.log(r.markdownTable(['Case', 'What it sends', 'Observed outcome', 'Time', 'Healthy after']));
+  if (fuzzSummary.cases > 0) {
+    console.log('\n### Resource-exhaustion fuzzing\n');
+    console.log('| Metric | Value |');
+    console.log('| --- | --- |');
+    console.log(`| Cases | ${fuzzSummary.cases} |`);
+    console.log(`| Seed | ${fuzzSummary.seed} |`);
+    console.log(`| Failures | ${fuzzSummary.failures} |`);
+    console.log(`| Duration | ${(fuzzSummary.elapsedMS / 1000).toFixed(1)} s |`);
+    console.log(`| Generators exercised | ${[...fuzzSummary.generators].join(', ')} |`);
+  }
 }
 r.finish();

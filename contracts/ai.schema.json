@@ -15,7 +15,8 @@
         "AI_NOT_FOUND",
         "AI_PATCH_UNVERIFIED",
         "AI_PATCH_UNAPPROVED",
-        "ENVIRONMENT_UNAVAILABLE"
+        "ENVIRONMENT_UNAVAILABLE",
+        "AI_RATE_LIMITED"
       ]
     },
     "error": {
@@ -194,35 +195,71 @@
         }
       }
     },
+    "tutorTurn": {
+      "description": "One message in a tutor conversation, oldest first. `role` is learner or tutor; `text` is untrusted prose, fenced and marker-stripped before the provider sees it.",
+      "type": "object",
+      "required": ["role", "text"],
+      "properties": {
+        "role": { "enum": ["learner", "tutor"] },
+        "text": { "type": "string" }
+      }
+    },
+    "tutorContext": {
+      "description": "The gateway's summary of what the tutor saw. The drawer renders this instead of guessing. `expected` is included, columns_only or unavailable; `learner_result` is ran, error, not_run or unavailable. Expected rows appear only after the learner has attempted the exercise.",
+      "type": "object",
+      "required": ["exercise_id", "dataset", "dialect", "tables", "tables_truncated", "expected", "expected_columns", "expected_rows", "learner_result"],
+      "properties": {
+        "exercise_id": { "type": "string" },
+        "dataset": { "type": "string" },
+        "dialect": { "type": "string" },
+        "tables": { "type": "array", "items": { "type": "string" } },
+        "tables_truncated": { "type": "boolean" },
+        "expected": { "enum": ["included", "columns_only", "unavailable"] },
+        "expected_columns": { "type": "integer", "minimum": 0 },
+        "expected_rows": { "type": "integer", "minimum": 0 },
+        "learner_result": { "enum": ["ran", "error", "not_run", "unavailable"] }
+      }
+    },
     "tutorRequest": {
+      "description": "The facts the client sends. The gateway derives the context: it runs the learner's SQL and the reference itself, reads the dataset schema, and keeps the reference query only to check a reply. A client that sends rows it claims the engine returned has them ignored.",
       "type": "object",
       "required": ["sql", "objective"],
       "properties": {
         "challenge_id": { "type": "string" },
+        "course_id": { "type": "string" },
+        "exercise_id": { "type": "string" },
         "sql": { "type": "string" },
         "objective": { "type": "string" },
         "error_code": { "type": "string" },
         "error_message": { "type": "string" },
         "hint_level": { "type": "integer", "minimum": 0, "maximum": 3 },
-        "result_summary": { "type": "string" }
+        "result_summary": { "type": "string" },
+        "dataset": { "type": "string" },
+        "dialect": { "enum": ["postgresql", "sqlite"] },
+        "turns": { "type": "array", "items": { "$ref": "#/$defs/tutorTurn" } },
+        "exercise": {
+          "type": "object",
+          "description": "The contracts/exercise.schema.json bundle when the exercise is not a stored record. A conversation must name one exercise source: this, or course_id with exercise_id, or challenge_id. A zero-turn hint may omit all three and uses the learner's own material alone."
+        }
       }
     },
     "tutorResponse": {
-      "description": "Tutoring never contains the reference solution; `reveals_solution` must be false, and the service refuses to emit a response that trips it.",
+      "description": "Tutoring never contains the reference query; `reveals_solution` must be false, and the service refuses to emit a response that trips it. `context` summarises the assembled context so the drawer can show what the tutor saw.",
       "type": "object",
       "required": ["message", "hint_level", "reveals_solution"],
       "properties": {
         "message": { "type": "string" },
         "hint_level": { "type": "integer", "minimum": 0, "maximum": 3 },
         "reveals_solution": { "type": "boolean" },
-        "provenance": { "$ref": "#/$defs/provenance" }
+        "provenance": { "$ref": "#/$defs/provenance" },
+        "context": { "$ref": "#/$defs/tutorContext" }
       }
     },
     "defectReport": {
+      "description": "The learner's defect claim. The challenge id comes from the route path and is never read from the body.",
       "type": "object",
-      "required": ["challenge_id", "description"],
+      "required": ["description"],
       "properties": {
-        "challenge_id": { "type": "string" },
         "description": { "type": "string" },
         "sql": { "type": "string" },
         "expected": { "type": "string" },
@@ -264,12 +301,11 @@
       }
     },
     "patchDecision": {
+      "description": "The learner's approval. The patch id comes from the route path and the approver from the session, so neither is read from the body.",
       "type": "object",
-      "required": ["patch_id", "approved", "approved_by"],
+      "required": ["approved"],
       "properties": {
-        "patch_id": { "type": "string" },
-        "approved": { "type": "boolean" },
-        "approved_by": { "type": "string" }
+        "approved": { "type": "boolean" }
       }
     },
     "record": {

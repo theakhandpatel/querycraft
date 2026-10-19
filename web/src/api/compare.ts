@@ -32,7 +32,8 @@ interface NormalizedContract {
 /** Unknown or empty enum values default per §6.1: order ignored, duplicates preserved. */
 function normalizeContract(contract?: Partial<ResultContract> | null): NormalizedContract {
   const c = contract || {};
-  const tolerance = typeof c.numeric_tolerance === 'number' && c.numeric_tolerance > 0 ? c.numeric_tolerance : 0;
+  const declared = c.numeric_tolerance;
+  const tolerance = declared != null && declared > 0 ? declared : 0;
   return {
     columns: Array.isArray(c.columns) ? c.columns.slice() : [],
     columnOrder: c.column_order === 'exact' ? 'exact' : 'ignored',
@@ -44,10 +45,25 @@ function normalizeContract(contract?: Partial<ResultContract> | null): Normalize
 
 const DECIMAL = /^[+-]?(\d+(\.\d*)?|\.\d+)([eE][+-]?\d+)?$/;
 
+/* RowValue is the closed scalar union every adapter decodes before a row
+   reaches the comparator, so each branch is a type guard on that domain, not a
+   `typeof` narrowing a representation. `pglite.normalizeValue` has already
+   turned a bigint into a number or a string, so no bigint branch is needed. */
+function isNumber(v: RowValue): v is number {
+  return typeof v === 'number';
+}
+
+function isString(v: RowValue): v is string {
+  return typeof v === 'string';
+}
+
+function isBoolean(v: RowValue): v is boolean {
+  return typeof v === 'boolean';
+}
+
 function toNumber(v: RowValue): number | null {
-  if (typeof v === 'number') return Number.isFinite(v) ? v : null;
-  if (typeof v === 'bigint') return Number(v);
-  if (typeof v === 'string') {
+  if (isNumber(v)) return Number.isFinite(v) ? v : null;
+  if (isString(v)) {
     const s = v.trim();
     if (s === '' || !DECIMAL.test(s)) return null;
     const n = Number(s);
@@ -56,13 +72,9 @@ function toNumber(v: RowValue): number | null {
   return null;
 }
 
-function isNumericValue(v: RowValue): boolean {
-  return typeof v === 'number' || typeof v === 'bigint';
-}
-
 function toBool(v: RowValue): boolean | null {
-  if (typeof v === 'boolean') return v;
-  if (typeof v === 'string') {
+  if (isBoolean(v)) return v;
+  if (isString(v)) {
     const s = v.trim().toLowerCase();
     if (s === 'true' || s === 't' || s === '1') return true;
     if (s === 'false' || s === 'f' || s === '0') return false;
@@ -75,7 +87,7 @@ function toBool(v: RowValue): boolean | null {
    so genuine text is never normalized ("042" != "42"). */
 function valueEqual(a: RowValue, b: RowValue, tolerance: number): boolean {
   if (a === null || b === null) return a === null && b === null;
-  if (isNumericValue(a) || isNumericValue(b)) {
+  if (isNumber(a) || isNumber(b)) {
     const an = toNumber(a);
     const bn = toNumber(b);
     if (an !== null && bn !== null) {
@@ -87,7 +99,7 @@ function valueEqual(a: RowValue, b: RowValue, tolerance: number): boolean {
   const ab = toBool(a);
   const bb = toBool(b);
   if (ab !== null && bb !== null) return ab === bb;
-  if (typeof a === 'string' && typeof b === 'string') return a === b;
+  if (isString(a) && isString(b)) return a === b;
   return a === b;
 }
 
@@ -117,7 +129,7 @@ function multisetEqual(expected: RowValue[][], actual: RowValue[][], tolerance: 
     return expSet.every((e) => containsRow(actSet, e, tolerance));
   }
   if (expected.length !== actual.length) return false;
-  const used = new Array<boolean>(actual.length).fill(false);
+  const used = Array.from({ length: actual.length }, () => false);
   for (const e of expected) {
     let found = false;
     for (let j = 0; j < actual.length; j++) {
@@ -143,20 +155,29 @@ function dedupe(codes: string[]): string[] {
   return [...new Set(codes)];
 }
 
-function matchColumns(want: string[], got: string[], order: 'exact' | 'ignored'): { ok: boolean; codes: string[] } {
+/** Whether the column names (and, when exact, their order) match, and the codes
+    that say how they did not. Named, so the return contract is a type the
+    comparator owns rather than an anonymous object literal. */
+interface ColumnMatch {
+  ok: boolean;
+  codes: string[];
+}
+
+function matchColumns(want: string[], got: string[], order: 'exact' | 'ignored'): ColumnMatch {
   if (want.length !== got.length) return { ok: false, codes: [CODE_COLUMN] };
   if (order === 'exact') {
     const codes: string[] = [];
+    const gotSet = new Set(got);
     for (let i = 0; i < want.length; i++) {
       if (want[i] !== got[i]) {
         codes.push(CODE_COLUMN);
-        if (got.includes(want[i])) codes.push(CODE_COLUMN_ORDER);
+        if (gotSet.has(want[i])) codes.push(CODE_COLUMN_ORDER);
       }
     }
     if (codes.length > 0) return { ok: false, codes: dedupe(codes) };
     return { ok: true, codes: [] };
   }
-  const used = new Array<boolean>(got.length).fill(false);
+  const used = Array.from({ length: got.length }, () => false);
   for (const w of want) {
     let found = false;
     for (let j = 0; j < got.length; j++) {
@@ -174,7 +195,7 @@ function matchColumns(want: string[], got: string[], order: 'exact' | 'ignored')
 /** For each expected column, the index of the matching actual column. */
 function alignColumns(want: string[], got: string[], order: 'exact' | 'ignored'): number[] {
   if (order === 'exact') return want.map((_, i) => i);
-  const used = new Array<boolean>(got.length).fill(false);
+  const used = Array.from({ length: got.length }, () => false);
   return want.map((w) => {
     for (let j = 0; j < got.length; j++) {
       if (!used[j] && got[j] === w) {
@@ -260,7 +281,7 @@ export function compareResult(expected: ExpectedResult, contract: Partial<Result
   if (expected.rows.length !== actRows.length) {
     return { ...base, ok: false, codes: [CODE_ROW_COUNT], rowsCountOk: false, valuesOk: null };
   }
-  const used = new Array<boolean>(actRows.length).fill(false);
+  const used = Array.from({ length: actRows.length }, () => false);
   for (const e of expected.rows) {
     let found = false;
     for (let j = 0; j < actRows.length; j++) {

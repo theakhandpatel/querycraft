@@ -5,7 +5,6 @@ import { COURSES } from '../data/curriculum';
 import { BUNDLED_CONTENT } from '../api/content';
 import { buildIndex, groupHits, search, SEARCH_KIND_LABEL } from '../lib/search';
 import type { SearchDoc, SearchKind } from '../lib/search';
-import type { ContentSection } from '../types';
 
 /* One search field for the whole shell (design §10). It searches the catalog
    plus the learner's own workbook, purely client-side in M2: the index is
@@ -21,7 +20,7 @@ export default function SearchBox() {
   const index = useMemo(() => {
     /* The database copy wins where it exists; the bundled markdown is the
        fallback, so search works before/without a content row. */
-    const content: Record<string, ContentSection[]> = { ...BUNDLED_CONTENT };
+    const content = { ...BUNDLED_CONTENT };
     Object.entries(s.content || {}).forEach(([id, sections]) => {
       if (sections && sections.length) content[id] = sections;
     });
@@ -79,13 +78,17 @@ export default function SearchBox() {
     <div className="searchbox" ref={boxRef}>
       <div className="searchfield">
         <Icon name="search" />
+        {/* The results panel only exists while a query is open, so its
+            reference has to appear with it. A permanent aria-controls pointing
+            at an element that is never rendered is an invalid ARIA value (the
+            a11y audit's aria-valid-attr-value). */}
         <input
           ref={inputRef}
           type="search"
           value={query}
           placeholder="Search chapters, exercises, notes…"
           aria-label="Search the course and your workbook"
-          aria-controls="search-results"
+          aria-controls={open && trimmed ? 'search-results' : undefined}
           onChange={(e) => {
             setQuery(e.target.value);
             setOpen(true);

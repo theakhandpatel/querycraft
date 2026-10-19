@@ -8,7 +8,7 @@ import { gradePlan, type PlanBundle, type PlanCheck } from '../api/planContract'
 import { datasetFor } from '../lib/dataset';
 import { dialectLabel } from '../lib/dialect';
 import { servedDialects } from '../lib/dialectChoice';
-import type { Block, CheckResult, Course, CourseModule, QueryResult } from '../types';
+import type { Block, CheckResult, Course, CourseModule, QueryResult, TutorRunState } from '../types';
 
 type Feedback =
   | { kind: 'pending' }
@@ -264,6 +264,18 @@ export default function SqlCell({ block, module: mod, course }: { block: Block; 
     setPlanChecks(null);
     s.toast('Cell reset.');
   }
+  /* Open the Ask tutor drawer for this exercise. The cell hands over its own
+     latest SQL and run state — the drawer mirrors them back and sends them as
+     the facts of the request, never a recomputed guess. */
+  function openTutor() {
+    const run: TutorRunState =
+      qr === null
+        ? { status: 'not_run' }
+        : qr.status === 'succeeded'
+          ? { status: 'ran', rows: qr.row_count }
+          : { status: 'error', code: qr.error?.code ?? 'EVALUATION_ERROR', message: qr.error?.message };
+    s.openTutor({ block, module: mod, course, sql: code, run });
+  }
 
   const lineCount = Math.max(String(starter).split('\n').length, 6);
   const gutter = Array.from({ length: lineCount }, (_, i) => i + 1).join('\n');
@@ -343,6 +355,7 @@ export default function SqlCell({ block, module: mod, course }: { block: Block; 
               ><Icon name="check" />Check answer</button>
               <button className="small ghost" onClick={hint}>Hint</button>
               <button className="small ghost" onClick={solution}>Show solution</button>
+              <button className="small ghost" onClick={openTutor}><Icon name="sparkles" />Ask tutor</button>
               <button className="small ghost" onClick={() => keep(code)}>Keep query</button>
               <button className="small ghost" onClick={reset}><Icon name="refresh" />Reset</button>
             </>
@@ -430,8 +443,8 @@ export default function SqlCell({ block, module: mod, course }: { block: Block; 
 function CheckList({ checks }: { checks: CheckResult[] }) {
   return (
     <ul className="checklist">
-      {checks.map((r, i) => (
-        <li key={i}>
+      {checks.map((r) => (
+        <li key={`${r.code}-${r.label}`}>
           <span className={`mk ${r.ok ? 'ok' : 'no'}`}>{r.ok ? '✓' : '✕'}</span>
           <span>
             {r.label}
@@ -467,6 +480,7 @@ function renderFeedback(fb: Feedback | null, ctx: FeedbackCtx) {
       <div className="fb">
         <div className="fbhead"><Icon name="info" />Hints</div>
         {fb.hints.map((h, i) => (
+          /* Ordered hints from one evaluation; the number is the identity. */
           <p key={i} style={{ margin: '4px 0', color: 'var(--text-2)', fontSize: 13 }}>
             <strong>Hint {i + 1}.</strong> <span dangerouslySetInnerHTML={{ __html: h }} />
           </p>

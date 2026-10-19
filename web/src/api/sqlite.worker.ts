@@ -14,13 +14,39 @@
  * (`./sqlite.ts`, for pages whose policy refuses `new Worker`) runs exactly the
  * same code with exactly the same results.
  */
-import { openWorkspace, type SqliteWorkspace } from './sqliteEngine';
+import { Effect, Option, Schema } from 'effect';
+import {
+  openWorkspace,
+  type EngineFailure,
+  type EngineRows,
+  type EngineTable,
+  type SqliteWorkspace,
+} from './sqliteEngine';
 
 export interface WorkerRequest {
   id: number;
   op: 'open' | 'exec' | 'tables' | 'reset' | 'close';
   args?: unknown[];
 }
+
+/** Every payload a worker reply can carry. `null` is `close`, which reports no
+    value. Named so the binding holds a contract instead of an open `unknown`. */
+type WorkerReply =
+  | { version: string }
+  | { ok: true; value: EngineRows }
+  | { ok: false; error: EngineFailure }
+  | EngineTable[]
+  | { duration_ms: number }
+  | null;
+
+/* A failure that is not the engine's own still has to reach the caller as data.
+   Each leaf tolerates a mistyped field, reading it as absent rather than failing
+   the whole error. */
+const WorkerFailureSchema = Schema.Struct({
+  message: Schema.optional(Schema.String).pipe(
+    Schema.catchDecoding(() => Effect.succeed(Option.some(undefined))),
+  ),
+});
 
 let workspace: SqliteWorkspace | null = null;
 
@@ -33,7 +59,7 @@ self.onmessage = async (event: MessageEvent<WorkerRequest>) => {
   const { id, op, args = [] } = event.data;
   try {
     const ws = await getWorkspace();
-    let value: unknown;
+    let value: WorkerReply;
     switch (op) {
       case 'open':
         value = { version: ws.version };
@@ -60,11 +86,11 @@ self.onmessage = async (event: MessageEvent<WorkerRequest>) => {
     /* A failure that is not the engine's own (a bug here, an out-of-memory
        WASM allocation) still has to reach the caller as data, because the
        caller's job is to report it, not to guess at it. */
-    const err = typeof e === 'object' && e !== null ? (e as { message?: unknown }) : null;
+    const err = Option.getOrNull(Schema.decodeUnknownOption(WorkerFailureSchema)(e));
     postMessage({
       id,
       ok: false,
-      error: { message: typeof err?.message === 'string' ? err.message : String(e), code: null, name: 'WorkerError' },
+      error: { message: err?.message ?? String(e), code: null, name: 'WorkerError' },
     });
   }
 };

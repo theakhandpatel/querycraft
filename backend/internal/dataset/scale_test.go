@@ -19,7 +19,7 @@ import (
 // the seed is worse than no scale at all: the number would be specific,
 // plausible and wrong. This test is what keeps the two in step.
 func TestScaleFactorMatchesTheSeed(t *testing.T) {
-	srv := pgtest.Start(t)
+	srv := pgtest.Shared(t)
 	ctx, cancel := context.WithTimeout(context.Background(), 4*time.Minute)
 	defer cancel()
 

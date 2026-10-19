@@ -3,14 +3,13 @@ package httpapi
 import (
 	"context"
 	"encoding/json"
-	"log/slog"
 	"net/http"
 	"strings"
 	"time"
 
 	"github.com/querycraft/sqlquery/backend/internal/ai"
-	"github.com/querycraft/sqlquery/backend/internal/ai/provider"
 	"github.com/querycraft/sqlquery/backend/internal/ai/provider/piai"
+	"github.com/querycraft/sqlquery/backend/internal/aiconfig"
 )
 
 /*
@@ -30,15 +29,6 @@ import (
 // settingAIKey is the store key the AI configuration persists under.
 const settingAIKey = "ai"
 
-// aiSetting is the persisted shape.
-type aiSetting struct {
-	Provider  string `json:"provider"`
-	BaseURL   string `json:"base_url,omitempty"`
-	Model     string `json:"model,omitempty"`
-	Key       string `json:"key,omitempty"`
-	TimeoutMS int    `json:"timeout_ms,omitempty"`
-}
-
 // aiConfigView is what the admin surface reads. The key is a boolean, by the
 // same rule /health follows for the admin password.
 type aiConfigView struct {
@@ -50,10 +40,6 @@ type aiConfigView struct {
 	TimeoutMS int    `json:"timeout_ms"`
 	Source    string `json:"source"`
 }
-
-// defaultAICallTimeoutMS is the per-call timeout a saved setting gets when it
-// names none. It matches the config file's shipped default.
-const defaultAICallTimeoutMS = 120000
 
 // handleAdminAI implements GET /admin/ai: the effective configuration and
 // where it came from. "database" means an administrator saved it here; "boot"
@@ -72,7 +58,7 @@ func (s *Server) handleAdminAI(w http.ResponseWriter, r *http.Request) {
 func (s *Server) aiConfigView(ctx context.Context) aiConfigView {
 	raw, found, err := s.store.Setting(ctx, settingAIKey)
 	if err == nil && found {
-		var saved aiSetting
+		var saved aiconfig.Setting
 		if jsonErr := json.Unmarshal([]byte(raw), &saved); jsonErr == nil {
 			return aiConfigView{
 				OK:        true,
@@ -108,16 +94,7 @@ func (s *Server) handleAdminAIModels(w http.ResponseWriter, r *http.Request) {
 	if _, ok := s.requireAdmin(w, r); !ok {
 		return
 	}
-	type entry struct {
-		Provider string `json:"provider"`
-		Model    string `json:"model"`
-		Name     string `json:"name"`
-	}
-	out := make([]entry, 0, 1024)
-	for _, c := range piai.Catalog() {
-		out = append(out, entry{Provider: c.Provider, Model: c.Model, Name: c.Name})
-	}
-	writeJSON(w, http.StatusOK, map[string]any{"ok": true, "models": out})
+	writeJSON(w, http.StatusOK, map[string]any{"ok": true, "models": piai.Catalog()})
 }
 
 // badAIRequest writes the one 400 an unusable AI setting gets: the code an AI
@@ -132,7 +109,7 @@ func (s *Server) handleAdminAISave(w http.ResponseWriter, r *http.Request) {
 	if _, ok := s.requireAdmin(w, r); !ok {
 		return
 	}
-	var body aiSetting
+	var body aiconfig.Setting
 	if !readJSON(w, r, &body) {
 		return
 	}
@@ -171,7 +148,7 @@ func (s *Server) handleAdminAISave(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	if body.TimeoutMS == 0 {
-		body.TimeoutMS = defaultAICallTimeoutMS
+		body.TimeoutMS = ai.DefaultCallTimeoutMS
 	}
 
 	// An empty key on a save means "keep what is stored": the key never
@@ -179,7 +156,7 @@ func (s *Server) handleAdminAISave(w http.ResponseWriter, r *http.Request) {
 	// require the admin to retype it, and a fresh install has none to keep.
 	if body.Key == "" {
 		if raw, found, err := s.store.Setting(r.Context(), settingAIKey); err == nil && found {
-			var saved aiSetting
+			var saved aiconfig.Setting
 			if jsonErr := json.Unmarshal([]byte(raw), &saved); jsonErr == nil {
 				body.Key = saved.Key
 			}
@@ -203,7 +180,7 @@ func (s *Server) handleAdminAISave(w http.ResponseWriter, r *http.Request) {
 	if !ok {
 		cfg = ai.Config{}
 	}
-	cfg.Provider = providerFromAISetting(body, s.log)
+	cfg.Provider = aiconfig.ProviderFromAISetting(body, s.log)
 	// The run budget follows the same derivation the boot path uses: at least
 	// one call plus the repair attempts, never shorter than the call itself.
 	// Raising the call timeout raises the run budget; lowering it keeps the
@@ -228,63 +205,4 @@ func (s *Server) handleAdminAISave(w http.ResponseWriter, r *http.Request) {
 		"timeout_ms", body.TimeoutMS,
 	)
 	writeJSON(w, http.StatusOK, s.aiConfigView(r.Context()))
-}
-
-// providerFromAISetting builds the provider a saved setting names. It is the
-// runtime counterpart of the boot path in cmd/api: the same three shapes, the
-// same off-by-default rule, and a misconfiguration that degrades to "off"
-// rather than failing the gateway.
-func providerFromAISetting(s aiSetting, log *slog.Logger) provider.Provider {
-	switch s.Provider {
-	case "fake":
-		return ai.NewFakeProvider()
-	case "openai-compatible":
-		return provider.NewHTTPProvider(provider.HTTPProviderConfig{
-			BaseURL:        s.BaseURL,
-			Model:          s.Model,
-			APIKey:         s.Key,
-			Timeout:        time.Duration(s.TimeoutMS) * time.Millisecond,
-			MaxOutputBytes: provider.DefaultMaxOutputBytes,
-		})
-	case "pi-ai":
-		if s.BaseURL != "" {
-			// A custom OpenAI-compatible server: the model id is the server's own.
-			p, err := piai.New(piai.Config{Model: s.Model, APIKey: s.Key, BaseURL: s.BaseURL, TimeoutMS: s.TimeoutMS, MaxRetries: 2})
-			if err != nil {
-				log.Warn("AI stays off: the pi-ai provider rejected the configuration", "err", err)
-				return nil
-			}
-			return p
-		}
-		// A catalog ref: provider/model resolves against the embedded catalog.
-		ref := strings.SplitN(s.Model, "/", 2)
-		if len(ref) != 2 {
-			log.Warn("AI stays off: the pi-ai provider needs a provider/model model ref", "model", s.Model)
-			return nil
-		}
-		p, err := piai.New(piai.Config{Provider: ref[0], Model: ref[1], APIKey: s.Key, TimeoutMS: s.TimeoutMS, MaxRetries: 2})
-		if err != nil {
-			log.Warn("AI stays off: the pi-ai provider rejected the configuration", "err", err)
-			return nil
-		}
-		return p
-	default: // "off"
-		log.Info("AI generation is off by configuration")
-		return nil
-	}
-}
-
-// AIConfigFromSetting applies a persisted AI setting to a boot configuration:
-// the boot path reads the store's "ai" key through this, so a setting the
-// manage surface saved survives a restart. The base configuration keeps the
-// depot, runner, logger and pipeline limits; only the provider changes. A
-// setting that will not parse is reported rather than applied, so the config
-// file's provider stays live and the reason is in the boot log.
-func AIConfigFromSetting(raw string, base ai.Config, log *slog.Logger) (ai.Config, error) {
-	var saved aiSetting
-	if err := json.Unmarshal([]byte(raw), &saved); err != nil {
-		return base, err
-	}
-	base.Provider = providerFromAISetting(saved, log)
-	return base, nil
 }

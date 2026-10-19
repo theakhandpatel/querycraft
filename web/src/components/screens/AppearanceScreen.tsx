@@ -100,14 +100,16 @@ export default function AppearanceScreen() {
             </select>
           </div>
           <div className="airow">
-            <label aria-hidden="true" />
+            {/* A grid spacer, not a label: it holds the 150px label column so
+                the button lines up with the fields above. */}
+            <span aria-hidden="true" />
             <button className="primary" onClick={saveCustom}>
               {editing ? 'Save theme' : 'Create and apply'}
             </button>
           </div>
           {editing && (
             <div className="airow">
-              <label aria-hidden="true" />
+              <span aria-hidden="true" />
               <button className="small ghost" onClick={() => setEditing(null)}>Cancel edit</button>
             </div>
           )}
@@ -184,10 +186,10 @@ export default function AppearanceScreen() {
           {s.apiLog.length === 0 ? (
             <div className="empty">No requests yet. Run a query or build a course and they appear here.</div>
           ) : (
-            s.apiLog.map((r, i) => {
+            s.apiLog.map((r) => {
               const ok = r.status < 400;
               return (
-                <div className="apireq" key={i}>
+                <div className="apireq" key={`${r.at}-${r.method}-${r.path}-${r.status}`}>
                   <span className="verb">{r.method}</span>
                   <span>{r.path}</span>
                   <span className="ms">{r.ms} ms</span>

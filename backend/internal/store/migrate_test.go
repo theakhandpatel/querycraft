@@ -114,7 +114,7 @@ func TestPostgresMigratesLegacyCourseColumns(t *testing.T) {
 		t.Skip("boots a real PostgreSQL; skipped under -short")
 	}
 	ctx := context.Background()
-	srv := pgtest.Start(t)
+	srv := pgtest.Shared(t)
 	conn, err := pgx.Connect(ctx, srv.DSN)
 	if err != nil {
 		t.Fatal(err)

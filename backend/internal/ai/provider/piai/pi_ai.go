@@ -82,11 +82,13 @@ func New(cfg Config) (*PIAI, error) {
 	return p, nil
 }
 
-// CatalogEntry is one chat model in the embedded catalog.
+// CatalogEntry is one chat model in the embedded catalog. The JSON tags are
+// the admin picker's wire shape, so the catalogue serializes itself and no
+// handler re-tags it.
 type CatalogEntry struct {
-	Provider string
-	Model    string
-	Name     string
+	Provider string `json:"provider"`
+	Model    string `json:"model"`
+	Name     string `json:"name"`
 }
 
 // Catalog lists every chat model pi's embedded catalog knows, sourced from

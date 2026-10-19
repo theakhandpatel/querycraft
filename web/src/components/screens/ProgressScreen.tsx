@@ -77,6 +77,7 @@ export default function ProgressScreen() {
         <div className="card">
           <h2>Attempts this week</h2>
           <div className="bars">
+            {/* A fixed seven-day window; the position is the day. */}
             {data.map((v, i) => (
               <div className="bar" key={i}>
                 <span style={{ height: `${Math.round((v / max) * 100)}%` }}></span>
@@ -92,12 +93,12 @@ export default function ProgressScreen() {
           {recent.length === 0 ? (
             <div className="empty">No attempts in this course yet. Run an exercise and your history appears here.</div>
           ) : (
-            recent.map((e, i) => {
+            recent.map((e) => {
               const label = outcomeLabel(e.kind);
               const cls = outcomeClass(e.kind);
               const stale = staleFor(e);
               return (
-                <div className="reportrow" key={i}>
+                <div className="reportrow" key={`${e.id}-${e.ts}`}>
                   <span><span className={`recdot ${cls}`}></span><span className="mono" style={{ fontSize: 12 }}>{e.id}</span> · {e.title}</span>
                   <span className={cls}>
                     {stale ? <span className="pill subtle" title="The exercise or the dataset changed after this attempt">solved on an earlier version</span> : null}
@@ -129,14 +130,14 @@ export default function ProgressScreen() {
               ))}
             </div>
             <div className="mt-12">
-              {history.map((e, i) => (
-                <div className="reportrow" key={i}>
+              {history.map((e) => (
+                <div className="reportrow" key={`${e.id}-${e.ts}`}>
                   <span>
                     <span className={`recdot ${outcomeClass(e.kind)}`}></span>
                     <span className="mono" style={{ fontSize: 12 }}>{whenLabel(e.ts)}</span> · {e.title}
                   </span>
                   <span className={outcomeClass(e.kind)}>
-                    {typeof e.datasetVersion === 'number' && typeof e.exerciseVersion === 'number' ? (
+                    {e.datasetVersion !== undefined && e.exerciseVersion !== undefined ? (
                       <span className="pill subtle" title="The content versions this attempt was made against">v{e.datasetVersion}.{e.exerciseVersion}</span>
                     ) : (
                       <span className="pill subtle" title="This attempt predates version stamps">unversioned</span>

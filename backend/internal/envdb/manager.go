@@ -68,6 +68,21 @@ const (
 // database it was trying to remove.
 const dropTimeout = 60 * time.Second
 
+// provisionTimeout bounds one provisioning operation: building a sealed
+// template or copying one into an account's environment. It is deliberately
+// not the learner's statement timeout. A statement answers in seconds; the
+// first copy of the perf fixture is seconds of DDL that load can stretch
+// further. A copy that ran under the statement deadline was cancelled
+// mid-flight, which closed the shared admin connection and made every later
+// provisioning statement fail with "conn closed" before it was sent. The two
+// bounds answer different questions, so they are different numbers.
+const provisionTimeout = 2 * time.Minute
+
+// adminAttempts is how many times a provisioning statement is tried before its
+// failure is surfaced. The retry only covers a connection the driver has
+// already closed before sending, so a retry cannot double-apply anything.
+const adminAttempts = 3
+
 // ErrTooManyEnvironments marks a request refused because every environment slot
 // is already in use. It is a typed error rather than a raw PostgreSQL error so
 // the caller can distinguish "the server said no" from "the gateway is full".
@@ -127,11 +142,19 @@ type Facts struct {
 
 // environment is the manager's record of one account's database and pool.
 type environment struct {
-	account   string
-	database  string
-	exec      *engine.PgxExecutor
-	createdAt time.Time
-	lastUsed  time.Time
+	account  string
+	database string
+	exec     *engine.PgxExecutor
+	// setupCourse is the id of the stored course whose setup has already been
+	// applied to this database, or empty for none. It lives on the record
+	// rather than beside it on purpose: Reset and the idle reaper discard the
+	// record, which discards the mark with it, so the fresh copy of the sealed
+	// template is prepared again before its exercises run. The setup statements
+	// are not idempotent (a CREATE TABLE fails on the second run), which is why
+	// the mark exists at all.
+	setupCourse string
+	createdAt   time.Time
+	lastUsed    time.Time
 }
 
 // Manager owns the template and every environment database it has created.
@@ -146,6 +169,11 @@ type Manager struct {
 
 	mu   sync.Mutex
 	envs map[string]*environment
+	// setupMu serialises course preparation. Two prepares for one account must
+	// not both run a setup that is not idempotent, and a prepare does not hold
+	// the state lock while it runs SQL in the environment. A single lock is
+	// enough because a course is prepared once, when it opens.
+	setupMu sync.Mutex
 	// resetAt records the last reset per account. It cannot live on the
 	// `environment` struct: reset drops that record and the next Ensure creates a
 	// fresh one, so a reset time stored there would be lost before Facts could
@@ -236,21 +264,32 @@ func (m *Manager) ensurePerfTemplateLocked(ctx context.Context) error {
 // near-copies drift; one body cannot.
 func (m *Manager) ensureTemplateFromLocked(ctx context.Context, name, label string, load func(context.Context, string) error) error {
 	var exists bool
-	if err := m.admin.QueryRow(ctx,
-		"SELECT EXISTS (SELECT 1 FROM pg_database WHERE datname = $1)", name,
-	).Scan(&exists); err != nil {
+	if err := m.withAdmin(ctx, func(conn *pgx.Conn) error {
+		return conn.QueryRow(ctx,
+			"SELECT EXISTS (SELECT 1 FROM pg_database WHERE datname = $1)", name,
+		).Scan(&exists)
+	}); err != nil {
 		return envErr(fmt.Errorf("look up %s template %q: %w", label, name, err))
 	}
 	if !exists {
 		m.opts.Log.Info("building "+label+" template", "template", name)
-		if err := CreateDatabase(ctx, m.admin, name); err != nil {
+		if err := m.withAdmin(ctx, func(conn *pgx.Conn) error {
+			return CreateDatabase(ctx, conn, name)
+		}); err != nil {
 			return envErr(err)
 		}
 		if err := load(ctx, name); err != nil {
+			// A database with no fixture is not a template: sealing it would
+			// copy an empty database into every environment and fail the
+			// writability probe on each one. Drop the half-built database so
+			// the next call rebuilds it rather than inheriting the failure.
+			m.dropTemplateBestEffort(ctx, name, label)
 			return envErr(err)
 		}
 	}
-	if err := SealTemplate(ctx, m.admin, name); err != nil {
+	if err := m.withAdmin(ctx, func(conn *pgx.Conn) error {
+		return SealTemplate(ctx, conn, name)
+	}); err != nil {
 		return envErr(err)
 	}
 	return nil
@@ -297,6 +336,66 @@ func (m *Manager) Ensure(ctx context.Context, accountID string) (*engine.PgxExec
 // pointing at a dropped database would fail on the very next statement.
 func (m *Manager) Reset(ctx context.Context, accountID string) (time.Duration, error) {
 	return m.reset(ctx, accountID, challengeEnv)
+}
+
+// PrepareCourse applies a stored course's setup to the account's challenge
+// environment once per environment generation, and reports whether it ran.
+//
+// The setup statements are not idempotent: a `CREATE TABLE` fails the second
+// time. The applied mark therefore lives on the environment record, and Reset
+// and the idle reaper clear it by discarding that record. A second call for the
+// same course and the same environment is then a cheap no-op, and a course
+// opened after a reset is prepared again.
+//
+// apply runs only when the setup has not been applied, over the environment's
+// own writable executor, so the caller's statement semantics are the manager's.
+// A failure leaves the mark unset, so a retry runs the setup again rather than
+// reporting a workspace that was never prepared.
+func (m *Manager) PrepareCourse(ctx context.Context, accountID, courseID string, apply func(engine.Executor) error) (bool, error) {
+	if strings.TrimSpace(accountID) == "" {
+		return false, errors.New("envdb: empty account id")
+	}
+	if strings.TrimSpace(courseID) == "" {
+		return false, errors.New("envdb: empty course id")
+	}
+	key := challengeEnv.keyPrefix + digest(accountID)
+	exec, err := m.Ensure(ctx, accountID)
+	if err != nil {
+		return false, err
+	}
+
+	m.setupMu.Lock()
+	defer m.setupMu.Unlock()
+
+	m.mu.Lock()
+	if m.closed {
+		m.mu.Unlock()
+		return false, errClosed()
+	}
+	e, ok := m.envs[key]
+	if !ok {
+		// Ensure returned an executor, so the record exists unless a concurrent
+		// reset or reap dropped it in between. Refuse rather than prepare a
+		// database this call cannot name.
+		m.mu.Unlock()
+		return false, envErr(errors.New("no environment to prepare"))
+	}
+	if e.setupCourse == courseID {
+		m.mu.Unlock()
+		return false, nil
+	}
+	m.mu.Unlock()
+
+	if err := apply(exec); err != nil {
+		return false, err
+	}
+
+	m.mu.Lock()
+	if cur, ok := m.envs[key]; ok {
+		cur.setupCourse = courseID
+	}
+	m.mu.Unlock()
+	return true, nil
 }
 
 // envKind names the two kinds of per-account environment. The challenge
@@ -381,18 +480,23 @@ func (m *Manager) ensure(ctx context.Context, accountID string, kind envKind) (*
 		// mutex across them blocked every other account for the whole first
 		// create (ADR 0002 measured a first drop at ~2.9 s), so they run outside
 		// it, guarded only by this in-flight marker.
+		//
+		// Provisioning runs on its own bounded deadline, not the caller's
+		// statement timeout: a first copy is seconds of DDL and must not be
+		// cancelled by a deadline sized for a SELECT. See provisionContext.
+		pctx, pcancel := provisionContext(ctx)
 		template := kind.template(m)
-		if err := m.ensureTemplateFromLocked(ctx, template, kind.label, kind.load(m)); err != nil {
-			m.mu.Unlock()
-			return nil, err
+		err := m.ensureTemplateFromLocked(pctx, template, kind.label, kind.load(m))
+		var database, dsn string
+		if err == nil {
+			database = kind.database(m, accountID)
+			dsn, err = m.learnerDSN(database)
 		}
-		database := kind.database(m, accountID)
-		dsn, err := m.learnerDSN(database)
+		if err == nil {
+			err = m.createIfAbsentFromLocked(pctx, database, template)
+		}
 		if err != nil {
-			m.mu.Unlock()
-			return nil, err
-		}
-		if err := m.createIfAbsentFromLocked(ctx, database, template); err != nil {
+			pcancel()
 			m.mu.Unlock()
 			return nil, err
 		}
@@ -400,7 +504,8 @@ func (m *Manager) ensure(ctx context.Context, accountID string, kind envKind) (*
 		m.building[key] = done
 		m.mu.Unlock()
 
-		exec, created, buildErr := m.buildEnvironment(ctx, kind, database, dsn)
+		exec, created, buildErr := m.buildEnvironment(pctx, kind, database, dsn)
+		pcancel()
 
 		m.mu.Lock()
 		delete(m.building, key)
@@ -488,7 +593,11 @@ func (m *Manager) reset(ctx context.Context, accountID string, kind envKind) (ti
 			delete(m.envs, key)
 		}
 		template = kind.template(m)
-		if err := m.ensureTemplateFromLocked(ctx, template, kind.label, kind.load(m)); err != nil {
+		// A reset rebuilds from the template, which is the same copy work a
+		// first Ensure does, so it gets the same honest provisioning deadline.
+		pctx, pcancel := provisionContext(ctx)
+		if err := m.ensureTemplateFromLocked(pctx, template, kind.label, kind.load(m)); err != nil {
+			pcancel()
 			m.mu.Unlock()
 			return 0, err
 		}
@@ -506,7 +615,8 @@ func (m *Manager) reset(ctx context.Context, accountID string, kind envKind) (ti
 		m.mu.Unlock()
 
 		start := time.Now()
-		err := m.resetDatabase(ctx, database, template)
+		err := m.resetDatabase(pctx, database, template)
+		pcancel()
 
 		m.mu.Lock()
 		delete(m.building, key)
@@ -557,6 +667,89 @@ func (m *Manager) newAdminConn(ctx context.Context) (*pgx.Conn, error) {
 	return conn, nil
 }
 
+// provisionContext detaches a provisioning operation from the caller's
+// statement deadline while keeping it bounded. A copy must not be killed by a
+// deadline sized for a learner's SELECT, and it must not run forever either.
+// The values (request id, identity) survive; the cancellation does not, so a
+// client that disconnects mid-copy still leaves a usable environment behind.
+func provisionContext(ctx context.Context) (context.Context, context.CancelFunc) {
+	return context.WithTimeout(context.WithoutCancel(ctx), provisionTimeout)
+}
+
+// withAdmin runs op over the shared admin connection, replacing the connection
+// and retrying when the driver reports it was already closed. Callers hold mu,
+// which is what makes the reconnect safe: every use of m.admin is serialised.
+//
+// pgx closes the underlying socket when a query is cancelled mid-flight, and
+// every later statement on that connection then fails with "conn closed"
+// before it is sent. That is exactly what a copy that outlived the statement
+// deadline used to do to the gateway's one admin connection. A failure that
+// happened before the statement reached the server is safe to retry; any other
+// error is returned untouched.
+func (m *Manager) withAdmin(ctx context.Context, op func(*pgx.Conn) error) error {
+	var err error
+	for attempt := 0; attempt < adminAttempts; attempt++ {
+		if m.admin == nil {
+			if err = m.reconnectAdminLocked(ctx); err != nil {
+				return err
+			}
+		}
+		err = op(m.admin)
+		if err == nil {
+			return nil
+		}
+		if !isAdminConnClosed(err) {
+			return err
+		}
+		m.opts.Log.Warn("admin connection was closed; retrying on a fresh one",
+			"attempt", attempt+1, "error", err)
+		_ = m.admin.Close(context.WithoutCancel(ctx))
+		m.admin = nil
+	}
+	if m.admin == nil {
+		// Leave a usable connection behind even when the retries are exhausted,
+		// so a later statement (or the fixture loader) never sees a nil admin.
+		_ = m.reconnectAdminLocked(ctx)
+	}
+	return err
+}
+
+// reconnectAdminLocked replaces the shared admin connection with a fresh one.
+// Callers hold mu.
+func (m *Manager) reconnectAdminLocked(ctx context.Context) error {
+	conn, err := pgx.ConnectConfig(ctx, m.adminCfg)
+	if err != nil {
+		return envErr(fmt.Errorf("reconnect admin: %w", err))
+	}
+	m.admin = conn
+	return nil
+}
+
+// isAdminConnClosed reports whether the error means the statement never
+// reached the server because the connection was already closed. pgx's
+// connLockError satisfies SafeToRetry by construction.
+func isAdminConnClosed(err error) bool {
+	return errors.Is(err, pgconn.ErrConnClosed) || pgconn.SafeToRetry(err)
+}
+
+// dropTemplateBestEffort removes a template whose fixture never finished
+// loading. A sealed template with no data would be copied into every
+// environment, so the half-built database is dropped rather than inherited.
+// Best effort: the failure may be the connection going away.
+func (m *Manager) dropTemplateBestEffort(ctx context.Context, name, label string) {
+	dctx, cancel := context.WithTimeout(context.WithoutCancel(ctx), dropTimeout)
+	defer cancel()
+	conn, err := m.newAdminConn(dctx)
+	if err != nil {
+		m.opts.Log.Warn("could not open a connection to drop a half-built template", "template", name, "error", err)
+		return
+	}
+	defer func() { _ = conn.Close(context.WithoutCancel(dctx)) }()
+	if err := DropDatabase(dctx, conn, name); err != nil {
+		m.opts.Log.Warn("could not drop a half-built template", "template", name, "kind", label, "error", err)
+	}
+}
+
 // Facts reports the account's environment without creating it. Exists is read
 // from the catalog, so it is true for an environment this process did not
 // create; Writable and Tables are read over the learner's own connection, so
@@ -580,9 +773,11 @@ func (m *Manager) Facts(ctx context.Context, accountID string) (Facts, error) {
 	// Facts describes the challenge environment, so it reads the challenge
 	// key. A plan reset writes the perf key and must not change this time.
 	facts.ResetAt = m.resetAt[challengeEnv.keyPrefix+digest(accountID)]
-	err := m.admin.QueryRow(ctx,
-		"SELECT EXISTS (SELECT 1 FROM pg_database WHERE datname = $1)", database,
-	).Scan(&facts.Exists)
+	err := m.withAdmin(ctx, func(conn *pgx.Conn) error {
+		return conn.QueryRow(ctx,
+			"SELECT EXISTS (SELECT 1 FROM pg_database WHERE datname = $1)", database,
+		).Scan(&facts.Exists)
+	})
 	m.mu.Unlock()
 	if err != nil {
 		return Facts{}, envErr(fmt.Errorf("look up environment %q: %w", database, err))
@@ -664,15 +859,19 @@ func (m *Manager) Close() {
 // the challenge template.
 func (m *Manager) createIfAbsentFromLocked(ctx context.Context, database, template string) error {
 	var exists bool
-	if err := m.admin.QueryRow(ctx,
-		"SELECT EXISTS (SELECT 1 FROM pg_database WHERE datname = $1)", database,
-	).Scan(&exists); err != nil {
+	if err := m.withAdmin(ctx, func(conn *pgx.Conn) error {
+		return conn.QueryRow(ctx,
+			"SELECT EXISTS (SELECT 1 FROM pg_database WHERE datname = $1)", database,
+		).Scan(&exists)
+	}); err != nil {
 		return envErr(fmt.Errorf("look up environment %q: %w", database, err))
 	}
 	if exists {
 		return nil
 	}
-	if err := CreateDatabaseFromTemplate(ctx, m.admin, database, template); err != nil {
+	if err := m.withAdmin(ctx, func(conn *pgx.Conn) error {
+		return CreateDatabaseFromTemplate(ctx, conn, database, template)
+	}); err != nil {
 		return envErr(err)
 	}
 	return nil

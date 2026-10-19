@@ -16,7 +16,7 @@ import { defineConfig } from 'oxlint'
  * that fights the codebase, is `off`, and the number and the reason are here.
  *
  * Run it with `npm run lint`, or `make lint` from the repository root.
- * The rule counts were measured on 2026-10-16 and are in progress.md.
+ * The rule counts were measured on 2026-10-19 and are in progress.md.
  */
 export default defineConfig({
   ignorePatterns: [
@@ -58,15 +58,23 @@ export default defineConfig({
     'anti-slop/no-array-filter-map': 'warn',
 
     /*
-     * Off, with the measured count and the reason.
+     * The four contract rules, re-enabled by 16-iii once the last hand-written
+     * decoders moved to `Schema`, and burned down to their boundary by 16a.
      *
-     * no-runtime-typeof (175 sites) and the three contract rules below report
-     * the same gap: src/api/ai.ts hand-rolls the decoding of an untrusted model
-     * response with `typeof` and `as`, instead of decoding it with a schema the
-     * way src/api/contract.ts does. That gap is real. Turning the rules on would
-     * report all 230 sites of the gap on every run and hide the 18 warnings that
-     * are actionable. The fix is to move those decoders to Effect `Schema`, and
-     * there is one entry in progress.md that tracks it.
+     * Measured on 2026-10-19: zero warnings and no errors in all. The last 44
+     * were `no-unknown-parameters` in src/api/ai.ts, on decoder entry points
+     * typed `unknown` while the transport hands over `Schema.Json | null`.
+     * Typing `AiPerformResult.body` like `WireResult`, then every decoder
+     * parameter as `Schema.Json`, closed them with no behaviour change:
+     * `decodeUnknownOption` already takes an arbitrary input. The earlier note
+     * that these were a known false positive was wrong, and this run retired
+     * it.
+     *
+     * no-runtime-typeof allows `allowInTypeGuards`: `typeof` inside a predicate
+     * (isRecord) establishes the contract its caller then relies on, which is the
+     * opposite of the narrowing the rule is for.
+     *
+     * Off, with the measured count and the reason.
      *
      * require-readable-spacing (1292 sites) is a formatter. The project has no
      * formatter, so switching it on would rewrite the source, not fix it.
@@ -84,10 +92,10 @@ export default defineConfig({
      * over a closed union, and two of them are pure helpers in presentational
      * files that do not import Effect. The current form is the clearer one.
      */
-    'anti-slop/no-runtime-typeof': 'off',
-    'anti-slop/no-unknown-parameters': 'off',
-    'anti-slop/no-unsafe-dictionary-type': 'off',
-    'anti-slop/no-known-value-widening': 'off',
+    'anti-slop/no-runtime-typeof': ['warn', { allowInTypeGuards: true }],
+    'anti-slop/no-unknown-parameters': 'warn',
+    'anti-slop/no-unsafe-dictionary-type': 'warn',
+    'anti-slop/no-known-value-widening': 'warn',
     'anti-slop/require-readable-spacing': 'off',
     'anti-slop/require-safety-comment-for-type-assertion': 'off',
     'anti-slop/no-shape-in-symbol-names': 'off',

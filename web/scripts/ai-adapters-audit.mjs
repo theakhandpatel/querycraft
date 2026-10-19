@@ -48,6 +48,9 @@ const PATHS = {
   critique: 'POST /challenges/ch1/critique',
   report: 'POST /challenges/ch1/report',
   patch: 'POST /challenges/ch1/patches/p1',
+  runs: 'GET /runs',
+  run: 'GET /runs/run-1',
+  runMissing: 'GET /runs/nope',
 };
 
 const ARTIFACT = {
@@ -537,6 +540,108 @@ console.log('http adapter · lifecycle, tutor, critique, defects');
   canned = { [PATHS.tutor]: { status: 200, json: { nope: true } } };
   const badTutor = await runFail(methods.tutor({ sql: 'SELECT 1', objective: 'x' }));
   check('an unreadable tutor response throws rather than half-parsing', badTutor?.code === 'AI_INVALID_ARTIFACT', badTutor);
+}
+
+/* ---------- the agent-run audit trail ----------
+ *
+ * The gateway stores a redacted, bounded transcript per generation run and
+ * scopes every read to the session. These checks pin the seam that reads it:
+ * a summary and a transcript parse whole (or are dropped), tool calls keep
+ * their attribution to their results, and a clipped or scrubbed entry says so.
+ * The offline page has no run store, so it answers an empty list and null —
+ * it never invents a transcript.
+ */
+
+const RUN_SUMMARY = {
+  id: 'run-1',
+  kind: 'course',
+  status: 'active',
+  entry_count: 4,
+  bytes: 80,
+  truncated: false,
+  started_at: '2026-10-15T00:00:00Z',
+  finished_at: '2026-10-15T00:00:02Z',
+};
+
+const RUN_TRANSCRIPT = {
+  id: 'run-1',
+  kind: 'course',
+  status: 'active',
+  entries: [
+    { seq: 0, kind: 'message', role: 'system', content: 'You design SQL courses.', at: '2026-10-15T00:00:00Z' },
+    { seq: 1, kind: 'message', role: 'user', content: 'Design one complete course.', at: '2026-10-15T00:00:00Z' },
+    { seq: 2, kind: 'tool_call', role: 'assistant', tool_name: 'save_chapter', tool_call_id: 'call_1', content: '{"id":"gen.joins"}', at: '2026-10-15T00:00:01Z' },
+    { seq: 3, kind: 'tool_result', role: 'tool', tool_call_id: 'call_1', content: '{"status":"verified"}', at: '2026-10-15T00:00:01Z', truncated: true, redacted: true },
+  ],
+  entry_count: 4,
+  bytes: 80,
+  truncated: true,
+  started_at: '2026-10-15T00:00:00Z',
+  finished_at: '2026-10-15T00:00:02Z',
+};
+
+console.log('the agent-run audit trail');
+{
+  /* The offline page has no run store: an empty list and no run to read, and
+     neither invents a transcript. */
+  const browser = ai.browserAiMethods();
+  const browserList = await run(browser.listRuns());
+  check('a browser run list is honestly empty, never fabricated', Array.isArray(browserList) && browserList.length === 0, browserList);
+  const browserRun = await run(browser.getRun('run-1'));
+  check('a browser run read is not-found, not an invented transcript', browserRun === null, browserRun);
+
+  /* The list route: owner-scoped summaries with the fields a reader scans. */
+  canned = { [PATHS.runs]: { status: 200, json: { ok: true, runs: [RUN_SUMMARY] } } };
+  const list = await run(methods.listRuns());
+  check('the run list route is read', recorded.some((r) => r.key === PATHS.runs));
+  check('a stored run summary survives the decoder', list.length === 1 && list[0].id === 'run-1', list);
+  check('a summary keeps its kind and status', list[0]?.kind === 'course' && list[0]?.status === 'active', list[0]);
+  check('a summary keeps its entry count and bytes', list[0]?.entry_count === 4 && list[0]?.bytes === 80, list[0]);
+  check('a summary keeps its start and finish', list[0]?.started_at === '2026-10-15T00:00:00Z' && list[0]?.finished_at === '2026-10-15T00:00:02Z', list[0]);
+
+  /* A malformed row is dropped, so one corrupt run cannot hide the readable
+     ones -- and never a half-row. */
+  canned = { [PATHS.runs]: { status: 200, json: { ok: true, runs: [RUN_SUMMARY, { id: 'broken' }, { nope: true }] } } };
+  const pruned = await run(methods.listRuns());
+  check('a malformed run row is dropped, not half-read', pruned.length === 1 && pruned[0].id === 'run-1', pruned);
+
+  /* A failed list read is an error, not the claim "you have no runs". */
+  canned = { [PATHS.runs]: { status: 503, json: { ok: false, runs: [], error: { code: 'AI_UNAVAILABLE', message: 'AI is off' } } } };
+  const off = await runFail(methods.listRuns());
+  check('a run list that failed throws rather than reporting none', off?.code === 'AI_UNAVAILABLE', off);
+  check('the AI-off empty list is not smuggled through as data', !Array.isArray(off), off);
+
+  canned = { [PATHS.runs]: { status: 500, json: { error: { code: 'ENVIRONMENT_UNAVAILABLE', message: 'depot down' } } } };
+  const down = await runFail(methods.listRuns());
+  check('a storage failure is a typed error, not an empty list', down?.code === 'ENVIRONMENT_UNAVAILABLE', down);
+
+  /* One run's whole transcript: entries in order, tool calls attributed to
+     their results, and the redacted/truncated flags reported, not hidden. */
+  canned = { [PATHS.run]: { status: 200, json: { ok: true, run: RUN_TRANSCRIPT } } };
+  const rec = await run(methods.getRun('run-1'));
+  check('the transcript is read at all', rec?.id === 'run-1', rec);
+  check('the transcript keeps its kind and status', rec?.kind === 'course' && rec?.status === 'active', rec);
+  check('the transcript keeps every entry, in order', rec?.entries.length === 4 && rec.entries.map((e) => e.seq).join(',') === '0,1,2,3', rec?.entries);
+  check('a message keeps its role and text', rec?.entries[0].role === 'system' && rec?.entries[0].content === 'You design SQL courses.', rec?.entries?.[0]);
+  check('a tool call keeps the function it asked for', rec?.entries[2].kind === 'tool_call' && rec?.entries[2].tool_name === 'save_chapter', rec?.entries?.[2]);
+  check('a tool result keeps its call attribution', rec?.entries[3].kind === 'tool_result' && rec?.entries[3].tool_call_id === 'call_1', rec?.entries?.[3]);
+  check('a clipped entry says so', rec?.entries[3].truncated === true, rec?.entries?.[3]);
+  check('a scrubbed entry says so', rec?.entries[3].redacted === true, rec?.entries?.[3]);
+  check('a truncated transcript says so', rec?.truncated === true, rec?.truncated);
+
+  /* A run that is gone, or not yours, is a 404 read as null, not an error. */
+  canned = { [PATHS.runMissing]: { status: 404, json: { ok: false, error: { code: 'NOT_FOUND', message: 'unknown run' } } } };
+  const gone = await run(methods.getRun('nope'));
+  check('a run that is not there reads as null', gone === null, gone);
+
+  canned = { [PATHS.run]: { status: 500, json: { error: { code: 'ENVIRONMENT_UNAVAILABLE', message: 'depot down' } } } };
+  const readDown = await runFail(methods.getRun('run-1'));
+  check('a storage failure on a run is a typed error, not a missing run', readDown?.code === 'ENVIRONMENT_UNAVAILABLE', readDown);
+
+  /* The decoder decides a transcript is whole: a body with no entry list is
+     not one this client renders as an empty conversation. */
+  check('a body without an entry list is not a transcript', ai.asRunTranscript({ id: 'run-1', kind: 'course', status: 'active' }) === null);
+  check('an unreadable summary is dropped by the list decoder', ai.asRunSummaries({ ok: true, runs: [{ id: 'broken' }] }).length === 0);
 }
 
 server.close();

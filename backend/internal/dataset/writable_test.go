@@ -2,7 +2,6 @@ package dataset_test
 
 import (
 	"context"
-	"path/filepath"
 	"strings"
 	"testing"
 	"time"
@@ -11,7 +10,7 @@ import (
 
 	"github.com/querycraft/sqlquery/backend/internal/dataset"
 	"github.com/querycraft/sqlquery/backend/internal/envdb"
-	"github.com/querycraft/sqlquery/backend/internal/localdb"
+	"github.com/querycraft/sqlquery/backend/internal/pgtest"
 )
 
 // TestWritableTemplateGrantsLearnerDDLAndDML proves the two template grant sets
@@ -23,35 +22,9 @@ import (
 // database is copied from the read-only template and still refuses every write —
 // so widening the environment did not widen the shared dataset.
 func TestWritableTemplateGrantsLearnerDDLAndDML(t *testing.T) {
-	if testing.Short() {
-		t.Skip("boots a PostgreSQL server; skipped under -short")
-	}
-
-	root := t.TempDir()
-	port := freePort(t)
-	binaries := cachedBinaries()
-	const clusterPassword = "writable-template-password"
-
+	srv := pgtest.Shared(t)
 	ctx, cancel := context.WithTimeout(context.Background(), 3*time.Minute)
 	defer cancel()
-
-	srv, err := localdb.Start(ctx, quietLogger(), localdb.Config{
-		DataPath:     filepath.Join(root, "pg", "data"),
-		RuntimePath:  filepath.Join(root, "pg", "runtime"),
-		BinariesPath: binaries,
-		TempDir:      filepath.Join(root, "tmp"),
-		Port:         port,
-		User:         "querycraft",
-		Password:     clusterPassword,
-		Database:     "querycraft",
-	})
-	if err != nil {
-		if binaries == "" {
-			t.Skipf("no cached PostgreSQL binaries and no server could be started: %v", err)
-		}
-		t.Fatalf("boot embedded PostgreSQL: %v", err)
-	}
-	t.Cleanup(func() { _ = srv.Stop() })
 
 	admin, err := pgx.Connect(ctx, srv.DSN)
 	if err != nil {
@@ -65,7 +38,7 @@ func TestWritableTemplateGrantsLearnerDDLAndDML(t *testing.T) {
 	if err := envdb.CreateDatabase(ctx, admin, writableTemplate); err != nil {
 		t.Fatalf("create the writable template: %v", err)
 	}
-	if err := dataset.LoadWritableIntoTemplate(ctx, admin, writableTemplate, clusterPassword); err != nil {
+	if err := dataset.LoadWritableIntoTemplate(ctx, admin, writableTemplate, srv.Password()); err != nil {
 		t.Fatalf("load the writable template: %v", err)
 	}
 	if err := envdb.SealTemplate(ctx, admin, writableTemplate); err != nil {
@@ -76,7 +49,7 @@ func TestWritableTemplateGrantsLearnerDDLAndDML(t *testing.T) {
 	if err := envdb.CreateDatabaseFromTemplate(ctx, admin, writableEnv, writableTemplate); err != nil {
 		t.Fatalf("copy the writable environment: %v", err)
 	}
-	learner, err := connectAsLearner(ctx, admin, writableEnv, clusterPassword)
+	learner, err := connectAsLearner(ctx, admin, writableEnv, srv.Password())
 	if err != nil {
 		t.Fatalf("connect to the writable environment as the learner role: %v", err)
 	}
@@ -153,7 +126,7 @@ func TestWritableTemplateGrantsLearnerDDLAndDML(t *testing.T) {
 	if err := envdb.CreateDatabase(ctx, admin, readOnlyTemplate); err != nil {
 		t.Fatalf("create the read-only template: %v", err)
 	}
-	if err := loadReadOnlyIntoTemplate(ctx, admin, readOnlyTemplate, clusterPassword); err != nil {
+	if err := loadReadOnlyIntoTemplate(ctx, admin, readOnlyTemplate, srv.Password()); err != nil {
 		t.Fatalf("load the read-only template: %v", err)
 	}
 	if err := envdb.SealTemplate(ctx, admin, readOnlyTemplate); err != nil {
@@ -164,7 +137,7 @@ func TestWritableTemplateGrantsLearnerDDLAndDML(t *testing.T) {
 	if err := envdb.CreateDatabaseFromTemplate(ctx, admin, readOnlyEnv, readOnlyTemplate); err != nil {
 		t.Fatalf("copy the read-only environment: %v", err)
 	}
-	reader, err := connectAsLearner(ctx, admin, readOnlyEnv, clusterPassword)
+	reader, err := connectAsLearner(ctx, admin, readOnlyEnv, srv.Password())
 	if err != nil {
 		t.Fatalf("connect to the read-only environment as the learner role: %v", err)
 	}

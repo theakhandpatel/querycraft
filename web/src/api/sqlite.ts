@@ -77,7 +77,9 @@ interface Transport {
 }
 
 interface Pending {
+  // oxlint-disable-next-line anti-slop/no-unknown-parameters -- a worker reply is structured clone data; `call<T>` restores the caller's type.
   resolve: (value: unknown) => void;
+  // oxlint-disable-next-line anti-slop/no-unknown-parameters -- a worker rejection reason is untrusted; it is rethrown unchanged.
   reject: (reason: unknown) => void;
 }
 
@@ -98,6 +100,7 @@ function workerTransport(worker: Worker): Transport {
   const call = <T>(op: WorkerRequest['op'], args: unknown[] = []): Promise<T> =>
     new Promise<T>((resolve, reject) => {
       const id = nextId++;
+      // oxlint-disable-next-line anti-slop/no-unknown-parameters -- the caller's generic is restored by `call<T>`; the queue erases it here.
       pending.set(id, { resolve: resolve as (value: unknown) => void, reject });
       try {
         worker.postMessage({ id, op, args } satisfies WorkerRequest);
@@ -186,13 +189,16 @@ async function bootstrap(): Promise<Transport> {
         );
       }
       return transport;
-    })().catch((e: unknown) => {
-      /* A failed boot must not be cached: the next Run tries again, and the
-         failure is reported by that Run rather than remembered as fact. */
-      slot.transport = null;
-      slot.placement = null;
-      throw e;
-    });
+    })().catch(
+      // oxlint-disable-next-line anti-slop/no-unknown-parameters -- a failed boot reason is untrusted; it is rethrown unchanged.
+      (e: unknown) => {
+        /* A failed boot must not be cached: the next Run tries again, and the
+           failure is reported by that Run rather than remembered as fact. */
+        slot.transport = null;
+        slot.placement = null;
+        throw e;
+      },
+    );
   }
   return slot.transport;
 }
@@ -360,11 +366,12 @@ export async function fetchSqliteTables(): Promise<{ tables: LiveTable[]; rows: 
 
 /** Restore the shipped dataset: close the workspace and reopen it from the
     schema and seed. Measured in ADR 0006's sibling for SQLite: the copy is the
-    reopen, and the engine reports its own elapsed time. */
-export async function resetSqliteEnvironment(): Promise<{ ok: boolean; duration_ms: number }> {
+    reopen, and the engine reports its own elapsed time. The SQLite workspace has
+    no course setup of its own, so it reports the zero it applied. */
+export async function resetSqliteEnvironment(): Promise<{ ok: boolean; duration_ms: number; setup_statements: number }> {
   const transport = await getSqliteTransport();
   const out = await transport.reset();
-  return { ok: true, duration_ms: Number((out?.duration_ms ?? 0).toFixed(1)) };
+  return { ok: true, duration_ms: Number((out?.duration_ms ?? 0).toFixed(1)), setup_statements: 0 };
 }
 
 export { SQLITE_MAX_BYTES, SQLITE_MAX_ROWS };

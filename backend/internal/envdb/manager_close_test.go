@@ -30,6 +30,9 @@ const (
 // database alive after Close cleared everything. The second closed check must
 // refuse the build and close the pool it opened.
 func TestEnsureAfterCloseLeavesNoEnvironment(t *testing.T) {
+	// A dedicated cluster, not pgtest.Shared: Close deliberately abandons the
+	// database it was mid-build on, and that leak must not be adopted by another
+	// test that reuses the account on a package cluster.
 	srv := pgtest.Start(t)
 	ctx, cancel := context.WithTimeout(context.Background(), 4*time.Minute)
 	defer cancel()

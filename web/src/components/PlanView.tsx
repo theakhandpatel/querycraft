@@ -106,6 +106,7 @@ export default function PlanView({
 
   const summary = bundle.summary;
   const env = bundle.environment;
+  const usedIndexes = new Set(summary.indexes_used);
   const totalCost = summary.total_cost > 0 ? summary.total_cost : 0;
   const seqScanWarning =
     bundle.warnings.some((w) => w.code === 'PLAN_SEQ_SCAN_LARGE_TABLE') ||
@@ -151,14 +152,16 @@ export default function PlanView({
         </div>
       ) : null}
 
-      {bundle.warnings.filter((w) => w.code !== 'PLAN_SEQ_SCAN_LARGE_TABLE').map((w, i) => (
-        <div className="planwarn subtle" key={i}>
+      {bundle.warnings.filter((w) => w.code !== 'PLAN_SEQ_SCAN_LARGE_TABLE').map((w) => (
+        <div className="planwarn subtle" key={`${w.code}-${w.message}`}>
           <Icon name="info" />
           <span><span className="fbcode">{w.code}</span> {w.message}</span>
         </div>
       ))}
 
       <div className="plantree" role="tree" aria-label="Plan nodes, depth first">
+        {/* The plan tree is immutable once captured and renders in its own
+            depth-first order, so the position is the identity; nodes carry no id. */}
         {summary.nodes.map((node, i) => {
           const share = totalCost > 0 && node.estimated_cost !== null ? Math.min(100, (node.estimated_cost / totalCost) * 100) : 0;
           const off = estimateOff(node);
@@ -222,8 +225,8 @@ export default function PlanView({
         <div className="planchecks">
           <h3>Against the exercise contract</h3>
           <ul className="checklist">
-            {checks.map((c, i) => (
-              <li key={i}>
+            {checks.map((c) => (
+              <li key={`${c.code}-${c.label}`}>
                 <span className={`mk ${c.ok ? 'ok' : 'no'}`}>{c.ok ? '✓' : '✕'}</span>
                 <span>
                   {c.label}
@@ -239,15 +242,15 @@ export default function PlanView({
         <div className="plancontract">
           <h3>This exercise asks for</h3>
           <ul className="plancontractlist">
-            {(contract.require_nodes ?? []).map((n, i) => (
-              <li key={`r${i}`}>a <span className="mono">{n.node_type}</span>{n.relation ? <> on <span className="mono">{n.relation}</span></> : null}</li>
+            {(contract.require_nodes ?? []).map((n) => (
+              <li key={`${n.node_type}:${n.relation ?? ''}`}>a <span className="mono">{n.node_type}</span>{n.relation ? <> on <span className="mono">{n.relation}</span></> : null}</li>
             ))}
-            {(contract.forbid_nodes ?? []).map((n, i) => (
-              <li key={`f${i}`}>no <span className="mono">{n.node_type}</span> on <span className="mono">{n.relation}</span>
+            {(contract.forbid_nodes ?? []).map((n) => (
+              <li key={`${n.node_type}:${n.relation}`}>no <span className="mono">{n.node_type}</span> on <span className="mono">{n.relation}</span>
                 {n.above_plan_rows ? <> above {n.above_plan_rows} est. rows</> : null}</li>
             ))}
-            {(contract.require_indexes ?? []).map((idx, i) => (
-              <li key={`i${i}`}>the index <span className="mono">{idx}</span></li>
+            {(contract.require_indexes ?? []).map((idx) => (
+              <li key={idx}>the index <span className="mono">{idx}</span></li>
             ))}
             {contract.max_plan_rows != null ? <li>at most {contract.max_plan_rows} planner-estimated rows</li> : null}
             {contract.min_index_scans != null ? <li>at least {contract.min_index_scans} index scan{contract.min_index_scans === 1 ? '' : 's'}</li> : null}
@@ -275,7 +278,7 @@ export default function PlanView({
               {env.indexes.map((idx) => (
                 <li key={`${idx.relation}.${idx.name}`}>
                   <span className="mono">{idx.name}</span> <span className="muted">on {idx.relation}</span>
-                  {summary.indexes_used.includes(idx.name) ? <span className="planused">used</span> : null}
+                  {usedIndexes.has(idx.name) ? <span className="planused">used</span> : null}
                 </li>
               ))}
             </ul>

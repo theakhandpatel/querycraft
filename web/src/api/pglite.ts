@@ -1,4 +1,5 @@
 import type { PGliteInterface } from '@electric-sql/pglite';
+import { Effect, Option, Schema } from 'effect';
 import { perfSql, schemaSql, seedSql } from './dataset';
 import { seedContentDocs } from './content';
 import { stripComments } from './sql';
@@ -77,28 +78,28 @@ export interface LiveTable {
    reports typnames too (backend/internal/engine/pgx.go, `typeName`) and
    docs/technical-design.md §4.2 uses `int8` in its own example. The same column
    has to be described identically in both adapters. */
-const OID_TYPE: Record<number, string> = {
-  16: 'bool',
-  17: 'bytea',
-  20: 'int8',
-  21: 'int2',
-  23: 'int4',
-  25: 'text',
-  114: 'json',
-  700: 'float4',
-  701: 'float8',
-  1042: 'bpchar',
-  1043: 'varchar',
-  1082: 'date',
-  1083: 'time',
-  1114: 'timestamp',
-  1184: 'timestamptz',
-  1186: 'interval',
-  1266: 'timetz',
-  1700: 'numeric',
-  2950: 'uuid',
-  3802: 'jsonb',
-};
+const OID_TYPE = new Map<number, string>([
+  [16, 'bool'],
+  [17, 'bytea'],
+  [20, 'int8'],
+  [21, 'int2'],
+  [23, 'int4'],
+  [25, 'text'],
+  [114, 'json'],
+  [700, 'float4'],
+  [701, 'float8'],
+  [1042, 'bpchar'],
+  [1043, 'varchar'],
+  [1082, 'date'],
+  [1083, 'time'],
+  [1114, 'timestamp'],
+  [1184, 'timestamptz'],
+  [1186, 'interval'],
+  [1266, 'timetz'],
+  [1700, 'numeric'],
+  [2950, 'uuid'],
+  [3802, 'jsonb'],
+]);
 
 const OID_DATE = 1082;
 const OID_TIME = 1083;
@@ -108,7 +109,7 @@ function oidTypeName(oid: number): string {
   /* An unknown OID is reported as unknown. Calling it `text` would be a claim
      about the value that nothing checked — the one thing this app must not do.
      The gateway falls back to `oid:<n>` for the same reason. */
-  return OID_TYPE[oid] ?? `oid:${oid}`;
+  return OID_TYPE.get(oid) ?? `oid:${oid}`;
 }
 
 /**
@@ -151,17 +152,32 @@ function dateTime(d: Date): string {
   return `${dateOnly(d)} ${pad2(d.getUTCHours())}:${pad2(d.getUTCMinutes())}:${pad2(d.getUTCSeconds())}`;
 }
 
+/** Whether a raw PGlite value is one of the JS scalars the contract carries
+    verbatim. */
+function isScalarValue(v: unknown): v is string | number | boolean {
+  return typeof v === 'string' || typeof v === 'number' || typeof v === 'boolean';
+}
+
+/** Whether a raw PGlite value is an integer too large for the safe-number
+    range. */
+function isBigIntValue(v: unknown): v is bigint {
+  return typeof v === 'bigint';
+}
+
 /** Convert a raw PGlite value into the JSON-safe shape the UI and the contract
-    comparison both expect. Dates become strings so results are portable and
-    comparable. */
+    comparison both expect. The wire hands back a JS scalar, a `Date` for a
+    temporal, a `bigint` for an int8 outside the safe range, a `Uint8Array` for
+    bytea, or a parsed JSON document. Dates become strings so results are
+    portable and comparable. */
+// oxlint-disable-next-line anti-slop/no-unknown-parameters -- a raw engine cell is untrusted; this is the value-encoding boundary.
 function normalizeValue(raw: unknown, oid: number): RowValue {
   if (raw === null || raw === undefined) return null;
   if (raw instanceof Date) {
     if (oid === OID_DATE) return dateOnly(raw);
     return dateTime(raw);
   }
-  if (typeof raw === 'string' || typeof raw === 'number' || typeof raw === 'boolean') return raw;
-  if (typeof raw === 'bigint') {
+  if (isScalarValue(raw)) return raw;
+  if (isBigIntValue(raw)) {
     return raw >= BigInt(Number.MIN_SAFE_INTEGER) && raw <= BigInt(Number.MAX_SAFE_INTEGER) ? Number(raw) : raw.toString();
   }
   if (raw instanceof Uint8Array) {
@@ -172,7 +188,7 @@ function normalizeValue(raw: unknown, oid: number): RowValue {
   if (oid === OID_TIME || oid === OID_TIMETZ) return String(raw);
   try {
     const s = JSON.stringify(raw);
-    return typeof s === 'string' ? s : String(raw);
+    return s ?? String(raw);
   } catch {
     return String(raw);
   }
@@ -443,9 +459,9 @@ async function createContentSchema(db: PGliteInterface): Promise<void> {
 export function getDatabase(dataset: DatasetId = DEFAULT_DATASET): Promise<PGliteInterface> {
   const slot = slots[dataset];
   if (slot.db === null) {
-    slot.db = bootstrap(dataset).catch((e: unknown) => {
+    slot.db = bootstrap(dataset).catch((cause: unknown) => {
       slot.db = null;
-      throw e;
+      throw cause;
     });
   }
   return slot.db;
@@ -510,24 +526,51 @@ export async function resetEnvironment(
 
 /* ---------- execution ---------- */
 
-function sqlStateOf(e: unknown): { code: string; message: string; detail: string | null; hint: string | null; position: unknown } {
-  if (typeof e === 'object' && e !== null) {
-    const o = e as Record<string, unknown>;
-    return {
-      code: typeof o.code === 'string' ? o.code : '',
-      message: typeof o.message === 'string' ? o.message : String(e),
-      detail: typeof o.detail === 'string' ? o.detail : null,
-      hint: typeof o.hint === 'string' ? o.hint : null,
-      position: o.position,
-    };
-  }
-  return { code: '', message: String(e), detail: null, hint: null, position: null };
+/** The Postgres fields the adapter reports from a failed statement. Named, so the
+    decode boundary returns a contract rather than an anonymous object. */
+interface SqlState {
+  code: string;
+  message: string;
+  detail: string | null;
+  hint: string | null;
+  /** The 1-based character offset psql points at, when the engine sent one. */
+  position: number | null;
+}
+
+/* Each leaf tolerates a field the engine spelled or typed differently, reading it
+   as absent rather than failing the whole error. A decode that dropped the
+   SQLSTATE would lose the real reason for the failure. */
+const optionalText = Schema.optional(Schema.String).pipe(
+  Schema.catchDecoding(() => Effect.succeed(Option.some(undefined))),
+);
+const optionalPosition = Schema.optional(
+  Schema.Union([Schema.Number, Schema.NumberFromString]),
+).pipe(Schema.catchDecoding(() => Effect.succeed(Option.some(undefined))));
+
+const SqlStateSchema = Schema.Struct({
+  code: optionalText,
+  message: optionalText,
+  detail: optionalText,
+  hint: optionalText,
+  position: optionalPosition,
+});
+
+// oxlint-disable-next-line anti-slop/no-unknown-parameters -- a thrown engine error is untrusted; this is its decode boundary.
+function sqlStateOf(e: unknown): SqlState {
+  const decoded = Option.getOrNull(Schema.decodeUnknownOption(SqlStateSchema)(e));
+  return {
+    code: decoded?.code ?? '',
+    message: decoded?.message ?? String(e),
+    detail: decoded?.detail ?? null,
+    hint: decoded?.hint ?? null,
+    position: decoded?.position ?? null,
+  };
 }
 
 /** Point at the offending character the way psql does. */
-function caretDetail(sql: string, position: unknown): string | null {
-  const pos = typeof position === 'string' ? Number(position) : typeof position === 'number' ? position : NaN;
-  if (!Number.isFinite(pos) || pos <= 0) return null;
+function caretDetail(sql: string, position: number | null): string | null {
+  if (position === null || !Number.isFinite(position) || position <= 0) return null;
+  const pos = position;
   const upto = Math.min(pos - 1, sql.length);
   let line = 1;
   let lineStart = 0;
@@ -545,8 +588,8 @@ function caretDetail(sql: string, position: unknown): string | null {
 }
 
 /** Map a Postgres SQLSTATE onto the contract's error vocabulary. */
-function mapError(e: unknown, sql: string): QueryErrorShape {
-  const { code, message, detail, position } = sqlStateOf(e);
+function mapError(state: SqlState, sql: string): QueryErrorShape {
+  const { code, message, detail, position } = state;
   const where = caretDetail(sql, position);
   const withDetail = where ?? detail;
   switch (code) {
@@ -593,12 +636,19 @@ function managesOwnTransaction(sql: string): boolean {
   return /(^|;)\s*(begin|start\s+transaction|commit|end|rollback|savepoint|release)\b/i.test(sql);
 }
 
+/** The rows of a `rowMode: 'array'` result, each a list of cell values. PGlite's
+    `Results` types a row by its object mode, so this narrows the array shape the
+    adapter actually asked for instead of asserting it. */
+function arrayRows(rows: unknown[]): unknown[][] {
+  return rows.filter((row): row is unknown[] => Array.isArray(row));
+}
+
 function pickResult(results: Array<{ rows: unknown[]; fields: { name: string; dataTypeID: number }[]; command?: string }>): { rows: unknown[][]; fields: { name: string; dataTypeID: number }[] } | null {
   if (!Array.isArray(results) || results.length === 0) return null;
   for (let i = results.length - 1; i >= 0; i--) {
     const r = results[i];
     if (r && Array.isArray(r.fields) && r.fields.length > 0) {
-      return { rows: r.rows as unknown[][], fields: r.fields };
+      return { rows: arrayRows(r.rows), fields: r.fields };
     }
   }
   return null;
@@ -668,7 +718,7 @@ export async function executeSql(sql: string, dataset: DatasetId = DEFAULT_DATAS
         'A statement that never finishes cannot be interrupted inside the browser engine, so the database was rebuilt.',
       );
     }
-    return { status: 'failed', columns: [], rows: [], row_count: 0, truncated: false, error: mapError(e, text), dialect: PGLITE_DIALECT };
+    return { status: 'failed', columns: [], rows: [], row_count: 0, truncated: false, error: mapError(sqlStateOf(e), text), dialect: PGLITE_DIALECT };
   } finally {
     /* A terminated worker has no transaction left to finish and its client is
        gone (`database` is null after disposeDatabase), so this runs only on a
@@ -724,12 +774,16 @@ async function scalar(db: PGliteInterface, sql: string): Promise<string> {
  * produced it, so this is captured beside every plan, not once at boot.
  */
 async function readPlanEnvironment(db: PGliteInterface, dataset: DatasetId): Promise<PlanEnvironment> {
-  const version = await scalar(db, 'SHOW server_version');
-  const tableRows = await queryArrays<unknown>(db, `
-    SELECT table_name FROM information_schema.tables
-    WHERE table_schema = 'dataset' AND table_type = 'BASE TABLE'
-    ORDER BY table_name;
-  `);
+  /* These two reads are independent; PGlite serialises them on its own query
+     mutex, so starting both at once costs nothing and saves a round trip. */
+  const [version, tableRows] = await Promise.all([
+    scalar(db, 'SHOW server_version'),
+    queryArrays<unknown>(db, `
+      SELECT table_name FROM information_schema.tables
+      WHERE table_schema = 'dataset' AND table_type = 'BASE TABLE'
+      ORDER BY table_name;
+    `),
+  ]);
   const rowCounts: Record<string, number> = {};
   for (const row of tableRows) {
     const name = String(row[0]);
@@ -740,7 +794,7 @@ async function readPlanEnvironment(db: PGliteInterface, dataset: DatasetId): Pro
     rowCounts[name] = Number(count);
   }
   const indexRows = await queryArrays<unknown>(db, `
-    SELECT tablename, indexname, indexdef FROM pg_indexes
+    SELECT tablename, indexname FROM pg_indexes
     WHERE schemaname = 'dataset' ORDER BY tablename, indexname;
   `);
   const settingsList = PLANNER_SETTINGS.map((name) => `'${name}'`).join(', ');
@@ -767,17 +821,21 @@ async function readPlanEnvironment(db: PGliteInterface, dataset: DatasetId): Pro
     scale_factor: scale,
     dataset: datasetName,
     row_counts: rowCounts,
-    indexes: indexRows.map((r) => ({ relation: String(r[0]), name: String(r[1]), definition: String(r[2]) })),
+    indexes: indexRows.map((r) => ({ relation: String(r[0]), name: String(r[1]) })),
     settings,
   };
 }
 
-/** The `EXPLAIN (FORMAT JSON)` value, wherever PGlite put it in its results. */
-function planValueOf(results: Array<{ rows: unknown[]; fields: { name: string; dataTypeID: number }[]; command?: string }>): unknown {
+/** The `EXPLAIN (FORMAT JSON)` value, wherever PGlite put it in its results.
+    Decoded as JSON, so the plan boundary hands `buildPlanBundle` a value of the
+    JSON type it declares rather than an open `unknown`. */
+function planValueOf(results: Array<{ rows: unknown[]; fields: { name: string; dataTypeID: number }[]; command?: string }>): Schema.Json | null {
   for (const r of results) {
     if (r && Array.isArray(r.rows) && r.rows.length > 0) {
-      const row = r.rows[0] as unknown[];
-      if (Array.isArray(row) && row.length > 0) return row[0];
+      const row = r.rows[0];
+      if (Array.isArray(row) && row.length > 0) {
+        return Option.getOrNull(Schema.decodeUnknownOption(Schema.Json)(row[0]));
+      }
     }
   }
   return null;
@@ -851,7 +909,7 @@ export async function explainSql(
         environment,
       );
     }
-    const err = mapError(e, text);
+    const err = mapError(sqlStateOf(e), text);
     return failedPlanBundle('postgresql', err.code, err.message, err.detail ?? null, environment);
   }
 
@@ -875,7 +933,7 @@ async function queryWithFields(db: PGliteInterface, sql: string): Promise<{ rows
   const res = await db.exec(sql, { rowMode: 'array', parsers: TEXT_PARSERS });
   for (let i = res.length - 1; i >= 0; i--) {
     if (res[i] && res[i].fields.length > 0) {
-      return { rows: res[i].rows as unknown as unknown[][], fields: res[i].fields };
+      return { rows: arrayRows(res[i].rows), fields: res[i].fields };
     }
   }
   return { rows: [], fields: [] };

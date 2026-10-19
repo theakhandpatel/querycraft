@@ -14,7 +14,7 @@
     "lint": "oxlint src",
     "doctor": "react-doctor --no-score src",
     "audit-ai": "./node_modules/.bin/esbuild --bundle --format=cjs --platform=node --outfile=/tmp/qc-ai.cjs src/api/ai.ts >/dev/null && ./node_modules/.bin/esbuild --bundle --format=cjs --platform=node --outfile=/tmp/qc-deadline.cjs src/api/aiDeadline.ts >/dev/null && node scripts/ai-adapters-audit.mjs",
-    "audit-course-store": "./node_modules/.bin/esbuild --bundle --format=cjs --platform=node --outfile=/tmp/qc-ai-course-store.cjs src/api/ai.ts >/dev/null && ./node_modules/.bin/esbuild --bundle --format=cjs --platform=node --outfile=/tmp/qc-draft.cjs src/lib/draft.ts >/dev/null && ./node_modules/.bin/esbuild --bundle --format=cjs --platform=node --outfile=/tmp/qc-runresume.cjs src/lib/runResume.ts >/dev/null && node scripts/course-store-audit.mjs",
+    "audit-course-store": "./node_modules/.bin/esbuild --bundle --format=cjs --platform=node --outfile=/tmp/qc-ai-course-store.cjs src/api/ai.ts >/dev/null && ./node_modules/.bin/esbuild --bundle --format=cjs --platform=node --outfile=/tmp/qc-draft.cjs src/lib/draft.ts >/dev/null && ./node_modules/.bin/esbuild --bundle --format=cjs --platform=node --outfile=/tmp/qc-runresume.cjs src/lib/runResume.ts >/dev/null && ./node_modules/.bin/esbuild --bundle --format=cjs --platform=node --outfile=/tmp/qc-course-warmup.cjs src/lib/courseWarmup.ts >/dev/null && node scripts/course-store-audit.mjs",
     "audit-perf": "node scripts/plan-conformance-audit.mjs",
     "test": "npm run typecheck && npm run lint && npm run audit-ai && npm run audit-course-store && npm run audit-perf"
   },
@@ -34,6 +34,7 @@
     "@types/react": "^18.3.31",
     "@types/react-dom": "^18.3.7",
     "@vitejs/plugin-react": "^4.3.4",
+    "axe-core": "^4.14.0",
     "oxlint": "1.78.0",
     "react-doctor": "0.9.18",
     "typescript": "^7.0.2",

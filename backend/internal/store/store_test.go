@@ -5,7 +5,14 @@ import (
 	"encoding/json"
 	"testing"
 	"time"
+
+	"github.com/querycraft/sqlquery/backend/internal/pgtest"
 )
+
+// TestMain gives the package one shared PostgreSQL cluster; every test that
+// asks pgtest.Shared for a server gets its own database on it. The
+// SurviveARestart tests boot their own instance because they stop and start it.
+func TestMain(m *testing.M) { pgtest.Main(m) }
 
 func TestMemoryRoundTrip(t *testing.T) {
 	m := NewMemory()

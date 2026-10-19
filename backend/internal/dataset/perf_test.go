@@ -13,6 +13,12 @@ import (
 	"github.com/querycraft/sqlquery/backend/internal/pgtest"
 )
 
+// TestMain gives the package one shared PostgreSQL cluster; every test that
+// asks pgtest.Shared for a server gets its own database on it. The extra
+// template and environment databases these tests build carry names no other
+// test uses, so they cannot meet.
+func TestMain(m *testing.M) { pgtest.Main(m) }
+
 // TestPerfDatasetIsDeterministic loads the perf dataset into two independent
 // databases and compares every byte of every row.
 //
@@ -21,7 +27,7 @@ import (
 // and a fixture that used random() would give a learner a different plan from
 // the one the lesson was written against.
 func TestPerfDatasetIsDeterministic(t *testing.T) {
-	srv := pgtest.Start(t)
+	srv := pgtest.Shared(t)
 	ctx, cancel := context.WithTimeout(context.Background(), 4*time.Minute)
 	defer cancel()
 
@@ -103,7 +109,7 @@ func TestPerfDatasetIsDeterministic(t *testing.T) {
 // that gate; scripts/perf-content-audit.mjs is the other half, and it runs the
 // authored SQL itself.
 func TestPerfDatasetCarriesTheTaughtFacts(t *testing.T) {
-	srv := pgtest.Start(t)
+	srv := pgtest.Shared(t)
 	ctx, cancel := context.WithTimeout(context.Background(), 4*time.Minute)
 	defer cancel()
 

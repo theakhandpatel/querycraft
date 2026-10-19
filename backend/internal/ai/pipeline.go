@@ -108,21 +108,15 @@ type pipeline struct {
 	// provider call as an empty stage.
 	current      string
 	currentStart time.Time
-	// The course agent's live facts. A chapter is written over minutes, and a
-	// poller has to be able to say which chapter is being written and how many
-	// have already verified; none of that is derivable from the stage list,
-	// which is why it travels separately. planned is 0 for a challenge run.
-	planned        int
-	verified       int
-	currentChapter string
-	courseID       string
+	// build is the course under construction, or nil for a challenge run. It is
+	// the one home of the course facts a poller reads: the planned and verified
+	// counts, the chapter in flight, the stored row's id and the resolved
+	// report all derive from it in notify() rather than being copied beside it.
+	build *courseBuild
 	// report, when set, receives a live snapshot on every transition. It is the
 	// only reason a run can be watched at all. A blocking caller attaches none,
 	// and notify() then does nothing.
 	report func(Progress)
-	// chapters is the course agent's resolved chapter report so far, in the
-	// course's order. A challenge run never sets it and publishes an empty list.
-	chapters []schema.ChapterResult
 }
 
 func newPipeline(svc *Service, req schema.GenerationRequest, limits Limits) *pipeline {
@@ -220,8 +214,12 @@ func (p *pipeline) begin(name string) {
 
 // setChapter records which chapter the agent is writing right now, so a poller
 // can name it rather than showing a stage called "request_bundle" for minutes.
+// The fact lives on the build, which is the course run's own state.
 func (p *pipeline) setChapter(id string) {
-	p.currentChapter = id
+	if p.build == nil {
+		return
+	}
+	p.build.current = id
 	p.notify()
 }
 
@@ -260,15 +258,25 @@ func (p *pipeline) notify() {
 	}
 	attempts := make([]schema.Attempt, len(p.attempts))
 	copy(attempts, p.attempts)
-	chapters := make([]schema.ChapterResult, len(p.chapters))
-	copy(chapters, p.chapters)
+	// The course facts all derive from the one build, so there is no second
+	// copy to keep in step. A challenge run has no build and reports the zero
+	// value.
+	planned, verified, currentChapter, courseID := 0, 0, "", ""
+	chapters := []schema.ChapterResult{}
+	if p.build != nil {
+		planned = len(p.build.outline.Chapters)
+		verified = p.build.verifiedCount()
+		currentChapter = p.build.current
+		courseID = p.build.plan.ID
+		chapters = append(chapters, p.build.report...)
+	}
 	p.report(Progress{
 		Stages:         stages,
 		Attempts:       attempts,
-		Planned:        p.planned,
-		Verified:       p.verified,
-		CurrentChapter: p.currentChapter,
-		CourseID:       p.courseID,
+		Planned:        planned,
+		Verified:       verified,
+		CurrentChapter: currentChapter,
+		CourseID:       courseID,
 		Chapters:       chapters,
 	})
 }

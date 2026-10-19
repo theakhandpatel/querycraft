@@ -1,7 +1,7 @@
-import { Effect, Layer, Schedule } from 'effect';
+import { Effect, Layer, Option, Schedule, Schema } from 'effect';
 import { GatewayError, asGatewayError, authFailure } from '../errors';
 import { gatewayAiMethods } from '../ai';
-import type { AiPerformOptions, AiPerformResult } from '../ai';
+import type { AiPerformOptions } from '../ai';
 import { advertisedRunBudgetMs, providerDeadlineMs } from '../aiDeadline';
 import { decodeAuthSession, decodeEvaluation, decodeQueryResult, decodeUser } from '../contract';
 import { failedPlanBundle, validatePlanBundle } from '../planContract';
@@ -17,6 +17,7 @@ import type {
   Dialect,
   EngineCapabilities,
   EnvironmentInfo,
+  EnvironmentPrepare,
   EnvironmentReset,
   QueryResult,
   TablesResponse,
@@ -24,11 +25,10 @@ import type {
 } from '../../types';
 import {
   ExecutionService,
-  clearAuthToken,
+  clearAuthUser,
   nowMs,
   offlineDraft,
-  readAuthToken,
-  writeAuthToken,
+  readAuthUser,
   writeAuthUser,
 } from './shared';
 import type { ExecutionServiceShape, NoteFn } from './shared';
@@ -36,9 +36,10 @@ import type { ExecutionServiceShape, NoteFn } from './shared';
 /* The gateway layer: every call goes to the Go HTTP API.
 
    `perform` is the one round trip. It keeps the status and the parsed body so
-   a caller can read a non-2xx body, and it owns the bearer token, the retry on
-   idempotent reads and the timeout. `request` turns the status into the typed
-   `GatewayError` channel. */
+   a caller can read a non-2xx body, and it owns the retry on idempotent reads
+   and the timeout. Authentication rides the same-origin `qc_session` cookie,
+   which the browser attaches itself; the layer never reads or sends a token.
+   `request` turns the status into the typed `GatewayError` channel. */
 
 /* ---------- HTTP adapter: the Go gateway (Adapter B) ---------- */
 
@@ -48,7 +49,7 @@ export function httpLayer(opts: {
   note?: NoteFn;
   timeoutMs?: number;
   /** Called when the gateway rejects a request with AUTH_REQUIRED (a missing or
-      expired token), so the app can clear its session and return to sign-in. */
+      expired session), so the app can clear its session and return to sign-in. */
   onUnauthorized?: () => void;
 }): Layer.Layer<ExecutionService> {
   const root = (opts.baseUrl || 'http://localhost:8080').replace(/\/$/, '');
@@ -64,33 +65,34 @@ export function httpLayer(opts: {
      AUTH_EMAIL_TAKEN instead of dying later in a schema decode. */
   /* perform: one round trip that keeps the status, so a caller which must read
      a non-2xx body (the AI outcome calls) has a path without duplicating the
-     fetch, token, retry and timeout plumbing. */
+     fetch, cookie, retry and timeout plumbing. */
   /* The advertised run budget, learned from the first /capabilities answer.
      The app reads capabilities before it offers generation, so this is warm by
      the time a course is asked for; the fallback covers a caller that asks
      without probing first. */
   let aiRunBudgetMs: number | null = null;
 
-  const perform = (
+  const perform = <Body extends object>(
     method: string,
     path: string,
-    body?: unknown,
+    body?: Body,
     opts?: AiPerformOptions,
-  ): Effect.Effect<AiPerformResult, GatewayError> =>
+  ): Effect.Effect<WireResult, GatewayError> =>
     Effect.gen(function* () {
       const t0 = nowMs();
       const headers: Record<string, string> = {};
       if (body !== undefined) headers['content-type'] = 'application/json';
-      /* Attach the bearer token when one is stored. Progress and events are
-         owner-scoped by the token server-side, so no user id is ever sent. */
-      const token = readAuthToken();
-      if (token) headers['authorization'] = `Bearer ${token}`;
+      /* No Authorization header: the browser attaches the same-origin
+         `qc_session` cookie itself, and the gateway scopes every write to that
+         session. `credentials: 'same-origin'` states the rule the default
+         already applies, and a cross-origin page cannot use the cookie. */
       const res = yield* Effect.tryPromise({
         try: (signal) =>
           fetch(root + path, {
             method,
             headers: Object.keys(headers).length ? headers : undefined,
             body: body !== undefined ? JSON.stringify(body) : undefined,
+            credentials: 'same-origin',
             signal,
           }),
         catch: (cause) =>
@@ -134,12 +136,10 @@ export function httpLayer(opts: {
           }),
       });
       if (!text) return { status: res.status, body: null };
-      let parsed: unknown = null;
-      try {
-        parsed = JSON.parse(text) as unknown;
-      } catch {
-        parsed = null;
-      }
+      /* The wire is text; this is where it becomes a named JSON value. A body
+         that is not JSON reads as null, exactly as an empty one does, so no
+         caller has to guess at a half-parsed response. */
+      const parsed = Option.getOrNull(Schema.decodeUnknownOption(JsonBodySchema)(text));
       /* Every capabilities answer refreshes the AI run budget, whichever
          caller asked for it. */
       if (path === '/capabilities') {
@@ -149,28 +149,28 @@ export function httpLayer(opts: {
       return { status: res.status, body: parsed };
     });
 
-  const request = (method: string, path: string, body?: unknown, opts?: { rawErrorBodies?: boolean }) =>
+  const request = <Body extends object>(method: string, path: string, body?: Body, opts?: { rawErrorBodies?: boolean }) =>
     Effect.gen(function* () {
       const { status, body: parsed } = yield* perform(method, path, body);
-      /* A 401 means the token is absent, expired or invalid. AUTH_REQUIRED is
-         the session-invalid signal: clear the stored token and let the app
+      /* A 401 means the session is absent, expired or invalid. AUTH_REQUIRED is
+         the session-invalid signal: clear the stored account id and let the app
          bounce to sign-in. Login's own 401 carries AUTH_INVALID_CREDENTIALS and
          must reach the form as a plain error, so it is deliberately not wired
          to the session reset. */
-      const envelopeCode = errorCode(parsed);
+      const failure = envelope(parsed);
       if (status === 401) {
-        const code = envelopeCode ?? 'AUTH_REQUIRED';
+        const code = failure.code ?? 'AUTH_REQUIRED';
         if (code === 'AUTH_REQUIRED') {
-          clearAuthToken();
+          clearAuthUser();
           unauthorized();
         }
-        return yield* Effect.fail(authFailure(code, errorMessage(parsed) ?? 'Authentication required.', 401));
+        return yield* Effect.fail(authFailure(code, failure.message ?? 'Authentication required.', 401));
       }
       if (status >= 400 && !opts?.rawErrorBodies) {
         return yield* Effect.fail(
           authFailure(
-            envelopeCode ?? 'ENVIRONMENT_UNAVAILABLE',
-            errorMessage(parsed) ?? `The gateway rejected the request (HTTP ${status}).`,
+            failure.code ?? 'ENVIRONMENT_UNAVAILABLE',
+            failure.message ?? `The gateway rejected the request (HTTP ${status}).`,
             status,
           ),
         );
@@ -178,10 +178,7 @@ export function httpLayer(opts: {
       return parsed;
     });
 
-    const isRecordBody = (v: unknown): v is Record<string, unknown> =>
-    typeof v === "object" && v !== null && !Array.isArray(v);
-
-const service: ExecutionServiceShape = {
+  const service: ExecutionServiceShape = {
     config,
     /* AI operations (design §11). Generation always resolves to an outcome the
        screen can render; the non-outcome calls keep the typed error channel.
@@ -189,7 +186,7 @@ const service: ExecutionServiceShape = {
     ...gatewayAiMethods({
       perform,
       onUnauthorized: () => {
-        clearAuthToken();
+        clearAuthUser();
         unauthorized();
       },
       providerDeadlineMs: () => providerDeadlineMs(aiRunBudgetMs),
@@ -199,112 +196,22 @@ const service: ExecutionServiceShape = {
        than claiming a capability that could not be confirmed. */
     diagnostics: () =>
       request('GET', '/diagnostics').pipe(
-        Effect.map((json): DiagnosticsReport | null => {
-          const isRecord = (v: unknown): v is Record<string, unknown> => typeof v === 'object' && v !== null;
-          if (!isRecord(json)) return null;
-          const build = typeof json.build === 'string' ? json.build : '';
-          const engine = isRecord(json.engine) ? json.engine : null;
-          const store = isRecord(json.store) ? json.store : null;
-          const dataset = isRecord(json.dataset) ? json.dataset : null;
-          const progress = isRecord(json.progress) ? json.progress : null;
-          if (!engine || !store || !dataset || !progress) return null;
-          const limits = isRecord(engine.limits) ? engine.limits : {};
-          return {
-            build,
-            engine: {
-              name: typeof engine.name === 'string' ? engine.name : '',
-              ready: engine.ready === true,
-              reason: typeof engine.reason === 'string' ? engine.reason : '',
-              version: typeof engine.version === 'string' ? engine.version : '',
-              limits: {
-                max_rows: typeof limits.max_rows === 'number' ? limits.max_rows : 0,
-                max_bytes: typeof limits.max_bytes === 'number' ? limits.max_bytes : 0,
-                timeout_ms: typeof limits.timeout_ms === 'number' ? limits.timeout_ms : 0,
-                max_concurrent: typeof limits.max_concurrent === 'number' ? limits.max_concurrent : 0,
-              },
-            },
-            store: {
-              kind: typeof store.kind === 'string' ? store.kind : '',
-              persistent: store.persistent === true,
-            },
-            dataset: {
-              schema: typeof dataset.schema === 'string' ? dataset.schema : '',
-              version: typeof dataset.version === 'number' ? dataset.version : 0,
-            },
-            progress: { version: typeof progress.version === 'number' ? progress.version : 0 },
-          };
-        }),
+        Effect.map(decodeDiagnostics),
         Effect.catch(() => Effect.succeed<DiagnosticsReport | null>(null)),
       ),
     preferences: () =>
       request('GET', '/preferences').pipe(
-        Effect.catch(() => Effect.succeed(null)),
-        Effect.map((json): Record<string, unknown> | null => {
-          if (!isRecordBody(json)) return null;
-          const prefs = (json as { preferences?: unknown }).preferences;
-          return prefs && typeof prefs === 'object' && !Array.isArray(prefs)
-            ? (prefs as Record<string, unknown>)
-            : null;
-        }),
+        Effect.map(decodePreferences),
+        Effect.catch(() => Effect.succeed<Schema.JsonObject | null>(null)),
       ),
     savePreferences: (prefs) =>
       request('PUT', '/preferences', prefs).pipe(
+        Effect.map((json) => decodePreferences(json) ?? prefs),
         Effect.catch(() => Effect.succeed(prefs)),
-        Effect.map((json): Record<string, unknown> => {
-          const parsed = json && typeof json === 'object' && !Array.isArray(json)
-            ? (json as { preferences?: unknown }).preferences
-            : null;
-          return parsed && typeof parsed === 'object' && !Array.isArray(parsed)
-            ? (parsed as Record<string, unknown>)
-            : prefs;
-        }),
       ),
     capabilities: () =>
       request('GET', '/capabilities').pipe(
-        Effect.map((json): EngineCapabilities | null => {
-          const body = (json ?? {}) as {
-            hard_timeout?: unknown;
-            explain?: unknown;
-            plan?: unknown;
-            writable?: unknown;
-            dialects?: unknown;
-          };
-          const hardTimeout = typeof body.hard_timeout === 'boolean' ? body.hard_timeout : true;
-          /* The gateway advertises plan support as `explain` (the documented
-             capability surface) or as a `plan` block; a gateway that advertises
-             neither cannot plan, and the UI disables the action rather than
-             asking for a plan and guessing at the refusal. */
-          const explain =
-            body.explain === true ||
-            body.plan === true ||
-            (typeof body.plan === 'object' && body.plan !== null && (body.plan as { supported?: unknown }).supported === true);
-          /* Writes need an owned environment, which the gateway gives a
-             signed-in learner; an anonymous visitor keeps the shared read-only
-             dataset (ADR 0003). Two facts have to hold, and the gateway can
-             only answer one of them: it says whether it *has* a workspace
-             manager, and this client says whether it *has* a session. Asking
-             only the second one was a live bug — the answer was computed once
-             at boot, before sign-in, and a signed-in learner was told to sign
-             in. */
-          const gatewayCanWrite = body.writable !== false;
-          const writable = gatewayCanWrite && readAuthToken() !== null;
-          const dialects = Array.isArray(body.dialects)
-            ? body.dialects.filter((d): d is Dialect => d === 'postgresql' || d === 'sqlite')
-            : [];
-          const capabilities: EngineCapabilities = {
-            placement: 'server',
-            hardTimeout,
-            timeoutMs: 5000,
-            writable,
-            explain,
-            dialect: 'postgresql',
-          };
-          /* A gateway that advertises no dialects keeps the field absent. An
-             empty list would read as "no dialect works", which is not what an
-             older gateway means. */
-          if (dialects.length > 0) capabilities.dialects = dialects;
-          return capabilities;
-        }),
+        Effect.map(decodeCapabilities),
         Effect.catch(() => Effect.succeed<EngineCapabilities | null>(null)),
       ),
     /* GET /health answers whether the seeded administrator can sign in with an
@@ -321,33 +228,29 @@ const service: ExecutionServiceShape = {
     signup: (input) =>
       request('POST', '/auth/signup', input).pipe(
         Effect.flatMap((json) => decodeAuthSession(json)),
-        Effect.tap((session) =>
-          Effect.sync(() => {
-            writeAuthToken(session.token);
-            writeAuthUser(session.user.id);
-          }),
-        ),
+        /* The gateway sets the `qc_session` cookie on this response; keep the
+           account id so a patch approval echoes `approved_by`. The returned
+           session still carries the token for an API-shaped caller, but this
+           layer stores none of it. */
+        Effect.tap((session) => Effect.sync(() => writeAuthUser(session.user.id))),
         Effect.mapError(asGatewayError),
       ),
     login: (input) =>
       request('POST', '/auth/login', input).pipe(
         Effect.flatMap((json) => decodeAuthSession(json)),
-        Effect.tap((session) =>
-          Effect.sync(() => {
-            writeAuthToken(session.token);
-            writeAuthUser(session.user.id);
-          }),
-        ),
+        Effect.tap((session) => Effect.sync(() => writeAuthUser(session.user.id))),
         Effect.mapError(asGatewayError),
       ),
     logout: () =>
       Effect.gen(function* () {
+        /* GET/POST carry the cookie, so the gateway clears it and revokes the
+           server session; the local account marker goes with it. */
         yield* request('POST', '/auth/logout').pipe(Effect.catch(() => Effect.void));
-        clearAuthToken();
+        clearAuthUser();
       }),
     me: () => {
-      /* No token to validate: report "signed out" without a round trip. */
-      if (!readAuthToken()) return Effect.succeed(null);
+      /* The cookie may name a session even though nothing local holds a token,
+         so ask every time: a 401 is "signed out", an answer is the account. */
       return request('GET', '/auth/me').pipe(
         Effect.flatMap((json) => decodeUser(json).pipe(Effect.mapError(asGatewayError))),
         Effect.tap((user) => Effect.sync(() => writeAuthUser(user.id))),
@@ -355,7 +258,7 @@ const service: ExecutionServiceShape = {
         Effect.catch((e) => {
           const err = asGatewayError(e);
           if (err.code === 'AUTH_REQUIRED' || err.status === 401) {
-            clearAuthToken();
+            clearAuthUser();
             return Effect.succeed(null);
           }
           return Effect.fail(err);
@@ -396,10 +299,11 @@ const service: ExecutionServiceShape = {
             /* Not a bundle: the gateway reported an envelope (or nothing). Keep
                its code and message when it gave one; otherwise say the body was
                unreadable rather than inventing a plan. */
+            const failure = envelope(json);
             return failedPlanBundle(
               'postgresql',
-              errorCode(json) ?? 'EVALUATION_ERROR',
-              errorMessage(json) ?? 'The gateway returned a plan body this client could not read.',
+              failure.code ?? 'EVALUATION_ERROR',
+              failure.message ?? 'The gateway returned a plan body this client could not read.',
               e instanceof Error ? e.message : String(e),
             );
           }
@@ -421,7 +325,10 @@ const service: ExecutionServiceShape = {
           id: cell.item?.id,
           version: 1,
           lesson_id: cell.module?.id,
-          contract: cell.item?.contract ?? { columns: [], column_order: 'exact', row_order: 'ignored', duplicates: 'preserved', numeric_tolerance: 0 },
+          /* The evaluator reads `result_contract` (backend/internal/eval/eval.go).
+             A bare `contract` key decodes as absent, which graded every HTTP
+             submission against the zero contract: order and tolerance ignored. */
+          result_contract: cell.item?.contract ?? { columns: [], column_order: 'exact', row_order: 'ignored', duplicates: 'preserved', numeric_tolerance: 0 },
           /* The gateway grades by executing this reference against the same
              engine and comparing rows. Without it the server can only check
              column names, which made every answer pass: a query filtered to the
@@ -448,12 +355,13 @@ const service: ExecutionServiceShape = {
          claim as PostgreSQL's). The gateway serves ?dialect=sqlite over the
          workspace the caller is in. */
       request('GET', `/datasets/${dataset}/tables?dialect=${encodeURIComponent(dialect)}`).pipe(
-        Effect.map((json) => json as TablesResponse),
+        Effect.map((json) => decodeTables(json, { dataset, version: 1, tables: [], rows: 0 })),
         Effect.catch(() => Effect.succeed({ dataset, version: 1, tables: [], rows: 0 })),
       ),
     /* ADR 0003. `GET /environment` describes the caller's workspace; an
        anonymous caller has none, so it answers null rather than an error. A 401
-       is still handled by the shared request helper, which drops the token. */
+       is still handled by the shared request helper, which drops the account
+       marker. */
     /* The gateway owns the workspace and its templates are sealed ahead of
        time, so there is nothing for the page to pre-build. Reporting a warm-up
        it did not do would be the one thing this seam must not do. */
@@ -474,6 +382,15 @@ const service: ExecutionServiceShape = {
          answer `ok` for a restore that did not happen. */
       request('POST', environmentResetPath(dataset, dialect, course)).pipe(
         Effect.map(asEnvironmentReset),
+        Effect.mapError(asGatewayError),
+      ),
+    /* M9. A stored course's exercises were verified in a workspace that had the
+       course's own setup applied. Preparing it here, when the course opens,
+       means the first exercise does not die with "relation does not exist". The
+       route is idempotent per workspace, so a second open is a cheap no-op. */
+    prepareEnvironment: (courseId, dialect = DEFAULT_DIALECT) =>
+      request('POST', environmentPreparePath(courseId, dialect)).pipe(
+        Effect.map(asEnvironmentPrepare),
         Effect.mapError(asGatewayError),
       ),
     /* The gateway does not serve chapter content yet, so use the authored
@@ -509,62 +426,274 @@ const service: ExecutionServiceShape = {
   return Layer.succeed(ExecutionService, service);
 }
 
-/* ---------- helpers ---------- */
+/* ---------- wire decoding ----------
 
-function errorMeta(e: unknown): { error?: { code: string; message: string } } {
+   The gateway speaks JSON. Each response shape is decoded with an Effect
+   `Schema` here, the way `src/api/ai.ts` and `src/api/contract.ts` decode
+   theirs, so a field the gateway omits or mistypes reads as the fallback the
+   old hand-written parser supplied instead of flowing onward untyped. The
+   optional leaves mirror `ai.ts`: a field the contract marks optional that
+   arrives absent or mistyped reads as absent.
+
+   The outgoing body of `perform` and `request` is generic: a caller hands in
+   an already-shaped value and the transport serialises it without reading it,
+   so the parameter keeps the caller's own type. Each caller's domain schema
+   owns the shape. */
+
+const JsonBodySchema = Schema.fromJsonString(Schema.Json);
+
+interface WireResult {
+  status: number;
+  body: Schema.Json | null;
+}
+
+const optionalString = Schema.optional(Schema.String).pipe(
+  Schema.catchDecoding(() => Effect.succeed(Option.some(undefined))),
+);
+const optionalNumber = Schema.optional(Schema.Number).pipe(
+  Schema.catchDecoding(() => Effect.succeed(Option.some(undefined))),
+);
+const optionalBoolean = Schema.optional(Schema.Boolean).pipe(
+  Schema.catchDecoding(() => Effect.succeed(Option.some(undefined))),
+);
+const stringOr = (fallback: string) =>
+  Schema.String.pipe(
+    Schema.catchDecoding(() => Effect.succeed(Option.some(fallback))),
+    Schema.withDecodingDefaultType(Effect.succeed(fallback)),
+  );
+const numberOr = (fallback: number) =>
+  Schema.Number.pipe(
+    Schema.catchDecoding(() => Effect.succeed(Option.some(fallback))),
+    Schema.withDecodingDefaultType(Effect.succeed(fallback)),
+  );
+const booleanOr = (fallback: boolean) =>
+  Schema.Boolean.pipe(
+    Schema.catchDecoding(() => Effect.succeed(Option.some(fallback))),
+    Schema.withDecodingDefaultType(Effect.succeed(fallback)),
+  );
+const optionalStruct = <S extends Schema.Constraint>(schema: S) =>
+  Schema.optional(schema).pipe(
+    Schema.catchDecoding(() => Effect.succeed(Option.some(undefined))),
+  );
+
+/* The failure envelope `{ error: { code, message } }` a non-2xx body carries.
+   The shape is tolerant because a transport-level 401 must be classified from
+   whatever the gateway sent, even when it is not the full envelope. */
+const EnvelopeErrorSchema = Schema.Struct({
+  code: optionalString,
+  message: optionalString,
+});
+const EnvelopeSchema = Schema.Struct({ error: optionalStruct(EnvelopeErrorSchema) });
+
+interface EnvelopeFailure {
+  code: string | null;
+  message: string | null;
+}
+
+function envelope(body: Schema.Json | null): EnvelopeFailure {
+  const decoded = Schema.decodeUnknownOption(EnvelopeSchema)(body);
+  if (Option.isNone(decoded)) return { code: null, message: null };
+  return {
+    code: decoded.value.error?.code ?? null,
+    message: decoded.value.error?.message ?? null,
+  };
+}
+
+function errorMeta(e: GatewayError) {
   if (e instanceof GatewayError) return { error: { code: e.code, message: e.message } };
   return { error: { code: 'ENVIRONMENT_UNAVAILABLE', message: 'Gateway unavailable.' } };
 }
 
-/* The gateway reports failures as { ok:false, error:{ code, message } }. These
-   pull the stable code/message out of an already-parsed body, tolerating any
-   shape, so a transport-level 401 can be classified without guessing. */
-function errorCode(body: unknown): string | null {
-  const err = (body as { error?: { code?: unknown } } | null)?.error;
-  return typeof err?.code === 'string' ? err.code : null;
+/* GET /diagnostics. The four reports are required: a body without an engine,
+   store, dataset or progress report is not the report this client renders, so
+   it reads as null rather than as a report of empty strings. */
+const DiagnosticsLimitsSchema = Schema.Struct({
+  max_rows: numberOr(0),
+  max_bytes: numberOr(0),
+  timeout_ms: numberOr(0),
+  max_concurrent: numberOr(0),
+});
+const DiagnosticsEngineSchema = Schema.Struct({
+  name: stringOr(''),
+  ready: booleanOr(false),
+  reason: stringOr(''),
+  version: stringOr(''),
+  limits: optionalStruct(DiagnosticsLimitsSchema),
+});
+const DiagnosticsStoreSchema = Schema.Struct({
+  kind: stringOr(''),
+  persistent: booleanOr(false),
+});
+const DiagnosticsDatasetSchema = Schema.Struct({
+  schema: stringOr(''),
+  version: numberOr(0),
+});
+const DiagnosticsProgressSchema = Schema.Struct({ version: numberOr(0) });
+const DiagnosticsSchema = Schema.Struct({
+  build: stringOr(''),
+  engine: DiagnosticsEngineSchema,
+  store: DiagnosticsStoreSchema,
+  dataset: DiagnosticsDatasetSchema,
+  progress: DiagnosticsProgressSchema,
+});
+
+function decodeDiagnostics(json: Schema.Json | null): DiagnosticsReport | null {
+  const decoded = Schema.decodeUnknownOption(DiagnosticsSchema)(json);
+  if (Option.isNone(decoded)) return null;
+  const d = decoded.value;
+  return {
+    build: d.build,
+    engine: {
+      name: d.engine.name,
+      ready: d.engine.ready,
+      reason: d.engine.reason,
+      version: d.engine.version,
+      limits: d.engine.limits ?? { max_rows: 0, max_bytes: 0, timeout_ms: 0, max_concurrent: 0 },
+    },
+    store: { kind: d.store.kind, persistent: d.store.persistent },
+    dataset: { schema: d.dataset.schema, version: d.dataset.version },
+    progress: { version: d.progress.version },
+  };
 }
 
-function errorMessage(body: unknown): string | null {
-  const err = (body as { error?: { message?: unknown } } | null)?.error;
-  return typeof err?.message === 'string' ? err.message : null;
+/* GET/PUT /preferences. The document is arbitrary JSON the gateway stores
+   without interpreting it, so the decoder proves only that it is an object;
+   that is what lets the method answer the `Record<string, unknown>` seam in
+   `shared.ts` without a hand-rolled dictionary type. */
+const PreferencesEnvelopeSchema = Schema.Struct({ preferences: optionalStruct(Schema.JsonObject) });
+
+function decodePreferences(json: Schema.Json | null): Schema.JsonObject | null {
+  const decoded = Schema.decodeUnknownOption(PreferencesEnvelopeSchema)(json);
+  return Option.isSome(decoded) ? (decoded.value.preferences ?? null) : null;
+}
+
+/* GET /capabilities. `plan` is either a boolean or a `{ supported }` block, so
+   both forms decode to a value the caller reads without a bare typeof. */
+const DialectSchema = Schema.Literals(['postgresql', 'sqlite']);
+const PlanBlockSchema = Schema.Struct({ supported: optionalBoolean });
+const CapabilitiesSchema = Schema.Struct({
+  hard_timeout: optionalBoolean,
+  explain: optionalBoolean,
+  plan: optionalStruct(Schema.Union([Schema.Boolean, PlanBlockSchema])),
+  writable: optionalBoolean,
+  dialects: optionalStruct(Schema.Array(Schema.Json)),
+});
+type CapabilitiesBody = Schema.Schema.Type<typeof CapabilitiesSchema>;
+const EMPTY_CAPABILITIES: CapabilitiesBody = {};
+
+function decodeCapabilities(json: Schema.Json | null): EngineCapabilities {
+  const decoded = Schema.decodeUnknownOption(CapabilitiesSchema)(json);
+  const body = Option.isSome(decoded) ? decoded.value : EMPTY_CAPABILITIES;
+  const hardTimeout = body.hard_timeout ?? true;
+  const plan = body.plan;
+  /* The gateway advertises plan support as `explain` (the documented
+     capability surface) or as a `plan` block; a gateway that advertises
+     neither cannot plan, and the UI disables the action rather than asking for
+     a plan and guessing at the refusal. */
+  const explain =
+    body.explain === true || plan === true || (Schema.is(PlanBlockSchema)(plan) && plan.supported === true);
+  /* Writes need an owned environment, which the gateway gives a signed-in
+     learner; an anonymous visitor keeps the shared read-only dataset
+     (ADR 0003). Two facts have to hold, and the gateway can only answer one of
+     them: it says whether it *has* a workspace manager, and this client says
+     whether it *has* an account. The account id is the local marker: sign-in
+     writes it, `me` writes it on restore, and logout/401 clears it. Asking only
+     the gateway was a live bug — the answer was computed once at boot, before
+     sign-in, and a signed-in learner was told to sign in. */
+  const writable = body.writable !== false && readAuthUser() !== null;
+  const dialects = (body.dialects ?? []).filter(Schema.is(DialectSchema));
+  const capabilities: EngineCapabilities = {
+    placement: 'server',
+    hardTimeout,
+    timeoutMs: 5000,
+    writable,
+    explain,
+    dialect: 'postgresql',
+  };
+  /* A gateway that advertises no dialects keeps the field absent. An empty
+     list would read as "no dialect works", which is not what an older gateway
+     means. */
+  if (dialects.length > 0) capabilities.dialects = dialects;
+  return capabilities;
+}
+
+/* GET /datasets/{id}/tables. The wire shape mirrors backend/internal/dataset:
+   a column is [name, type, flags] and a preview is a header row plus up to five
+   data rows. The decoded arrays are readonly, so each is copied into the
+   mutable contract shape rather than cast. */
+const TableDefSchema = Schema.Struct({
+  name: Schema.String,
+  rows: numberOr(0),
+  cols: Schema.Array(Schema.Tuple([Schema.String, Schema.String, Schema.String])),
+  preview: Schema.Array(Schema.Array(Schema.String)),
+});
+const TablesResponseSchema = Schema.Struct({
+  dataset: Schema.String,
+  version: Schema.Number,
+  tables: Schema.Array(TableDefSchema),
+  rows: numberOr(0),
+});
+
+function decodeTables(json: Schema.Json | null, fallback: TablesResponse): TablesResponse {
+  const decoded = Schema.decodeUnknownOption(TablesResponseSchema)(json);
+  if (Option.isNone(decoded)) return fallback;
+  const d = decoded.value;
+  return {
+    dataset: d.dataset,
+    version: d.version,
+    rows: d.rows,
+    tables: d.tables.map((t) => ({
+      name: t.name,
+      rows: t.rows,
+      cols: t.cols.map((c) => [...c]),
+      preview: t.preview.map((row) => [...row]),
+    })),
+  };
 }
 
 /* The environment endpoints answer `{ ok, environment }` (reset adds
    `duration_ms`). There is no contracts/*.schema.json for them yet, so the
-   parse is deliberately tolerant: an unknown shape reads as "no environment"
-   rather than throwing inside a reset the learner has already confirmed.
-   Errors never reach here — a 4xx fails earlier in `request` with the
-   gateway's own code and message, which the UI shows verbatim. */
-function asEnvironment(value: unknown): EnvironmentInfo | null {
-  if (typeof value !== 'object' || value === null) return null;
-  const e = value as Record<string, unknown>;
-  const str = (k: string): string | undefined => (typeof e[k] === 'string' ? (e[k] as string) : undefined);
-  const num = (k: string): number | undefined => (typeof e[k] === 'number' ? (e[k] as number) : undefined);
-  return {
-    account: str('account'),
-    database: str('database'),
-    exists: e.exists === true,
-    writable: e.writable === true,
-    tables: num('tables'),
-    created_at: str('created_at'),
-    reset_at: str('reset_at'),
-    idle_until: str('idle_until'),
-  };
+   decode is deliberately tolerant: an unreadable shape reads as "no
+   environment" rather than throwing inside a reset the learner has already
+   confirmed. Errors never reach here — a 4xx fails earlier in `request` with
+   the gateway's own code and message, which the UI shows verbatim. */
+const EnvironmentSchema = Schema.Struct({
+  account: optionalString,
+  database: optionalString,
+  exists: booleanOr(false),
+  writable: booleanOr(false),
+  tables: optionalNumber,
+  created_at: optionalString,
+  reset_at: optionalString,
+  idle_until: optionalString,
+});
+const EnvironmentEnvelopeSchema = Schema.Struct({ environment: optionalStruct(EnvironmentSchema) });
+
+function environmentFrom(json: Schema.Json | null): EnvironmentInfo | null {
+  const decoded = Schema.decodeUnknownOption(EnvironmentEnvelopeSchema)(json);
+  if (Option.isNone(decoded)) return null;
+  return decoded.value.environment ?? null;
 }
 
-function environmentFrom(json: unknown): EnvironmentInfo | null {
-  return asEnvironment((json as { environment?: unknown } | null)?.environment);
-}
+const EnvironmentResetSchema = Schema.Struct({
+  ok: booleanOr(false),
+  duration_ms: numberOr(0),
+  setup_statements: numberOr(0),
+  environment: optionalStruct(EnvironmentSchema),
+});
+type EnvironmentResetBody = Schema.Schema.Type<typeof EnvironmentResetSchema>;
+const EMPTY_ENVIRONMENT_RESET: EnvironmentResetBody = { ok: false, duration_ms: 0, setup_statements: 0 };
 
-function asEnvironmentReset(json: unknown): EnvironmentReset {
-  const body = (json ?? {}) as { ok?: unknown; duration_ms?: unknown; setup_statements?: unknown; environment?: unknown };
+function asEnvironmentReset(json: Schema.Json | null): EnvironmentReset {
+  const decoded = Schema.decodeUnknownOption(EnvironmentResetSchema)(json);
+  const body = Option.isSome(decoded) ? decoded.value : EMPTY_ENVIRONMENT_RESET;
   return {
-    ok: body.ok === true,
-    duration_ms: typeof body.duration_ms === 'number' ? body.duration_ms : 0,
+    ok: body.ok,
+    duration_ms: body.duration_ms,
     /* A gateway that answered without the count applied none; reporting the
        missing field as a number the adapter never saw would be a guess. */
-    setup_statements: typeof body.setup_statements === 'number' ? body.setup_statements : 0,
-    environment: asEnvironment(body.environment) ?? undefined,
+    setup_statements: body.setup_statements,
+    environment: body.environment ?? undefined,
   };
 }
 
@@ -581,7 +710,31 @@ function environmentResetPath(dataset: DatasetId, dialect: Dialect = DEFAULT_DIA
   return query ? `/environment/reset?${query}` : '/environment/reset';
 }
 
-function failedResult(e: unknown, dialect: Dialect = DEFAULT_DIALECT): QueryResult {
+/** The prepare route's path. The course is required and the dialect travels
+    with it for the same reason it travels with a reset: the two workspaces are
+    different things, so preparing one while the learner looks at the other
+    would prepare the wrong file or database. */
+function environmentPreparePath(courseId: string, dialect: Dialect = DEFAULT_DIALECT): string {
+  const params = new URLSearchParams();
+  params.set('course', courseId);
+  params.set('dialect', dialect);
+  return `/environment/prepare?${params.toString()}`;
+}
+
+const EnvironmentPrepareSchema = Schema.Struct({
+  ok: booleanOr(false),
+  setup_statements: numberOr(0),
+});
+type EnvironmentPrepareBody = Schema.Schema.Type<typeof EnvironmentPrepareSchema>;
+const EMPTY_ENVIRONMENT_PREPARE: EnvironmentPrepareBody = { ok: false, setup_statements: 0 };
+
+function asEnvironmentPrepare(json: Schema.Json | null): EnvironmentPrepare {
+  const decoded = Schema.decodeUnknownOption(EnvironmentPrepareSchema)(json);
+  const body = Option.isSome(decoded) ? decoded.value : EMPTY_ENVIRONMENT_PREPARE;
+  return { ok: body.ok, setup_statements: body.setup_statements };
+}
+
+function failedResult(e: GatewayError | Schema.SchemaError, dialect: Dialect = DEFAULT_DIALECT): QueryResult {
   /* A QueryResult error may only carry a code from the closed query enum. The
      gateway's code space is wider (auth, rate limit, bad request), so a code
      from outside the enum becomes ENVIRONMENT_UNAVAILABLE; the message still

@@ -12,6 +12,7 @@ import (
 	"time"
 
 	"github.com/querycraft/sqlquery/backend/internal/ai"
+	"github.com/querycraft/sqlquery/backend/internal/aiconfig"
 	"github.com/querycraft/sqlquery/backend/internal/auth"
 	"github.com/querycraft/sqlquery/backend/internal/schema"
 	"github.com/querycraft/sqlquery/backend/internal/store"
@@ -186,11 +187,17 @@ func TestAdminAISaveValidatesAndMasksTheKey(t *testing.T) {
 		t.Fatalf("second put status = %d body = %s", w.Code, w.Body.String())
 	}
 	var kept struct {
-		KeySet bool `json:"key_set"`
+		KeySet    bool `json:"key_set"`
+		TimeoutMS int  `json:"timeout_ms"`
 	}
 	mustDecode(t, w, &kept)
 	if !kept.KeySet {
 		t.Fatal("an empty key on save dropped the stored key")
+	}
+	// A save that names no timeout gets the shipped default; it is the same
+	// number config.Defaults() gives the boot path (ai.DefaultCallTimeoutMS).
+	if kept.TimeoutMS != ai.DefaultCallTimeoutMS {
+		t.Fatalf("timeout after a save that omitted it = %d, want the default %d", kept.TimeoutMS, ai.DefaultCallTimeoutMS)
 	}
 
 	// Switching the provider off is a supported configuration, and the live
@@ -208,7 +215,7 @@ func TestAdminAISaveValidatesAndMasksTheKey(t *testing.T) {
 func TestAdminAISettingSurvivesBoot(t *testing.T) {
 	raw := `{"provider":"openai-compatible","base_url":"http://llm.test/v1","model":"inhouse-4","key":"sk-secret","timeout_ms":90000}`
 	base := ai.Config{Provider: ai.NewFakeProvider()}
-	cfg, err := AIConfigFromSetting(raw, base, slog.New(slog.NewTextHandler(io.Discard, nil)))
+	cfg, err := aiconfig.AIConfigFromSetting(raw, base, slog.New(slog.NewTextHandler(io.Discard, nil)))
 	if err != nil {
 		t.Fatalf("apply setting: %v", err)
 	}
@@ -216,11 +223,46 @@ func TestAdminAISettingSurvivesBoot(t *testing.T) {
 		t.Fatalf("boot-applied provider = %+v, want the persisted one", d)
 	}
 	// A broken row keeps the config file's provider and reports why.
-	if _, err := AIConfigFromSetting(`{"provider":`, base, slog.New(slog.NewTextHandler(io.Discard, nil))); err == nil {
+	if _, err := aiconfig.AIConfigFromSetting(`{"provider":`, base, slog.New(slog.NewTextHandler(io.Discard, nil))); err == nil {
 		t.Fatal("a broken setting applied without error")
 	}
 	if cfg.Provider.Descriptor().Name != "openai-compatible" {
 		t.Fatal("a broken setting modified the base configuration")
+	}
+}
+
+// TestAdminAIModelsUseLowercaseWireKeys pins the catalog's wire shape. The
+// admin picker reads provider/model/name in lowercase, so CatalogEntry owns
+// those JSON names and the handler returns the catalog directly. A tag lost in
+// a refactor would leak Provider/Model/Name here.
+func TestAdminAIModelsUseLowercaseWireKeys(t *testing.T) {
+	s, adminToken, learnerToken, _, _ := adminServer(t)
+
+	if w := doAs(t, s, learnerToken, http.MethodGet, "/admin/ai/models", ""); w.Code != http.StatusForbidden {
+		t.Fatalf("learner status = %d, want 403", w.Code)
+	}
+
+	w := doAs(t, s, adminToken, http.MethodGet, "/admin/ai/models", "")
+	if w.Code != http.StatusOK {
+		t.Fatalf("status = %d body = %s", w.Code, w.Body.String())
+	}
+	var body struct {
+		OK     bool                         `json:"ok"`
+		Models []map[string]json.RawMessage `json:"models"`
+	}
+	mustDecode(t, w, &body)
+	if !body.OK || len(body.Models) == 0 {
+		t.Fatalf("catalog = %d entries, want a non-empty ok list", len(body.Models))
+	}
+	for i, m := range body.Models {
+		if len(m) != 3 {
+			t.Fatalf("entry %d = %v, want exactly provider/model/name", i, m)
+		}
+		for _, key := range []string{"provider", "model", "name"} {
+			if _, ok := m[key]; !ok {
+				t.Fatalf("entry %d = %v, missing lowercase key %q", i, m, key)
+			}
+		}
 	}
 }
 

@@ -291,14 +291,56 @@ export interface AiAvailability {
   timeout_ms?: number;
 }
 
+/** The `contracts/exercise.schema.json` bundle a tutor request carries when the
+    exercise is not stored. The gateway re-runs the reference itself; these are
+    the fields it reads. */
+export interface AiExerciseBundle {
+  id?: string;
+  version: number;
+  lesson_id: string;
+  title: string;
+  prompt: string;
+  type: string;
+  contract: {
+    columns: string[];
+    column_order?: 'exact' | 'ignored';
+    row_order?: 'exact' | 'ignored';
+    duplicates?: 'preserved' | 'ignored';
+    numeric_tolerance?: number;
+  };
+  reference_solution: string;
+}
+
 export interface AiTutorRequest {
   challenge_id?: string;
+  course_id?: string;
+  exercise_id?: string;
   sql: string;
   objective: string;
   error_code?: string;
   error_message?: string;
   hint_level?: number;
   result_summary?: string;
+  dataset?: string;
+  dialect?: string;
+  /** The conversation so far, oldest first, capped by the gateway. */
+  turns?: { role: 'learner' | 'tutor'; text: string }[];
+  /** The contracts/exercise.schema.json bundle when the exercise is not stored. */
+  exercise?: AiExerciseBundle;
+}
+
+/** What the tutor saw, summarised by the gateway. The drawer renders this
+    rather than guessing. Expected rows appear only after an attempt. */
+export interface AiTutorContext {
+  exercise_id: string;
+  dataset: string;
+  dialect: string;
+  tables: string[];
+  tables_truncated: boolean;
+  expected: 'included' | 'columns_only' | 'unavailable';
+  expected_columns: number;
+  expected_rows: number;
+  learner_result: 'ran' | 'error' | 'not_run' | 'unavailable';
 }
 
 export interface AiTutorResponse {
@@ -306,6 +348,7 @@ export interface AiTutorResponse {
   hint_level: number;
   reveals_solution: boolean;
   provenance?: AiProvenance;
+  context?: AiTutorContext;
 }
 
 export interface AiCritiqueResponse {
@@ -399,4 +442,81 @@ export interface AiCourseRecord {
   status: string;
   owner_id?: string;
   created_at: string;
+}
+
+/** One chapter's authored fields in an edit. `id` names a chapter the stored
+    plan already has; the gateway refuses one it does not. */
+export interface AiChapterEdit {
+  id: string;
+  title?: string;
+  summary?: string;
+}
+
+/** The authored fields a learner may change on a stored course. Every field is
+    optional; the gateway refuses a body that changes nothing. The exercises,
+    the setup plan and the provenance are not editable: the pipeline verified
+    them, and an edit revises a plan rather than rewriting it. */
+export interface AiCourseEdits {
+  title?: string;
+  subtitle?: string;
+  chapters?: AiChapterEdit[];
+}
+
+/* ---------- M12: the agent-run audit trail ----------
+ *
+ * The gateway redacts and bounds a generation run's conversation before it
+ * stores it, and scopes every read to the session: the list a caller sees is
+ * only their own runs. These types mirror `contracts/run.schema.json`, and
+ * `owner_id` never travels in a body. Nothing here is computed client-side.
+ */
+
+/** One ordered fact from a run: a message, a tool call, its result, or an
+    error. `truncated` and `redacted` say the stored content is not verbatim. */
+export interface AiRunEntry {
+  seq: number;
+  kind: 'message' | 'tool_call' | 'tool_result' | 'error';
+  /** Set for a message: system, user, assistant or tool. */
+  role?: string;
+  content?: string;
+  tool_call_id?: string;
+  tool_name?: string;
+  at: string;
+  /** Provider latency for the turn this entry belongs to. */
+  ms?: number;
+  /** Content clipped to fit the per-entry bound. */
+  truncated?: boolean;
+  /** A credential scrub changed this entry's content. */
+  redacted?: boolean;
+}
+
+/** A run without its entries, as `GET /runs` lists it. */
+export interface AiRunSummary {
+  id: string;
+  kind: 'challenge' | 'course';
+  /** The run's terminal outcome, the same word the outcome envelope uses:
+      active, rejected, failed, unavailable or awaiting_approval. An open string
+      so a newer gateway's word is shown rather than dropped. */
+  status: string;
+  entry_count: number;
+  bytes: number;
+  truncated?: boolean;
+  error?: AiError;
+  started_at: string;
+  finished_at: string;
+}
+
+/** One run's whole stored conversation. */
+export interface AiRunTranscript {
+  id: string;
+  kind: 'challenge' | 'course';
+  status: string;
+  entries: AiRunEntry[];
+  /** How many entries the run produced; `entries` is what was stored. They
+      differ only when `truncated` is true. */
+  entry_count: number;
+  bytes: number;
+  truncated: boolean;
+  error?: AiError;
+  started_at: string;
+  finished_at: string;
 }

@@ -1,3 +1,4 @@
+import { Option, Schema } from 'effect';
 import { createExecutionApi } from './execution/service';
 import type { ExecutionApi } from '../types';
 
@@ -7,6 +8,14 @@ import type { ExecutionApi } from '../types';
      - "http": the Go gateway */
 
 type ApiMode = 'pglite' | 'http';
+
+/* The gateway's `/health` answer. Optional fields: a probe that cannot read one
+   is a "no" for the engine label, not a crash. */
+const HealthSchema = Schema.Struct({
+  status: Schema.optional(Schema.String),
+  engine: Schema.optional(Schema.String),
+  version: Schema.optional(Schema.String),
+});
 
 let resolvedMode: ApiMode | null = null;
 let resolvedBase: string | null = null;
@@ -29,9 +38,10 @@ async function probeGatewayEngine(base: string): Promise<string | null> {
     });
     clearTimeout(timer);
     if (!res.ok) return null;
-    const body = (await res.json()) as { status?: string; engine?: string; version?: string };
+    const raw: Schema.Json = await res.json();
+    const body = Option.getOrNull(Schema.decodeUnknownOption(HealthSchema)(raw));
     if (body?.status !== 'ok' || body?.engine !== 'postgresql') return null;
-    const version = typeof body.version === 'string' ? body.version.trim() : '';
+    const version = body.version?.trim() ?? '';
     return version || 'PostgreSQL';
   } catch {
     return null;

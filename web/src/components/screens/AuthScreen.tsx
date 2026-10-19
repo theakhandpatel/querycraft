@@ -9,6 +9,7 @@ import { useStore } from '../../state/store';
 type Mode = 'login' | 'signup';
 
 /** Turn a thrown auth error into a line the learner can act on. */
+// oxlint-disable-next-line anti-slop/no-unknown-parameters -- a thrown auth failure is untrusted; this reads its typed code.
 function describeAuthError(e: unknown): string {
   const err = e as { code?: string; message?: string } | null;
   switch (err?.code) {

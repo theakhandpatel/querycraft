@@ -13,6 +13,12 @@ import (
 	"github.com/querycraft/sqlquery/backend/internal/pgtest"
 )
 
+// TestMain gives the package one shared PostgreSQL cluster. Every test here
+// shares it because each manager's Close drops the environment databases it
+// opened before the next test runs. The one test whose Close deliberately
+// leaves a database behind (manager_close_test.go) keeps its own cluster.
+func TestMain(m *testing.M) { pgtest.Main(m) }
+
 const (
 	accountA = "ada@example.com"
 	accountB = "bruno@example.com"
@@ -24,7 +30,7 @@ const (
 // that restores the seed, and metadata still out of reach even where writes are
 // allowed.
 func TestManagerGivesEachAccountItsOwnWritableEnvironment(t *testing.T) {
-	srv := pgtest.Start(t)
+	srv := pgtest.Shared(t)
 	ctx, cancel := context.WithTimeout(context.Background(), 4*time.Minute)
 	defer cancel()
 
@@ -179,7 +185,7 @@ func TestManagerGivesEachAccountItsOwnWritableEnvironment(t *testing.T) {
 // TestManagerReapsIdleEnvironments proves the idle window is enforced and that
 // the active gauge follows it down.
 func TestManagerReapsIdleEnvironments(t *testing.T) {
-	srv := pgtest.Start(t)
+	srv := pgtest.Shared(t)
 	ctx, cancel := context.WithTimeout(context.Background(), 3*time.Minute)
 	defer cancel()
 
@@ -276,7 +282,7 @@ func scalarString(t *testing.T, ctx context.Context, ex *engine.PgxExecutor, sql
 // executor, and only one pool must be built. Without the guard the losers would
 // each open a pool and race the envs map write. Run with -race.
 func TestConcurrentEnsureForOneAccountOpensOnePool(t *testing.T) {
-	srv := pgtest.Start(t)
+	srv := pgtest.Shared(t)
 	ctx, cancel := context.WithTimeout(context.Background(), 4*time.Minute)
 	defer cancel()
 	m := newManager(t, ctx, srv, envdb.Options{MaxEnvironments: 4, IdleTTL: time.Hour})

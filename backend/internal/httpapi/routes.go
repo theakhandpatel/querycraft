@@ -94,6 +94,7 @@ func (s *Server) routes() []route {
 		{http.MethodGet, "/environment", s.handleEnvironment, authPublic, "environment", 0},
 		{http.MethodGet, "/datasets/{id}/tables", s.handleTables, authPublic, "tables", 0},
 		{http.MethodPost, "/environment/reset", s.handleEnvironmentReset, authRequired, "reset_environment", 0},
+		{http.MethodPost, "/environment/prepare", s.handleEnvironmentPrepare, authRequired, "prepare_environment", 0},
 
 		// Owner-scoped learner data.
 		{http.MethodGet, "/progress/{course}", s.handleGetProgress, authRequired, "progress", 0},
@@ -112,6 +113,7 @@ func (s *Server) routes() []route {
 		{http.MethodGet, "/admin/ai/models", s.handleAdminAIModels, authRequired, "admin_ai_models", 0},
 		{http.MethodPut, "/admin/ai", s.handleAdminAISave, authRequired, "admin_ai", 0},
 		{http.MethodGet, "/courses/{id}", s.handleGetCourse, authRequired, "course", vocabAI},
+		{http.MethodPut, "/courses/{id}", s.handlePutCourse, authRequired, "course", vocabAI},
 		{http.MethodPost, "/courses/{id}/build", s.handleBuildCourse, authRequired, "build_course", vocabAI},
 		{http.MethodDelete, "/courses/{id}", s.handleDeleteCourse, authRequired, "course", vocabAI},
 		{http.MethodGet, "/challenges", s.handleListChallenges, authRequired, "challenges", 0},

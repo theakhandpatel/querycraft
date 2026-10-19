@@ -66,6 +66,7 @@ let dbPromise: Promise<IDBDatabase> | null = null;
     can retry once the learner frees space or leaves private mode. */
 export function openDatabase(): Promise<IDBDatabase> {
   if (!dbPromise) {
+    // oxlint-disable-next-line anti-slop/no-unknown-parameters -- a rejected promise reason is untrusted; it is rethrown unchanged.
     dbPromise = openWithTimeout().catch((error: unknown) => {
       dbPromise = null;
       throw error;
@@ -170,7 +171,7 @@ export async function idbGet<T>(store: string, key: string): Promise<T | undefin
 }
 
 /** Write one value. Resolves only after the transaction commits. */
-export async function idbPut(store: string, key: string, value: unknown): Promise<void> {
+export async function idbPut<T>(store: string, key: string, value: T): Promise<void> {
   await run<IDBValidKey>(store, 'readwrite', (s) => s.put(value, key));
 }
 

@@ -14,9 +14,7 @@ export function useChecklist<T>(steps: readonly T[], idleWord: string) {
   const mark = useCallback((i: number, state: StepState): void => {
     setStates((prev) => {
       if (prev[i] === state) return prev;
-      const next = prev.slice();
-      next[i] = state;
-      return next;
+      return prev.map((current, at) => (at === i ? state : current));
     });
   }, []);
 

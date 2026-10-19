@@ -33,6 +33,7 @@
  */
 import sqlite3InitModule from '@sqlite.org/sqlite-wasm';
 import type { PreparedStatement, SqlValue } from '@sqlite.org/sqlite-wasm';
+import { Effect, Option, Schema } from 'effect';
 import sqliteWasmUrl from '@sqlite.org/sqlite-wasm/sqlite3.wasm?url';
 import { schemaSql, seedSql } from './sqliteDataset';
 
@@ -79,13 +80,13 @@ let enginePromise: Promise<Sqlite3> | null = null;
 
 /* The package's own type declares `init(): Promise<Sqlite3Static>` with no
    parameters, but the build it ships reads `moduleArg.locateFile` (index.mjs,
-   the `locateFile` helper at the top of the Emscripten glue). The cast states
-   what the shipped code does; the alternative is to let Vite's rewritten
-   `import.meta.url` decide where the WASM lives, which is the failure this
-   parameter exists to prevent. */
-const bootSqlite3 = sqlite3InitModule as unknown as (config?: {
+   the `locateFile` helper at the top of the Emscripten glue). Typing the binding
+   with the call signature the shipped code has states that in one place; the
+   alternative is to let Vite's rewritten `import.meta.url` decide where the WASM
+   lives, which is the failure this parameter exists to prevent. */
+const bootSqlite3: (config?: {
   locateFile?: (path: string, scriptDirectory: string) => string;
-}) => Promise<Sqlite3>;
+}) => Promise<Sqlite3> = sqlite3InitModule;
 
 /** Boot the WASM module, once per thread.
  *
@@ -96,9 +97,9 @@ const bootSqlite3 = sqlite3InitModule as unknown as (config?: {
  * emitted by the bundler and works in dev and in a production build alike. */
 function getSqlite3(): Promise<Sqlite3> {
   if (enginePromise === null) {
-    enginePromise = bootSqlite3({ locateFile: () => sqliteWasmUrl }).catch((e: unknown) => {
+    enginePromise = bootSqlite3({ locateFile: () => sqliteWasmUrl }).catch((cause: unknown) => {
       enginePromise = null;
-      throw e;
+      throw cause;
     });
   }
   return enginePromise;
@@ -107,17 +108,32 @@ function getSqlite3(): Promise<Sqlite3> {
  /** A statement's outcome, either the rows or the engine's failure. */
 type ExecOutcome = { ok: true; value: EngineRows } | { ok: false; error: EngineFailure };
 
+/* The fields the wasm build attaches to a thrown SQLite failure. Each leaf
+   tolerates a field spelled or typed differently, reading it as absent rather
+   than failing the whole error. Dropping the result code would lose the reason
+   the profile classifies on. */
+const optionalText = Schema.optional(Schema.String).pipe(
+  Schema.catchDecoding(() => Effect.succeed(Option.some(undefined))),
+);
+const optionalNumber = Schema.optional(Schema.Number).pipe(
+  Schema.catchDecoding(() => Effect.succeed(Option.some(undefined))),
+);
+
+const EngineFailureSchema = Schema.Struct({
+  message: optionalText,
+  code: optionalNumber,
+  resultCode: optionalNumber,
+  name: optionalText,
+});
+
+// oxlint-disable-next-line anti-slop/no-unknown-parameters -- a thrown engine value is untrusted; this is its decode boundary.
 function asFailure(e: unknown): EngineFailure {
-  if (typeof e === 'object' && e !== null) {
-    const o = e as { message?: unknown; code?: unknown; name?: unknown; resultCode?: unknown };
-    const code = typeof o.code === 'number' ? o.code : typeof o.resultCode === 'number' ? o.resultCode : null;
-    return {
-      message: typeof o.message === 'string' ? o.message : String(e),
-      code,
-      name: typeof o.name === 'string' ? o.name : 'Error',
-    };
-  }
-  return { message: String(e), code: null, name: 'Error' };
+  const decoded = Option.getOrNull(Schema.decodeUnknownOption(EngineFailureSchema)(e));
+  return {
+    message: decoded?.message ?? String(e),
+    code: decoded?.code ?? decoded?.resultCode ?? null,
+    name: decoded?.name ?? 'Error',
+  };
 }
 
 /**
@@ -144,10 +160,17 @@ export interface SqliteWorkspace {
   close(): void;
 }
 
+/** An opened database and the version string its module reports. Named, so
+    `openDatabase` returns a contract the caller can hold. */
+interface OpenedDatabase {
+  db: SqliteDatabase;
+  version: string;
+}
+
 /** Open, configure and seed a fresh in-memory database. Synchronous: once the
     module is booted nothing here waits, which is what lets `reset()` return the
     engine's own elapsed time without a half-reset workspace in between. */
-function openDatabase(sqlite3: Sqlite3): { db: SqliteDatabase; version: string } {
+function openDatabase(sqlite3: Sqlite3): OpenedDatabase {
   const db = new sqlite3.oo1.DB(':memory:', 'c');
   const version = sqlite3.version.libVersion;
   /* Foreign keys are off by default in SQLite and are per-connection, not part
@@ -293,17 +316,17 @@ function decltypesFor(db: SqliteDatabase, sqlite3: Sqlite3, sql: string, columnC
   let stmt: PreparedStatement | null = null;
   try {
     stmt = db.prepare(sql);
-    if (stmt.columnCount !== columnCount) return new Array(columnCount).fill(null);
+    if (stmt.columnCount !== columnCount) return nullDecltypes(columnCount);
     const pointer = stmt.pointer;
-    if (pointer === undefined) return new Array(columnCount).fill(null);
+    if (pointer === undefined) return nullDecltypes(columnCount);
     const out: (string | null)[] = [];
     for (let i = 0; i < columnCount; i += 1) {
       const declared = sqlite3.capi.sqlite3_column_decltype(pointer, i);
-      out.push(typeof declared === 'string' && declared !== '' ? declared : null);
+      out.push(declared === null || declared === '' ? null : declared);
     }
     return out;
   } catch {
-    return new Array(columnCount).fill(null);
+    return nullDecltypes(columnCount);
   } finally {
     try {
       stmt?.finalize();
@@ -313,10 +336,22 @@ function decltypesFor(db: SqliteDatabase, sqlite3: Sqlite3, sql: string, columnC
   }
 }
 
+/** One `null` per column, the fallback when a statement cannot be recompiled or
+    declares a different column count than it returned. */
+function nullDecltypes(count: number): (string | null)[] {
+  return Array.from({ length: count }, () => null);
+}
+
 /* ---------- introspection for the tables drawer ---------- */
 
 /** Bookkeeping, not learner data: it is not a relation a lesson can address. */
 const INTERNAL_TABLES = new Set(['dataset_meta', 'sqlite_sequence']);
+
+/** A SQLite value that is text, narrowed from the storage-class union the driver
+    hands back. */
+function isText(v: SqlValue): v is string {
+  return typeof v === 'string';
+}
 
 function readTables(db: SqliteDatabase): EngineTable[] {
   const names: string[] = [];
@@ -366,7 +401,7 @@ function readTables(db: SqliteDatabase): EngineTable[] {
       rowMode: 'object',
       callback: (row) => {
         const from = row['from'];
-        if (typeof from === 'string') foreignKeys.add(from);
+        if (isText(from)) foreignKeys.add(from);
         return undefined;
       },
     });

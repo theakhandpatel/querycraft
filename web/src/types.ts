@@ -3,12 +3,14 @@
    in-browser engine and the Go gateway satisfy. */
 
 import type { ExplainRequest, PerfContract, PlanBundle } from './api/planContract';
+import type { Schema } from 'effect';
 import type {
   AiAvailability,
   AiCourseBuildAnswer,
   AdminAIConfig,
   AdminAIModelEntry,
   AdminAIUpdate,
+  AiCourseEdits,
   AiCourseRecord,
   AiCritiqueResponse,
   AiDefectReport,
@@ -18,6 +20,8 @@ import type {
   AiJobHandle,
   AiOutcome,
   AiRecord,
+  AiRunSummary,
+  AiRunTranscript,
   AiSetupPlan,
   AiTutorRequest,
   AiTutorResponse,
@@ -143,6 +147,27 @@ export interface Course {
   authored?: boolean;
 }
 
+/** The learner's latest run of one exercise, as the cell that owns the editor
+    saw it. The tutor drawer shows it back to the learner and sends the error's
+    code and message to the gateway, so this is a mirror of the cell, never a
+    recomputation. `rows` is present only on a successful run. */
+export type TutorRunState =
+  | { status: 'ran'; rows: number }
+  | { status: 'error'; code: string; message?: string }
+  | { status: 'not_run' };
+
+/** What the tutor drawer describes: the exercise cell and its place in the
+    course, plus the learner's latest SQL and run state at the moment it opened.
+    The chat itself is session state keyed by `block.id`; this is the snapshot
+    the drawer answers questions about. */
+export interface TutorTarget {
+  block: Block;
+  module: CourseModule;
+  course: Course;
+  sql: string;
+  run: TutorRunState;
+}
+
 export interface TableDef {
   name: string;
   rows: number;
@@ -266,6 +291,7 @@ export const AI_ERROR_CODES = [
   'AI_PATCH_UNVERIFIED',
   'AI_PATCH_UNAPPROVED',
   'ENVIRONMENT_UNAVAILABLE',
+  'AI_RATE_LIMITED',
 ] as const;
 
 export type AiErrorCode = (typeof AI_ERROR_CODES)[number];
@@ -384,7 +410,7 @@ export interface DiagnosticsReport {
   store: { kind: string; persistent: boolean };
   dataset: { schema: string; version: number };
   progress: { version: number };
-  learner?: Record<string, unknown>;
+  learner?: Schema.JsonObject;
 }
 
 export interface EngineCapabilities {
@@ -442,9 +468,21 @@ export interface EnvironmentReset {
   environment?: EnvironmentInfo;
 }
 
-export type PipelineEvent =
+/** The result of preparing a stored course's workspace. `setup_statements` is
+    how many of the course's setup statements this call applied; the gateway
+    answers a second prepare for the same course and workspace with 0, because
+    the setup is already there. */
+export interface EnvironmentPrepare {
+  ok: boolean;
+  setup_statements: number;
+}
+
+/** The paced pipeline's events. `line` is generic because the one caller emits
+    structured log lines (`LogLineDraft`), not HTML: the pipeline owns the
+    cadence, not the markup. */
+export type PipelineEvent<TLine = string> =
   | { type: 'step'; index: number; state: 'running' | 'done' }
-  | { type: 'log'; t: string; html: string }
+  | { type: 'log'; t: string; line: TLine }
   | { type: 'all-done' };
 
 export interface GenerationRequest {
@@ -452,7 +490,6 @@ export interface GenerationRequest {
   steps?: string[];
   lines?: [string, string][];
   exercises?: number;
-  [key: string]: unknown;
 }
 
 export interface CourseGeneration {
@@ -576,6 +613,11 @@ export interface ExecutionApi {
       adapter then rebuilds the course's own setup in the restored workspace, so
       the learner's database is the one the exercises were verified in. */
   resetEnvironment(dataset?: DatasetId, dialect?: Dialect, course?: Course | null): Promise<EnvironmentReset>;
+  /** Apply a stored course's own setup to the learner's workspace before its
+      first exercise runs. Idempotent per workspace on the gateway, so a second
+      call for the same course applies nothing. A built-in course has no stored
+      setup and is never prepared: call this only for a `gateway` course. */
+  prepareEnvironment(courseId: string, dialect?: Dialect): Promise<EnvironmentPrepare>;
   /** Start building a workspace before the learner's first Run needs it. Fire
       and forget by design: nothing waits on it and it never reports. */
   warmUp(dataset?: DatasetId, dialect?: Dialect): void;
@@ -617,9 +659,15 @@ export interface ExecutionApi {
       behind the pi-ai provider's model field. Offline adapters answer empty. */
   adminAIModels(): Promise<AdminAIModelEntry[]>;
   /** The caller's client preferences (theme, custom themes), or null when the
-      account has none. Offline adapters answer null honestly. */
+      account has none. Offline adapters answer null honestly. The gateway
+      stores an arbitrary JSON document, so the value stays `unknown`; a named
+      shape would claim a contract the gateway never promised. The dictionary
+      rule gets a disable for the same reason stated at the seam in
+      `api/execution/shared.ts`. */
+  // oxlint-disable-next-line anti-slop/no-unsafe-dictionary-type -- arbitrary JSON document the gateway stores verbatim.
   preferences(): Promise<Record<string, unknown> | null>;
   /** Replace the caller's preference document wholesale. */
+  // oxlint-disable-next-line anti-slop/no-unsafe-dictionary-type -- same arbitrary-JSON boundary as `preferences`.
   savePreferences(prefs: Record<string, unknown>): Promise<Record<string, unknown>>;
   /** Admin. Save and apply an AI configuration while the gateway runs; it
       survives a restart because the boot path applies the stored setting. */
@@ -630,6 +678,11 @@ export interface ExecutionApi {
   diagnostics(): Promise<DiagnosticsReport | null>;
   getCourse(id: string): Promise<AiCourseRecord | null>;
   deleteCourse(id: string): Promise<{ ok: boolean }>;
+  /** M8. Edit a stored course's authored fields; the gateway is the source of
+      truth. Only the title, the subtitle and a chapter's title and summary can
+      change, and a chapter edit names a chapter the stored plan already has.
+      Answers with the stored record. The offline adapters refuse. */
+  updateCourse(id: string, edits: AiCourseEdits): Promise<AiCourseRecord>;
   /** M10. Approve a paused course: continue its stored outline into the chapter
       phase. Answers with a job to poll when the gateway ran it in the
       background, or with the blocking outcome. */
@@ -645,6 +698,12 @@ export interface ExecutionApi {
   critique(challengeId: string, req: { sql: string; objective?: string }): Promise<AiCritiqueResponse>;
   reportDefect(req: AiDefectReport): Promise<AiDefectVerdict>;
   decidePatch(patchId: string, approved: boolean): Promise<{ applied: boolean }>;
+  /** M12. The caller's own agent-run transcripts, newest first, and one run's
+      whole transcript. The gateway scopes both to the session; a run that is
+      not yours reads as null. The offline adapters answer an empty list and
+      null honestly, because they have no run store to read. */
+  listRuns(): Promise<AiRunSummary[]>;
+  getRun(id: string): Promise<AiRunTranscript | null>;
 }
 
 /* ---------- UI ---------- */
@@ -657,6 +716,7 @@ export type Screen =
   | 'building'
   | 'review'
   | 'manage'
+  | 'runs'
   | 'lesson'
   | 'workbook'
   | 'workbook-progress'
@@ -699,5 +759,4 @@ export type ThemePreference = ThemeName | `user-${string}`;
 export interface UiState {
   selectedCourseId: string;
   libraryFilter: string;
-  [key: string]: unknown;
 }

@@ -15,6 +15,7 @@ import type {
   Dialect,
   EngineCapabilities,
   EnvironmentInfo,
+  EnvironmentPrepare,
   EnvironmentReset,
   Evaluation,
   GenerationRequest,
@@ -31,9 +32,9 @@ import type {
 /* The seam that every transport shares.
 
    `ExecutionService` is the Effect service key. `ExecutionServiceShape` is the
-   contract each layer satisfies. The bearer token store is re-exported from
-   `../authStorage` because that is the name callers already import; the offline
-   draft answers both layers share live here. */
+   contract each layer satisfies. The signed-in account store is re-exported
+   from `../authStorage` because that is the name callers already import; the
+   offline draft answers both layers share live here. */
 
 /* The typed failure every adapter can raise now lives in ./errors so the AI
    seam can raise and inspect it without importing the browser engine. It is
@@ -47,13 +48,19 @@ export interface ExecutionServiceShape extends AiServiceShape {
   diagnostics(): Effect.Effect<DiagnosticsReport | null>;
   /* Per-account client preferences. The gateway stores the document without
      interpreting it; the offline adapters answer null honestly and their
-     saves resolve to the stored value they cannot keep. */
+     saves resolve to the stored value they cannot keep. The value is arbitrary
+     JSON, so `Record<string, unknown>` is the honest boundary here: narrowing
+     it would force `types.ts` and `useTheme.ts` to claim a shape the gateway
+     never promised. The dictionary rule cannot express that boundary, so the
+     two sites carry a disable with this reason. */
+  // oxlint-disable-next-line anti-slop/no-unsafe-dictionary-type -- arbitrary JSON the gateway stores verbatim; see the note above.
   preferences(): Effect.Effect<Record<string, unknown> | null>;
+  // oxlint-disable-next-line anti-slop/no-unsafe-dictionary-type -- same boundary; the caller's document is arbitrary JSON.
   savePreferences(prefs: Record<string, unknown>): Effect.Effect<Record<string, unknown>>;
   readonly config: ApiConfig;
   /* Accounts. `me` resolves to null when there is no valid session (including a
-     401 from the gateway, which also clears the stored token) so boot restore
-     never has to treat "signed out" as an error. */
+     401 from the gateway, which also clears the stored account id) so boot
+     restore never has to treat "signed out" as an error. */
   signup(input: SignupInput): Effect.Effect<AuthSession, GatewayError>;
   login(input: LoginInput): Effect.Effect<AuthSession, GatewayError>;
   logout(): Effect.Effect<void, GatewayError>;
@@ -71,6 +78,11 @@ export interface ExecutionServiceShape extends AiServiceShape {
   /* M5. "Restore my data" is a different workspace depending on the course: the
      challenge database, or the plan lab. The dataset names which. */
   resetEnvironment(dataset?: DatasetId, dialect?: Dialect, course?: Course | null): Effect.Effect<EnvironmentReset, GatewayError>;
+  /* A stored course carries its own workspace setup. Preparing it when the
+     course opens means its first exercise does not die with "relation does not
+     exist". The gateway answers a second prepare for the same workspace as a
+     no-op, so a re-run is safe. */
+  prepareEnvironment(courseId: string, dialect?: Dialect): Effect.Effect<EnvironmentPrepare, GatewayError>;
   /* Building a workspace is expensive and nobody should pay for it on the first
      Run. This is the seam's "the learner is about to need this dataset" hint:
      the browser adapter starts the engine, an adapter with a server behind it
@@ -108,17 +120,14 @@ export type NoteFn = (method: string, path: string, status: number, ms: number) 
 
 export const nowMs = (): number => (typeof performance !== 'undefined' && performance.now ? performance.now() : Date.now());
 
-/* The bearer token store lives in `../authStorage`, free of any engine or
+/* The signed-in account store lives in `../authStorage`, free of any engine or
    dataset import, so the AI seam can read the account without pulling the
    browser engine into its bundle. Re-exported here because this is the name the
    gateway layer and the app already import them by. */
 export {
-  AUTH_TOKEN_KEY,
   AUTH_USER_KEY,
-  clearAuthToken,
-  readAuthToken,
+  clearAuthUser,
   readAuthUser,
-  writeAuthToken,
   writeAuthUser,
 } from '../authStorage';
 
@@ -128,7 +137,15 @@ export {
    seam's `generateCourse`/`generateChallenge` are what reach the gateway. Both
    transports answer a draft here, so the shape and the dataset version it
    records are stated once. The layer keeps its own request note around this. */
-export function offlineDraft(req: GenerationRequest): { course: CourseGeneration; challenge: { ok: true } } {
+/** The answer both transports give a draft: the authored record, and the
+    challenge's plain acknowledgement. Named so the return type is a contract
+    rather than an anonymous object at the function boundary. */
+export interface OfflineDraft {
+  course: CourseGeneration;
+  challenge: { ok: true };
+}
+
+export function offlineDraft(req: GenerationRequest): OfflineDraft {
   return {
     course: {
       title: req.title,

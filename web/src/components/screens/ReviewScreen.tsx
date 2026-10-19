@@ -38,7 +38,7 @@ export default function ReviewScreen() {
               <span className="pill"><span className="dot"></span> {report.totals.verified} of {report.totals.exercises} exercises executed and cross-checked</span>
             )}
             {report && report.outcome !== 'active' && (
-              <span className="pill" style={{ background: 'var(--amber-soft)', color: 'var(--amber)' }}>{report.totals.verified} of {report.totals.exercises} exercises verified · the rest failed</span>
+              <span className="pill warn">{report.totals.verified} of {report.totals.exercises} exercises verified · the rest failed</span>
             )}
             {!report && (
               <span className="pill subtle">No build in this session · open Create to run one</span>
@@ -198,7 +198,7 @@ function SampleChapter({ course }: { course: Course }) {
         {outline.map((g, i) => {
           const ec = g.exIds.length;
           return (
-            <div className="reportrow" key={i}>
+            <div className="reportrow" key={g.title}>
               <span><span className="mono" style={{ fontSize: 11, color: 'var(--text-3)' }}>{i + 1 < 10 ? '0' : ''}{i + 1}</span> &nbsp;{g.title}</span>
               <span className="muted">{ec ? `${ec} exercise${ec > 1 ? 's' : ''}` : `${g.items.length} parts`}</span>
             </div>
@@ -293,7 +293,7 @@ function Validation({ report }: { report: DraftReport | null }) {
         <h2>{failures.length > 0 ? 'What refused' : 'What was checked'}</h2>
         {failures.length > 0 ? (
           <>
-            <span className="pill" style={{ background: 'var(--amber-soft)', color: 'var(--amber)' }}>
+            <span className="pill warn">
               {failures.length} exercise{failures.length === 1 ? '' : 's'} did not verify
             </span>
             {failures.map((f) => (
@@ -349,11 +349,11 @@ function Validation({ report }: { report: DraftReport | null }) {
       {report.stages.length > 0 && (
         <div className="card" style={{ gridColumn: '1 / -1' }}>
           <h2>Pipeline stages as reported</h2>
-          {report.stages.map((st, i) => (
-            <div className="reportrow" key={`${st.name}-${i}`}>
+          {report.stages.map((st) => (
+            <div className="reportrow" key={st.name}>
               <span className="mono" style={{ fontSize: 12 }}>{st.name}</span>
               <span className={st.state === 'failed' ? 'fail' : st.state === 'done' ? 'pass' : 'muted'}>
-                {st.state}{typeof st.ms === 'number' ? ` · ${st.ms} ms` : ''}{st.detail ? ` — ${st.detail}` : ''}
+                {st.state}{st.ms !== undefined ? ` · ${st.ms} ms` : ''}{st.detail ? ` — ${st.detail}` : ''}
               </span>
             </div>
           ))}

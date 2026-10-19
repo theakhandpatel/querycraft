@@ -42,13 +42,95 @@ const runRoots = new Set();
 let runRootDir = null;
 let runCleanupInstalled = false;
 
+/*
+ * Live detached gateways.
+ *
+ * startGateway spawns the gateway detached so its whole process tree (the
+ * gateway and the embedded postmaster it owns) takes one signal. stopGateway
+ * signals that tree on the normal path, but an audit that dies without
+ * reaching stopGateway -- a kill from `make`, an uncaught throw, a failed
+ * check that calls process.exit -- used to leave the detached gateway and its
+ * postmaster running after the run root was deleted, which is the leak this
+ * registry closes. The run root is removed only after the gateways it hosted
+ * are gone.
+ */
+const liveChildren = new Set();
+const stoppedChildren = new WeakSet();
+
+function registerChild(child) {
+  liveChildren.add(child);
+  child.on('exit', () => liveChildren.delete(child));
+}
+
+// signalGroup signals a detached child's whole process group and then the child
+// itself, so a gateway that did not become a group leader is still reached.
+function signalGroup(child, signal) {
+  try { process.kill(-child.pid, signal); } catch { /* no process group */ }
+  try { process.kill(child.pid, signal); } catch { /* already gone */ }
+}
+
+// killLiveChildren terminates every registered gateway before its run root is
+// removed. A gateway stopGateway already signalled gets SIGKILL at once; one
+// that was never signalled (the leak case) gets SIGTERM and a bounded grace
+// period first.
+function killLiveChildren() {
+  const children = [...liveChildren].filter((child) => child && child.exitCode === null);
+  if (children.length === 0) return;
+  const neverSignalled = children.some((child) => !stoppedChildren.has(child));
+  for (const child of children) signalGroup(child, 'SIGTERM');
+  if (neverSignalled) {
+    // process.on('exit') cannot await, so block on a shared buffer rather than
+    // spin and steal the CPU the children need to shut down.
+    const deadline = Date.now() + 1_000;
+    while (Date.now() < deadline && children.some((child) => child.exitCode === null)) {
+      Atomics.wait(new Int32Array(new SharedArrayBuffer(4)), 0, 0, 25);
+    }
+  }
+  for (const child of children) {
+    if (child.exitCode === null) signalGroup(child, 'SIGKILL');
+  }
+  liveChildren.clear();
+}
+
 function removeRunRoots() {
+  killLiveChildren();
   for (const dir of runRoots) {
+    // Embedded PostgreSQL runs its postmaster in a process group of its own, so
+    // the gateway's group signal does not reach it. Kill whatever is still
+    // holding this run's unique scratch path in its argv before removing it.
+    killProcessesReferencing(dir);
     try {
       fs.rmSync(dir, { recursive: true, force: true });
     } catch { /* best effort: the run is ending either way */ }
   }
   runRoots.clear();
+}
+
+// pidsReferencing returns every PID whose command line contains dir. The dir is
+// this run's own mkdtemp path, so no process that did not come from this run
+// can match it; it is never a broad `pkill -f` pattern.
+function pidsReferencing(dir) {
+  const pids = [];
+  let entries;
+  try { entries = fs.readdirSync('/proc'); } catch { return pids; }
+  for (const entry of entries) {
+    if (!/^\d+$/.test(entry)) continue;
+    let cmdline;
+    try { cmdline = fs.readFileSync(`/proc/${entry}/cmdline`, 'utf8'); } catch { continue; }
+    if (cmdline.includes(dir)) pids.push(Number(entry));
+  }
+  return pids;
+}
+
+function killProcessesReferencing(dir) {
+  const pids = pidsReferencing(dir);
+  if (pids.length === 0) return;
+  for (const pid of pids) { try { process.kill(pid, 'SIGTERM'); } catch { /* gone */ } }
+  const deadline = Date.now() + 1_000;
+  while (Date.now() < deadline && pidsReferencing(dir).length > 0) {
+    Atomics.wait(new Int32Array(new SharedArrayBuffer(4)), 0, 0, 25);
+  }
+  for (const pid of pidsReferencing(dir)) { try { process.kill(pid, 'SIGKILL'); } catch { /* gone */ } }
 }
 
 function installRunCleanup() {
@@ -174,6 +256,20 @@ export function buildGateway(tag = 'audit') {
   return bin;
 }
 
+/* How many times a start is retried when its ports were taken. The probe in
+   freePort() only proves the port was free at the moment it ran; a sibling
+   audit can take it before this gateway binds. An audit must not fail because
+   another audit won that race. */
+const gatewayAttempts = 4;
+
+/** insideRunRoot reports whether p is this run's own scratch tree, the only
+    paths a retry may delete. */
+function insideRunRoot(p) {
+  if (!p || !runRootDir) return false;
+  const resolved = path.resolve(String(p));
+  return resolved === runRootDir || resolved.startsWith(runRootDir + path.sep);
+}
+
 /**
  * startGateway launches a gateway and waits for /health.
  *
@@ -183,36 +279,57 @@ export function buildGateway(tag = 'audit') {
  * --config, so the audits exercise the same resolution path an install does.
  * extraEnv, if given, is merged over the child process environment for
  * process-level variables only (for example TZ).
+ *
+ * A start whose gateway exits before ready because a port was taken is retried
+ * on fresh ports, with a fresh cluster when this run owns one. Under
+ * `make test` eight audits start gateways at once, and `address already in
+ * use` from that contention used to fail the audit outright.
  */
 export async function startGateway(bin, config = {}, extraEnv = {}, readyTimeoutMs = 120_000) {
-  const port = await freePort();
-  const cfgFile = path.join(scratchTmp(), `gateway-${Date.now()}-${process.pid}.json`);
-  fs.writeFileSync(cfgFile, JSON.stringify({ addr: `127.0.0.1:${port}`, ...config }, null, 2));
-  const child = spawn(bin, ['--config', cfgFile], {
-    env: { ...process.env, TMPDIR: scratchTmp(), ...extraEnv },
-    stdio: ['ignore', 'pipe', 'pipe'],
-    detached: true,
-  });
-  const forgetConfig = () => { try { fs.unlinkSync(cfgFile); } catch { /* best effort */ } };
-  let log = '';
-  child.stdout.on('data', (d) => { log += d.toString(); });
-  child.stderr.on('data', (d) => { log += d.toString(); });
-  child.on('exit', forgetConfig);
-
-  const base = `http://127.0.0.1:${port}`;
-  const deadline = Date.now() + readyTimeoutMs;
-  while (Date.now() < deadline) {
-    if (child.exitCode !== null) {
-      throw new Error(`gateway exited with ${child.exitCode} before becoming ready:\n${log}`);
+  for (let attempt = 1; ; attempt++) {
+    const port = await freePort();
+    const attemptConfig = { addr: `127.0.0.1:${port}`, ...config };
+    if (attempt > 1 && insideRunRoot(config.pg_data)) {
+      /* The embedded PostgreSQL port was probed the same way and can be lost
+         the same way. A retry re-rolls it and rebuilds the cluster: a cluster
+         half-created on the lost port is not reusable. */
+      attemptConfig.pg_port = await freePort();
+      fs.rmSync(String(config.pg_data), { recursive: true, force: true });
+      if (insideRunRoot(config.pg_runtime)) fs.rmSync(String(config.pg_runtime), { recursive: true, force: true });
     }
-    try {
-      const res = await fetch(`${base}/health`);
-      if (res.ok) return { child, base, port, log: () => log };
-    } catch { /* not up yet */ }
-    await new Promise((r) => setTimeout(r, 200));
+    const cfgFile = path.join(scratchTmp(), `gateway-${Date.now()}-${process.pid}-${attempt}.json`);
+    fs.writeFileSync(cfgFile, JSON.stringify(attemptConfig, null, 2));
+    const child = spawn(bin, ['--config', cfgFile], {
+      env: { ...process.env, TMPDIR: scratchTmp(), ...extraEnv },
+      stdio: ['ignore', 'pipe', 'pipe'],
+      detached: true,
+    });
+    registerChild(child);
+    const forgetConfig = () => { try { fs.unlinkSync(cfgFile); } catch { /* best effort */ } };
+    let log = '';
+    child.stdout.on('data', (d) => { log += d.toString(); });
+    child.stderr.on('data', (d) => { log += d.toString(); });
+    child.on('exit', forgetConfig);
+
+    const base = `http://127.0.0.1:${port}`;
+    const deadline = Date.now() + readyTimeoutMs;
+    while (Date.now() < deadline) {
+      if (child.exitCode !== null) break;
+      try {
+        const res = await fetch(`${base}/health`);
+        if (res.ok) return { child, base, port, log: () => log };
+      } catch { /* not up yet */ }
+      await new Promise((r) => setTimeout(r, 200));
+    }
+    const exited = child.exitCode !== null;
+    stopGateway(child);
+    /* Both an early exit and a timeout carry the reason in the captured log;
+       only a bind failure is worth another attempt. */
+    const portTaken = /address already in use|could not bind|bind: address/i.test(log);
+    if (portTaken && attempt < gatewayAttempts) continue;
+    if (exited) throw new Error(`gateway exited with ${child.exitCode} before becoming ready:\n${log}`);
+    throw new Error(`gateway never became ready:\n${log}`);
   }
-  stopGateway(child);
-  throw new Error(`gateway never became ready:\n${log}`);
 }
 
 /**
@@ -223,6 +340,7 @@ export async function startGateway(bin, config = {}, extraEnv = {}, readyTimeout
  */
 export function stopGateway(child) {
   if (!child || child.exitCode !== null) return;
+  stoppedChildren.add(child);
   try { process.kill(child.pid, 'SIGTERM'); } catch { /* already gone */ }
   try { process.kill(-child.pid, 'SIGTERM'); } catch { /* no process group */ }
 }

@@ -155,7 +155,7 @@ export default function TablesDrawer() {
           <button className="small ghost" aria-label="Close" onClick={() => s.setTablesOpen(false)}><Icon name="x" /></button>
         </div>
         <div className="drawerbody">
-          {s.tablesOpen ? <Schema key={schemaNonce} api={s.api} dataset={dataset} dialect={dialect} /> : null}
+          {s.tablesOpen ? <Schema key={schemaNonce} api={s.api} dataset={dataset} dialect={dialect} focus={s.tablesFocus} /> : null}
         </div>
         <footer className="drawerfoot">
           <div className="eyebrow">Your workspace</div>

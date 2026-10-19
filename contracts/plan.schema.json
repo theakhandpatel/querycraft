@@ -126,8 +126,7 @@
             "required": ["relation", "name"],
             "properties": {
               "relation": { "type": "string" },
-              "name": { "type": "string" },
-              "definition": { "type": ["string", "null"] }
+              "name": { "type": "string" }
             }
           }
         },

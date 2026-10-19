@@ -52,7 +52,7 @@ export function moduleExerciseBlocks(m: CourseModule): Block[] {
 export function exercisesWithReference(course: Course): Block[] {
   return (course.modules ?? [])
     .flatMap((m) => moduleExerciseBlocks(m))
-    .filter((b) => typeof b.solution === 'string' && b.solution.trim().length > 0);
+    .filter((b) => (b.solution ?? '').trim().length > 0);
 }
 export function allModules(): CourseModule[] {
   const out: CourseModule[] = [];
@@ -69,6 +69,22 @@ export function findExercise(id: string): FoundExercise | null {
     ),
   );
   return out;
+}
+/** The course and chapter that hold a block, so a screen can open the lesson a
+    challenge's reference came from instead of guessing the next chapter. */
+export interface BlockHome {
+  courseId: string;
+  moduleIndex: number;
+}
+export function blockHome(id: string | null | undefined): BlockHome | null {
+  if (!id) return null;
+  for (const course of COURSES) {
+    const modules = course.modules ?? [];
+    for (let i = 0; i < modules.length; i++) {
+      if ((modules[i].blocks ?? []).some((b) => b.id === id)) return { courseId: course.id, moduleIndex: i };
+    }
+  }
+  return null;
 }
 export function eventTitle(id: string): string {
   let prompt: string | null = null;

@@ -56,7 +56,7 @@ function EditCourseModal() {
       <Field label="Learning goal">{(id) => <textarea id={id} value={goal} onChange={(e) => setGoal(e.target.value)} />}</Field>
       <div className="modalfoot">
         <button onClick={() => s.closeModal()}>Cancel</button>
-        <button className="primary" onClick={() => { s.setReviewGoal(goal); s.saveCourseEdits({ title }); s.closeModal(); }}>Save changes</button>
+        <button className="primary" onClick={() => { s.setReviewGoal(goal); void s.saveCourseEdits({ title }); s.closeModal(); }}>Save changes</button>
       </div>
     </Backdrop>
   );
@@ -83,7 +83,7 @@ function EditLessonModal() {
       <Field label="Chapter page / explanation">{(id) => <textarea id={id} value={body || ''} onChange={(e) => setBody(e.target.value)} />}</Field>
       <div className="modalfoot">
         <button onClick={() => s.closeModal()}>Cancel</button>
-        <button className="primary" onClick={() => { s.saveLessonEdits({ title, summary: body }); s.closeModal(); }}>Save chapter</button>
+        <button className="primary" onClick={() => { void s.saveLessonEdits({ title, summary: body }); s.closeModal(); }}>Save chapter</button>
       </div>
     </Backdrop>
   );

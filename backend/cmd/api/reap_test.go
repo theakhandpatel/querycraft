@@ -12,12 +12,16 @@ import (
 	"github.com/querycraft/sqlquery/backend/internal/store"
 )
 
+// TestMain gives the package one shared PostgreSQL cluster; every test that
+// asks pgtest.Shared for a server gets its own database on it.
+func TestMain(m *testing.M) { pgtest.Main(m) }
+
 // TestBootReaperSkipsTheMemoryStore: newStore falls back to the in-memory
 // store when the metadata database is stale or unreachable, and that store
 // knows only the seeded administrator. Reaping on it would drop every other
 // learner's environment database, so the boot path must skip the sweep.
 func TestBootReaperSkipsTheMemoryStore(t *testing.T) {
-	srv := pgtest.Start(t)
+	srv := pgtest.Shared(t)
 	ctx, cancel := context.WithTimeout(context.Background(), 4*time.Minute)
 	defer cancel()
 

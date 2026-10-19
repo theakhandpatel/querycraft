@@ -6,10 +6,11 @@ package httpapi
 // The sandbox is only real if the SQL a learner submits through POST /query
 // actually executes as the restricted `querycraft_learner` role, on a connection
 // that holds SELECT on `dataset` and nothing else. This test proves that by
-// behaviour rather than by reading the code: it boots its own PostgreSQL cluster
-// (isolated port, t.TempDir() data directory), points a real engine.PgxExecutor
-// at the learner DSN exactly as cmd/api does, drives the real gateway over
-// httptest, then asks the connection who it is and what it can reach.
+// behaviour rather than by reading the code: it takes one database from the
+// package's shared PostgreSQL cluster (pgtest.Shared), points a real
+// engine.PgxExecutor at its learner DSN exactly as cmd/api does, drives the real
+// gateway over httptest, then asks the connection who it is and what it can
+// reach.
 //
 // It also proves the inverse, so it cannot pass by everything failing: a plain
 // `SELECT count(*) FROM orders` must succeed on the same connection.
@@ -30,14 +31,8 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
-	"io"
-	"log/slog"
-	"net"
 	"net/http"
 	"net/http/httptest"
-	"net/url"
-	"os"
-	"path/filepath"
 	"strings"
 	"testing"
 	"time"
@@ -48,14 +43,9 @@ import (
 
 	"github.com/querycraft/sqlquery/backend/internal/dataset"
 	"github.com/querycraft/sqlquery/backend/internal/engine"
-	"github.com/querycraft/sqlquery/backend/internal/localdb"
+	"github.com/querycraft/sqlquery/backend/internal/pgtest"
 	"github.com/querycraft/sqlquery/backend/internal/store"
 )
-
-// adminPathPassword is the throwaway password for this test's own cluster. The
-// cluster lives under t.TempDir() and is destroyed with the test; nothing here
-// is written into the tree.
-const adminPathPassword = "adminpath-test-password"
 
 // adminPathSentinel exists only on the administrative side of the wall. If it
 // ever appears in a /query response, a learner statement read gateway metadata.
@@ -72,63 +62,12 @@ var adminPathExpected = map[string]int{
 }
 
 func TestLearnerSQLNeverRunsOnTheAdminConnection(t *testing.T) {
-	if testing.Short() {
-		t.Skip("boots a PostgreSQL server; skipped under -short")
-	}
-
-	root := t.TempDir()
-	port := adminPathFreePort(t)
-	binaries := adminPathCachedBinaries()
-
+	srv := pgtest.Shared(t)
 	ctx, cancel := context.WithTimeout(context.Background(), 3*time.Minute)
 	defer cancel()
 
-	srv, err := localdb.Start(ctx, adminPathQuietLogger(), localdb.Config{
-		DataPath:     filepath.Join(root, "pg", "data"),
-		RuntimePath:  filepath.Join(root, "pg", "runtime"),
-		BinariesPath: binaries,
-		TempDir:      filepath.Join(root, "tmp"),
-		Port:         port,
-		User:         "querycraft",
-		Password:     adminPathPassword,
-		Database:     "querycraft",
-	})
-	if err != nil {
-		// No cached binaries and no server: the machine cannot run this proof, so
-		// skip instead of failing. With binaries present a boot failure is a real
-		// defect and must fail loudly.
-		if binaries == "" {
-			t.Skipf("no cached PostgreSQL binaries and no server could be started: %v", err)
-		}
-		t.Fatalf("boot embedded PostgreSQL: %v", err)
-	}
-	t.Cleanup(func() { _ = srv.Stop() })
-
 	adminDSN := srv.DSN
-	learnerDSN := adminPathSwapDSNUser(adminDSN, dataset.LearnerRole, adminPathPassword)
-
-	// The dataset is applied over the admin connection, exactly as the gateway
-	// does on first boot. The scripts carry their own BEGIN/COMMIT, so they need
-	// the simple query protocol.
-	adminConn, err := pgx.Connect(ctx, adminDSN)
-	if err != nil {
-		t.Fatalf("connect as admin: %v", err)
-	}
-	defer func() { _ = adminConn.Close(context.WithoutCancel(ctx)) }()
-
-	for _, step := range []struct{ name, script string }{
-		{"schema", dataset.SchemaSQL()},
-		{"seed", dataset.SeedSQL()},
-	} {
-		if _, err := adminConn.PgConn().Exec(ctx, step.script).ReadAll(); err != nil {
-			t.Fatalf("apply dataset %s: %v", step.name, err)
-		}
-	}
-	// The restricted role must exist and hold SELECT on `dataset` alone. It is
-	// (re)asserted after the dataset so the ALL TABLES grant sees the tables.
-	if err := dataset.EnsureLearnerRole(ctx, adminConn, adminPathPassword); err != nil {
-		t.Fatalf("ensure learner role: %v", err)
-	}
+	learnerDSN := srv.LearnerDSN(t, srv.Database)
 
 	// The metadata store creates the real `app` schema the gateway uses, which
 	// is also the schema a learner statement must not be able to reach.
@@ -439,21 +378,6 @@ func adminPathFirstLine(err error) string {
 
 /* ---------- helpers ---------- */
 
-// adminPathSwapDSNUser rebuilds a DSN with a different login, the same way
-// cmd/api's swapDSNUser derives the learner DSN from the admin DSN.
-func adminPathSwapDSNUser(raw, user, password string) string {
-	u, err := url.Parse(raw)
-	if err != nil {
-		return raw
-	}
-	if password == "" {
-		u.User = url.User(user)
-	} else {
-		u.User = url.UserPassword(user, password)
-	}
-	return u.String()
-}
-
 // adminPathBody renders a query body without hand-quoting the SQL.
 func adminPathBody(sql string) string {
 	b, err := json.Marshal(map[string]string{"sql": sql})
@@ -484,50 +408,4 @@ func adminPathInt(t *testing.T, v any) int {
 	}
 	t.Fatalf("value %v (%T) is not an integer", v, v)
 	return 0
-}
-
-// adminPathQuietLogger discards the embedded server's log so the test's own
-// output stays readable.
-func adminPathQuietLogger() *slog.Logger {
-	return slog.New(slog.NewTextHandler(io.Discard, nil))
-}
-
-// adminPathCachedBinaries finds an already-extracted PostgreSQL under the
-// repository's .data directory so the test needs no network. An empty result
-// lets embedded-postgres fall back to its own download cache.
-func adminPathCachedBinaries() string {
-	if v := os.Getenv("QC_PG_BINARIES"); v != "" {
-		return v
-	}
-	dir, err := os.Getwd()
-	if err != nil {
-		return ""
-	}
-	for i := 0; i < 8; i++ {
-		candidate := filepath.Join(dir, ".data", "pg", "binaries")
-		if _, err := os.Stat(filepath.Join(candidate, "bin", "pg_ctl")); err == nil {
-			return candidate
-		}
-		parent := filepath.Dir(dir)
-		if parent == dir {
-			break
-		}
-		dir = parent
-	}
-	return ""
-}
-
-// adminPathFreePort picks an unused TCP port so the test never collides with a
-// gateway a developer may be running.
-func adminPathFreePort(t *testing.T) uint32 {
-	t.Helper()
-	listener, err := net.Listen("tcp", "127.0.0.1:0")
-	if err != nil {
-		t.Fatalf("find a free port: %v", err)
-	}
-	port := listener.Addr().(*net.TCPAddr).Port
-	if err := listener.Close(); err != nil {
-		t.Fatalf("release the free port: %v", err)
-	}
-	return uint32(port)
 }

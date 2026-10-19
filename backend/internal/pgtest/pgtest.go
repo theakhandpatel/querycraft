@@ -21,6 +21,7 @@ package pgtest
 import (
 	"context"
 	"crypto/sha256"
+	"errors"
 	"fmt"
 	"io"
 	"io/fs"
@@ -30,9 +31,16 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
+	"strconv"
 	"strings"
+	"sync"
+	"sync/atomic"
+	"syscall"
 	"testing"
 	"time"
+
+	"github.com/jackc/pgx/v5"
+	"github.com/jackc/pgx/v5/pgconn"
 
 	"github.com/querycraft/sqlquery/backend/internal/dataset"
 	"github.com/querycraft/sqlquery/backend/internal/localdb"
@@ -57,10 +65,15 @@ const goldenFormat = 1
 
 // Server is a running embedded PostgreSQL plus the DSNs a test needs.
 type Server struct {
-	// DSN is the admin (superuser) connection string.
+	// DSN is the admin (superuser) connection string for the database this
+	// test may write to.
 	DSN string
-	// Database is the default database the dataset was applied to.
+	// Database is the database DSN points at.
 	Database string
+	// ClusterDSN is the admin connection string for the cluster's maintenance
+	// database. A Shared server exposes it for tests that manage databases of
+	// their own; a dedicated server sets it to DSN.
+	ClusterDSN string
 }
 
 // Start boots a cluster and returns it. The server stops and its data directory
@@ -114,7 +127,230 @@ func Start(t *testing.T) *Server {
 	}
 	t.Cleanup(func() { _ = srv.Stop() })
 
-	return &Server{DSN: srv.DSN, Database: cfg.Database}
+	return &Server{DSN: srv.DSN, Database: cfg.Database, ClusterDSN: srv.DSN}
+}
+
+// Main runs a package's tests around one shared cluster.
+//
+// A package that uses Shared must declare:
+//
+//	func TestMain(m *testing.M) { pgtest.Main(m) }
+//
+// Main stops the cluster after the tests, passing or failing, and exits with
+// their code. A binary that is killed before Main runs is served by the
+// watchdog startShared installs.
+func Main(m *testing.M) {
+	code := m.Run()
+	StopShared()
+	os.Exit(code)
+}
+
+// sharedServer is the package-wide cluster Shared hands databases from.
+type sharedServer struct {
+	server   *localdb.Server
+	root     string
+	dsn      string // admin DSN for the maintenance database
+	template string // the database every test database is copied from
+	counter  atomic.Uint64
+}
+
+var (
+	sharedOnce sync.Once
+	shared     *sharedServer
+	sharedErr  error
+)
+
+// Shared returns a server for one test: the cluster is shared by the package
+// (one boot per test binary) and the database is private to the test.
+//
+// The cluster is a copy of the golden cluster started once on first use; each
+// call then creates a database from the dataset template with CREATE DATABASE
+// ... TEMPLATE, which PostgreSQL performs as a file copy in milliseconds. A
+// test that must stop and restart its own server keeps using Start.
+func Shared(t *testing.T) *Server {
+	t.Helper()
+	if testing.Short() {
+		t.Skip("boots a PostgreSQL server; skipped under -short")
+	}
+	sharedOnce.Do(func() { shared, sharedErr = startShared() })
+	if sharedErr != nil {
+		if CachedBinaries() == "" {
+			t.Skipf("no cached PostgreSQL binaries and no server could be started: %v", sharedErr)
+		}
+		t.Fatalf("start the shared PostgreSQL cluster: %v", sharedErr)
+	}
+
+	ctx, cancel := context.WithTimeout(context.Background(), time.Minute)
+	defer cancel()
+	name, err := shared.newDatabase(ctx)
+	if err != nil {
+		t.Fatalf("create this test's database: %v", err)
+	}
+	t.Cleanup(func() {
+		dropCtx, dropCancel := context.WithTimeout(context.Background(), time.Minute)
+		defer dropCancel()
+		_ = shared.dropDatabase(dropCtx, name)
+	})
+
+	dsn, err := databaseDSN(shared.dsn, name)
+	if err != nil {
+		t.Fatalf("build the test DSN: %v", err)
+	}
+	return &Server{DSN: dsn, Database: name, ClusterDSN: shared.dsn}
+}
+
+// StopShared stops the package-wide cluster and removes its data directory.
+// Main calls it. A test binary that dies without running Main is handled by the
+// watchdog startShared installs.
+func StopShared() {
+	if shared == nil || shared.server == nil {
+		return
+	}
+	_ = shared.server.Stop()
+	_ = os.RemoveAll(shared.root)
+	shared.server = nil
+}
+
+// startShared boots the one cluster a package's tests share.
+func startShared() (*sharedServer, error) {
+	binaries := CachedBinaries()
+	root, err := os.MkdirTemp("", "qc-pgtest-shared-")
+	if err != nil {
+		return nil, fmt.Errorf("make the shared cluster directory: %w", err)
+	}
+	dataPath := filepath.Join(root, "pg", "data")
+	if binaries != "" {
+		golden, err := goldenClusterPath(binaries)
+		if err != nil {
+			_ = os.RemoveAll(root)
+			return nil, err
+		}
+		if err := copyTree(golden, dataPath); err != nil {
+			_ = os.RemoveAll(root)
+			return nil, fmt.Errorf("copy the golden cluster: %w", err)
+		}
+	}
+
+	port, err := FreePort()
+	if err != nil {
+		_ = os.RemoveAll(root)
+		return nil, fmt.Errorf("find a free port: %w", err)
+	}
+	cfg := localdb.Config{
+		DataPath:     dataPath,
+		RuntimePath:  filepath.Join(root, "pg", "runtime"),
+		BinariesPath: binaries,
+		TempDir:      filepath.Join(root, "tmp"),
+		Port:         port,
+		User:         "querycraft",
+		Password:     Password,
+		Database:     "querycraft",
+	}
+
+	ctx, cancel := context.WithTimeout(context.Background(), 3*time.Minute)
+	defer cancel()
+	srv, err := localdb.Start(ctx, QuietLogger(), cfg)
+	if err != nil {
+		_ = os.RemoveAll(root)
+		return nil, fmt.Errorf("boot embedded PostgreSQL: %w", err)
+	}
+	maintenance, err := databaseDSN(srv.DSN, "postgres")
+	if err != nil {
+		_ = srv.Stop()
+		_ = os.RemoveAll(root)
+		return nil, fmt.Errorf("build the maintenance DSN: %w", err)
+	}
+	watchSharedCluster(root, dataPath)
+	return &sharedServer{server: srv, root: root, dsn: maintenance, template: cfg.Database}, nil
+}
+
+// newDatabase copies the package template into a database private to one test.
+//
+// PostgreSQL refuses to copy a template with any session on it. The cluster's
+// own boot connections (the readiness probe, the dataset check) normally close
+// before this runs, but a probe whose 3-second context expired is handed to
+// pgx's asynchronous closer, which can hold the socket for another 15 seconds.
+// Under a loaded suite that window is reachable, so the fixture terminates any
+// session still on the template (the cluster is ours and was booted seconds
+// ago) and retries the copy while they exit.
+func (c *sharedServer) newDatabase(ctx context.Context) (string, error) {
+	_ = c.exec(ctx, `SELECT pg_terminate_backend(pid) FROM pg_stat_activity WHERE datname = $1 AND pid <> pg_backend_pid()`, c.template)
+
+	name := fmt.Sprintf("qc_t_%d_%d", os.Getpid(), c.counter.Add(1))
+	deadline := time.Now().Add(20 * time.Second)
+	for {
+		err := c.exec(ctx, `CREATE DATABASE "`+name+`" TEMPLATE "`+c.template+`"`)
+		if err == nil {
+			return name, nil
+		}
+		var pgErr *pgconn.PgError
+		if !errors.As(err, &pgErr) || pgErr.Code != "55006" || time.Now().After(deadline) {
+			return "", err
+		}
+		select {
+		case <-ctx.Done():
+			return "", ctx.Err()
+		case <-time.After(50 * time.Millisecond):
+		}
+	}
+}
+
+// dropDatabase removes one test's database, forcing its remaining sessions
+// closed. Cleanups run in reverse order, so the pools a test opened are closed
+// before this runs; FORCE covers the ones a test forgot.
+func (c *sharedServer) dropDatabase(ctx context.Context, name string) error {
+	return c.exec(ctx, `DROP DATABASE IF EXISTS "`+name+`" WITH (FORCE)`)
+}
+
+// exec runs one maintenance statement over a fresh admin connection. The
+// connection goes to `postgres`, never the template: PostgreSQL refuses to copy
+// a database that has a connected session, so the fixture leaves the template
+// untouched and connects somewhere else.
+func (c *sharedServer) exec(ctx context.Context, stmt string, args ...any) error {
+	conn, err := pgx.Connect(ctx, c.dsn)
+	if err != nil {
+		return fmt.Errorf("connect to the maintenance database: %w", err)
+	}
+	defer func() { _ = conn.Close(context.WithoutCancel(ctx)) }()
+	_, err = conn.Exec(ctx, stmt, args...)
+	return err
+}
+
+// databaseDSN swaps the database in a DSN, keeping the address and the
+// credentials.
+func databaseDSN(clusterDSN, database string) (string, error) {
+	u, err := url.Parse(clusterDSN)
+	if err != nil {
+		return "", err
+	}
+	u.Path = "/" + database
+	return u.String(), nil
+}
+
+// watchSharedCluster leaves a small process behind that kills the cluster if
+// the test binary dies without running TestMain.
+//
+// A SIGKILL is the one cleanup t.Cleanup and Main cannot serve: the postmaster
+// is reparented and then holds its processes and memory for the life of the
+// machine. The watchdog polls the test binary's pid, then the postmaster's from
+// the data directory, and removes the cluster directory. It runs in its own
+// process group so a signal aimed at the test run cannot take it down with the
+// binary it is watching. Its stdio is the null device, so it never holds a test
+// run's output pipe open.
+func watchSharedCluster(root, dataPath string) {
+	const script = `
+parent="$1"; data="$2"; root="$3"
+while kill -0 "$parent" 2>/dev/null; do sleep 1; done
+pid=$(head -1 "$data/postmaster.pid" 2>/dev/null)
+if [ -n "$pid" ]; then kill -9 "$pid" 2>/dev/null; fi
+rm -rf "$root"
+`
+	cmd := exec.Command("sh", "-c", script, "pgtest-watchdog", strconv.Itoa(os.Getpid()), dataPath, root)
+	cmd.SysProcAttr = &syscall.SysProcAttr{Setpgid: true}
+	if err := cmd.Start(); err != nil {
+		return
+	}
+	go func() { _ = cmd.Wait() }()
 }
 
 // goldenCluster returns the path of a pre-initialised cluster: initdb has run,
@@ -124,22 +360,33 @@ func Start(t *testing.T) *Server {
 // loser uses the winner's cluster.
 func goldenCluster(t *testing.T, binaries string) string {
 	t.Helper()
+	root, err := goldenClusterPath(binaries)
+	if err != nil {
+		t.Fatal(err)
+	}
+	return root
+}
+
+// goldenClusterPath is goldenCluster without the test dependency: the shared
+// fixture builds the same cache on a package-wide boot, where there is no
+// testing.T to fail.
+func goldenClusterPath(binaries string) (string, error) {
 	root := filepath.Join(filepath.Dir(binaries), "golden")
 	if goldenValid(root, binaries) {
-		return root
+		return root, nil
 	}
 
 	base := filepath.Dir(binaries)
 	staging, err := os.MkdirTemp(base, "golden-staging-")
 	if err != nil {
-		t.Fatalf("stage the golden cluster: %v", err)
+		return "", fmt.Errorf("stage the golden cluster: %w", err)
 	}
 	// No-op after the rename below; the staging data directory never leaks.
 	defer func() { _ = os.RemoveAll(staging) }()
 
 	port, err := FreePort()
 	if err != nil {
-		t.Fatalf("find a free port: %v", err)
+		return "", fmt.Errorf("find a free port: %w", err)
 	}
 	cfg := localdb.Config{
 		DataPath:     filepath.Join(staging, "data"),
@@ -155,10 +402,10 @@ func goldenCluster(t *testing.T, binaries string) string {
 	defer cancel()
 	srv, err := localdb.Start(ctx, QuietLogger(), cfg)
 	if err != nil {
-		t.Fatalf("build the golden cluster: %v", err)
+		return "", fmt.Errorf("build the golden cluster: %w", err)
 	}
 	if err := srv.Stop(); err != nil {
-		t.Fatalf("stop the golden cluster: %v", err)
+		return "", fmt.Errorf("stop the golden cluster: %w", err)
 	}
 	// Only the data directory is the cache: the runtime and log directories are
 	// recreated per boot.
@@ -167,17 +414,17 @@ func goldenCluster(t *testing.T, binaries string) string {
 
 	stamp := goldenStamp(binaries)
 	if err := os.WriteFile(filepath.Join(cfg.DataPath, goldenMarker), []byte(stamp), 0o600); err != nil {
-		t.Fatalf("stamp the golden cluster: %v", err)
+		return "", fmt.Errorf("stamp the golden cluster: %w", err)
 	}
 	if err := os.Rename(cfg.DataPath, root); err != nil {
 		// Another test binary installed its golden cluster between the check
 		// above and this rename; use it when it is valid.
 		if goldenValid(root, binaries) {
-			return root
+			return root, nil
 		}
-		t.Fatalf("install the golden cluster: %v (remove %s and retry)", err, root)
+		return "", fmt.Errorf("install the golden cluster: %w (remove %s and retry)", err, root)
 	}
-	return root
+	return root, nil
 }
 
 // goldenValid reports whether root is a golden cluster built from the current

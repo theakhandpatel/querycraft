@@ -1,58 +1,62 @@
 /*
  * The single app provider. It is the largest file in web/src, and a review
  * flagged that: ~90 members spanning auth, the hash router, progress
- * persistence + IndexedDB sync, the AI build orchestration, catalog mutation
- * and theme. That is a real maintainability note, not a bug, and the split
- * (progress / router / catalog) is deliberately deferred: it is a large,
- * regression-prone refactor of the one module every screen imports, and every
- * behaviour here is already covered by the audit suites. This banner exists so
- * the next reader sees the map instead of rediscovering it.
+ * persistence + IndexedDB sync, the AI build orchestration, the catalog and
+ * theme. That is a real maintainability note, not a bug. The tracked split is
+ * done: the router (`useHashRouter.ts`), progress (`useProgressStore.ts`),
+ * catalog (`useCatalog.ts`), theme + motion (`useTheme.ts`) and auth + session
+ * (`useAuth.ts`) each live in their own module. The AI build orchestration
+ * already lives in `components/screens/useGenerationRun.ts`; what remains here
+ * is the provider state those hooks share. This banner exists so the next
+ * reader sees the map instead of rediscovering it.
  *
  * Concerns, in this order:
- *   1. auth + session (signup/login/logout/onUnauthorized)
- *   2. the hash router (applyHash/hashFromState/showScreen)
- *   3. progress: load, mutate, owner-scoped persist, gateway sync, IndexedDB
+ *   1. auth + session (moved to useAuth.ts: the stored-session restore, the
+ *      session, `authReady`, the expired-session notice, `role`, and
+ *      signup/login/logout/onUnauthorized)
+ *   2. the hash router (moved to useHashRouter.ts: applyHash/showScreen)
+ *   3. progress (moved to useProgressStore.ts: load, the events, notes,
+ *      bookmarks, saved queries, workbook, study time, chapter completion,
+ *      export/import mutations, owner-scoped persist, gateway sync, IndexedDB)
  *   4. the AI build orchestration (draft → outline → chapters → activate)
- *   5. catalog mutation (notes, bookmarks, saved queries, workbook)
- *   6. theme + motion
+ *   5. catalog (moved to useCatalog.ts: the stored-course list read and mirror,
+ *      the fragment resolve, deletion and mid-run adoption, and the
+ *      `catalogVersion` re-render trigger the authoring mutations call)
+ *   6. theme + motion (moved to useTheme.ts: the device theme and motion
+ *      preferences, the user-defined theme list, the account sync that carries
+ *      them across devices, and the effects that set data-theme/data-motion)
  */
 import React, { createContext, useCallback, useContext, useEffect, useLayoutEffect, useMemo, useRef, useState } from 'react';
 import { createApi } from '../api/index';
-import { readAuthToken, readAuthUser } from '../api/execution/shared';
+import { readAuthUser } from '../api/execution/shared';
 import { COURSES, MODULES } from '../data/curriculum';
 import {
   activeModules as activeModulesOf,
   courseById,
   currentCourse as currentCourseOf,
-  eventTitle,
-  findExercise,
   lessonPercent as lessonPercentOf,
   nextChapterIndex as nextChapterIndexOf,
 } from '../lib/model';
-import { buildExportBundle, collectDrafts, downloadExport } from '../lib/exportBundle';
-import { applyImport, describeImport, readImport, type ImportOutcome } from '../lib/importBundle';
-import { AUTHORING_SCREENS, HOME_HASH, hashForState, isRouteHash, routeTarget } from '../lib/route';
 import type { RouteTarget } from '../lib/route';
+import { initialRoute, useHashRouter } from './useHashRouter';
+import type { PendingCourse } from './useHashRouter';
+import { initialProgress, LOCAL_PROGRESS_ID, useProgressStore } from './useProgressStore';
+import { useCatalog } from './useCatalog';
+import { useTheme } from './useTheme';
+import { useAuth } from './useAuth';
+import type { AuthStore } from './useAuth';
+import { loadJSON, saveJSON } from './jsonStore';
 import { datasetFor } from '../lib/dataset';
 import { dialectFor } from '../lib/dialect';
-import { datasetVersion } from '../api/dataset';
+import { warmUpCourse } from '../lib/courseWarmup';
 import { scrollToNode } from '../lib/scroll';
-import { injectUserThemes } from '../lib/userThemes';
 import type { UserTheme } from '../lib/userThemes';
 import { clearRun, readRun, writeRun } from '../lib/runResume';
 import { jobIsRunning } from '../api/ai';
 import type { AiAvailability, AiOutcome } from '../api/aiContract';
-import type { AiCourseRecord } from '../api/aiContract';
+import type { AiChapterEdit, AiCourseRecord } from '../api/aiContract';
 import { courseFromPlan, reportFromOutcome, type DraftReport } from '../lib/draft';
-import {
-  emptyProgress,
-  isSampleProgress,
-  migrateProgress,
-  newAttemptId,
-  rebuildProgressFromEvents,
-  seedProgress,
-  stampFor,
-} from '../lib/progress';
+import type { ImportOutcome } from '../lib/importBundle';
 import type {
   ApiLogEntry,
   AuthSession,
@@ -67,64 +71,15 @@ import type {
   ModalName,
   PromptRequest,
   Progress,
-  ProgressEvent,
   Screen,
   SignupInput,
-  ThemeName,
   ThemePreference,
+  TutorTarget,
   UiState,
   UserRole,
 } from '../types';
 
-const THEME_KEY = 'qc.theme';
-const MOTION_KEY = 'qc.motion';
-/* Progress storage is owner-scoped: the key carries the account id, so two
-   learners signed in on one browser can never read each other's workspace out
-   of localStorage. A single shared `qc.progress` key was exactly that leak. */
-const PROG_KEY = 'qc.progress';
-/** The key an anonymous browser — the offline local workspace, or a signed-out
-    gateway tab — writes under. The local workspace's session id is `local`, so
-    the two agree. */
-const LOCAL_PROGRESS_ID = 'local';
-function progressKeyFor(userId: string | null | undefined): string {
-  return `${PROG_KEY}.${userId || LOCAL_PROGRESS_ID}`;
-}
-/** Per-course ceiling on kept queries, so the workbook stays a workbook. */
-const SAVED_PER_COURSE = 50;
 const STATE_KEY = 'qc.state';
-
-/**
- * The PGlite (offline) adapter runs PostgreSQL in the page with no auth server
- * behind it, so there is nothing to sign in to. The app runs as this local
- * workspace instead — an explicitly local identity, never a server session, so
- * it is honest about the offline mode rather than fabricating a login. The
- * gateway is what makes real accounts (and owner-scoped progress) possible.
- */
-const LOCAL_SESSION: AuthSession = {
-  user: {
-    id: 'local',
-    email: 'local@querycraft',
-    name: 'Local workspace',
-    role: 'admin',
-    createdAt: '',
-  },
-  token: '',
-  expiresAt: '',
-};
-
-function loadJSON<T>(k: string, fallback: T): T {
-  try {
-    const v = localStorage.getItem(k);
-    return v == null ? fallback : JSON.parse(v);
-  } catch {
-    return fallback;
-  }
-}
-function saveJSON(k: string, v: unknown): void {
-  try {
-    localStorage.setItem(k, JSON.stringify(v));
-  } catch {}
-}
 
 /** A short course blurb the draft owns, derived from the learner's own goal.
     It is never the built-in course's blurb. */
@@ -133,6 +88,13 @@ function blurbFromGoal(goal: string): string {
   if (!g) return 'A course shaped around the skill you want to build, with exercises that run on real PostgreSQL.';
   const short = g.length > 150 ? g.slice(0, 147).trimEnd() + '…' : g;
   return `Built from your goal: ${short}`;
+}
+
+/** The gateway's own sentence for a refused edit, so the learner reads what the
+    server said rather than a generic failure. */
+// oxlint-disable-next-line anti-slop/no-unknown-parameters -- a rejected gateway call is untrusted; this reads its message.
+function editFailureMessage(e: unknown): string {
+  return e instanceof Error && e.message ? e.message : 'The edit could not be saved.';
 }
 
 /** Clone the reference curriculum into a draft course's own modules, giving
@@ -193,6 +155,17 @@ export interface StoreValue {
   setReviewTab: React.Dispatch<React.SetStateAction<string>>;
   tablesOpen: boolean;
   setTablesOpen: React.Dispatch<React.SetStateAction<boolean>>;
+  /** The table the Tables drawer should bring into view on this open, or null
+      for a plain open. Set by the tutor drawer's table chips. */
+  tablesFocus: string | null;
+  /** Open the Tables drawer, optionally scrolled to one table. Closing the
+      tutor is part of the open: the two share one right-edge slot. */
+  openTables: (table?: string) => void;
+  /** The Ask tutor drawer and the exercise it describes. Non-null is open. The
+      two right-side drawers share one slot, so only one is ever set. */
+  tutorTarget: TutorTarget | null;
+  openTutor: (target: TutorTarget) => void;
+  closeTutor: () => void;
   /** The chapter-list drawer on the lesson screen (the old left column). */
   chaptersOpen: boolean;
   setChaptersOpen: React.Dispatch<React.SetStateAction<boolean>>;
@@ -256,8 +229,8 @@ export interface StoreValue {
   /** Chapter reading content, keyed by module id, read from the database. */
   content: Record<string, ContentSection[]>;
   moveLesson: (i: number, dir: number) => void;
-  saveCourseEdits: (edits: { title?: string }) => void;
-  saveLessonEdits: (edits: { title?: string; summary?: string }) => void;
+  saveCourseEdits: (edits: { title?: string }) => Promise<void>;
+  saveLessonEdits: (edits: { title?: string; summary?: string }) => Promise<void>;
   applyExtension: (kind: string, prompt?: string) => void;
   addLesson: (args: { title: string; goal?: string }) => void;
   addSection: (title: string) => void;
@@ -320,64 +293,12 @@ export interface StoreValue {
 
 const StoreContext = createContext<StoreValue | null>(null);
 
-export const SCREEN_CRUMBS: Record<Screen, string> = {
-  home: 'Home',
-  course: 'My learning',
-  library: 'Library',
-  create: 'Create a course',
-  building: 'Building course',
-  review: 'Draft studio',
-  manage: 'Manage',
-  lesson: 'Chapter',
-  workbook: 'Workbook',
-  'workbook-progress': 'Progress',
-  'challenge-lab': 'Challenge lab',
-  'appearance-settings': 'Appearance',
-};
-export const SCREEN_NAV: Record<Screen, string> = {
-  home: 'home',
-  course: 'course',
-  library: 'library',
-  create: 'create',
-  building: 'create',
-  review: 'create',
-  manage: 'manage',
-  lesson: 'course',
-  workbook: 'workbook',
-  'workbook-progress': 'progress',
-  'challenge-lab': 'lab',
-  'appearance-settings': 'appearance',
-};
-
-/**
- * First-run state is empty, full stop.
- *
- * This used to call seedProgress(), which fabricated weeks of history — passed
- * exercises, notes, bookmarks, a streak — for every new workspace. With a real
- * gateway behind the API that made a live app look like a mock: checkmarks and
- * "60%" nobody earned. Sample data is now opt-in from Appearance.
- */
-function initialProgress(userId: string | null | undefined): Progress {
-  const key = progressKeyFor(userId);
-  const raw = loadJSON<unknown>(key, null);
-  if (raw && !isSampleProgress(raw)) {
-    const migrated = migrateProgress(raw);
-    if (migrated) return migrated;
-  }
-  /* Nothing usable on disk: a missing blob, generated sample data, or a
-     snapshot too old to migrate. Start empty and overwrite the stale row so
-     every boot does not have to decide to ignore it again. */
-  const fresh = emptyProgress();
-  saveJSON(key, fresh);
-  return fresh;
-}
-
 export function StoreProvider({ children }: { children: React.ReactNode }) {
   /* The fragment is the entry point. A deep link, a reload or a paste into the
      address bar has to land on the screen it names, so the first render reads
      the URL instead of always starting at Home and correcting afterwards. Every
      navigation after that goes through `hashchange`. */
-  const [entry] = useState<RouteTarget>(() => routeTarget(typeof window === 'undefined' ? HOME_HASH : window.location.hash));
+  const [entry] = useState<RouteTarget>(initialRoute);
   const [uiState, setUiState] = useState<UiState>(() => {
     const s = loadJSON<UiState | null>(STATE_KEY, null) || { selectedCourseId: 'sql-analytics', libraryFilter: 'all' };
     if (!s.libraryFilter) s.libraryFilter = 'all';
@@ -387,6 +308,10 @@ export function StoreProvider({ children }: { children: React.ReactNode }) {
     if (entry.courseId) s.selectedCourseId = entry.courseId;
     return s;
   });
+  /* The router reads the selection through a ref, so a `hashchange` sees the
+     current course without becoming a dependency of the listener. Other
+     concerns (course deletion) read and write the same ref. */
+  const uiStateRef = useRef(uiState);
   /* initialProgress reads AND writes (it seeds the stored snapshot), so it is
      evaluated once here rather than in two separate state initializers. */
   const [progress, setProgress] = useState<Progress>(() => initialProgress(readAuthUser()));
@@ -396,10 +321,30 @@ export function StoreProvider({ children }: { children: React.ReactNode }) {
     if (entry.chapterIndex != null) return entry.chapterIndex;
     return nextChapterIndexOf(entry.courseId ? courseById(entry.courseId) : COURSES[0], progress);
   });
-  const [theme, setThemeState] = useState<ThemePreference>(() => loadJSON<ThemePreference>(THEME_KEY, 'light'));
-  const [motion, setMotionState] = useState<boolean>(() => loadJSON<boolean>(MOTION_KEY, false));
   const [reviewTab, setReviewTab] = useState('overview');
   const [tablesOpen, setTablesOpen] = useState(false);
+  /* A table the drawer should scroll to when it opens. Cleared on close so a
+     later plain open (the Tables button, the Escape key) does not jump. */
+  const [tablesFocus, setTablesFocus] = useState<string | null>(null);
+  const [tutorTarget, setTutorTarget] = useState<TutorTarget | null>(null);
+  /* One right-side drawer at a time. The tutor and tables panels describe the
+     same workspace from two sides; stacking them would put a second panel
+     behind the scrim where the learner cannot reach it. Opening either closes
+     the other — this effect is the tables half, `openTutor` is the tutor half. */
+  useEffect(() => {
+    if (tablesOpen) setTutorTarget(null);
+    else setTablesFocus(null);
+  }, [tablesOpen]);
+  const openTutor = useCallback((target: TutorTarget) => {
+    setTablesOpen(false);
+    setTutorTarget(target);
+  }, []);
+  const closeTutor = useCallback(() => setTutorTarget(null), []);
+  const openTables = useCallback((table?: string) => {
+    setTutorTarget(null);
+    setTablesFocus(table ?? null);
+    setTablesOpen(true);
+  }, []);
   const [chaptersOpen, setChaptersOpen] = useState(false);
   const [navOpen, setNavOpen] = useState(false);
   const [modal, setModal] = useState<ModalName>(null);
@@ -408,10 +353,6 @@ export function StoreProvider({ children }: { children: React.ReactNode }) {
   const [apiLog, setApiLog] = useState<ApiLogEntry[]>([]);
   const [apiCount, setApiCount] = useState(0);
   const [latency, setLatency] = useState(true);
-  /* The catalog mutations edit `COURSES`/`MODULES` in place, so they cannot
-     change an identity the memoized provider value can compare. This counter is
-     their re-render trigger and is read only in the value's dependencies. */
-  const [catalogVersion, setCatalogVersion] = useState(0);
   const [content, setContent] = useState<Record<string, ContentSection[]>>({});
   const [goalInput, setGoalInput] = useState('');
   const [reviewGoal, setReviewGoal] = useState('Learn to answer realistic product and business questions with SQL, then explain the reasoning behind your query.');
@@ -425,11 +366,6 @@ export function StoreProvider({ children }: { children: React.ReactNode }) {
      instead of printing one of its own. */
   const [draftReport, setDraftReport] = useState<DraftReport | null>(null);
   const [buildContext, setBuildContext] = useState<{ level?: string; source?: string; requireApproval?: boolean }>({});
-  /* The learner's own generated courses, as the gateway stores them. A ref, not
-     state: the catalog is what every screen reads, so this is only the list a
-     later refresh compares against. Read on sign-in and after a generation,
-     never invented. */
-  const storedRef = useRef<Course[]>([]);
   /* A background run this tab started and had not finished watching when the
      page went away. Read back on boot: the run itself never stopped, only the
      view of it did. */
@@ -441,17 +377,9 @@ export function StoreProvider({ children }: { children: React.ReactNode }) {
      stored course the gateway owns, so it is fetched before the screen paints:
      a `#/course/{id}` link used to fall back to the first built-in course and
      rewrite the URL, which is how a generated course "vanished" on reload. */
-  const [pendingCourse, setPendingCourse] = useState<{ id: string; chapterId: string | null } | null>(() =>
+  const [pendingCourse, setPendingCourse] = useState<PendingCourse | null>(() =>
     entry.courseUnresolved && entry.courseId ? { id: entry.courseId, chapterId: entry.chapterId ?? null } : null
   );
-  const [session, setSession] = useState<AuthSession | null>(null);
-  /* The session as the callbacks below need it: they are stable so a screen can
-     call them once, and must not close over the session of the first render. */
-  const sessionRef = useRef<AuthSession | null>(null);
-  sessionRef.current = session;
-  const [authReady, setAuthReady] = useState(false);
-  const [authNotice, setAuthNotice] = useState<string | null>(null);
-
   const toastTimer = useRef<ReturnType<typeof setTimeout> | null>(null);
   /* Hydration guards. `hydrated` stops a second pull; `dirty` records that the
      learner changed something before the pull resolved, so a late server
@@ -462,107 +390,37 @@ export function StoreProvider({ children }: { children: React.ReactNode }) {
     setApiLog(logArr.slice());
     setApiCount(count);
   }, []);
-  /* A 401 with AUTH_REQUIRED from any gateway request means the token is gone or
-     expired: drop the session and send the learner back to sign-in. The http
-     layer fires this; the offline adapters never do. */
-  const onUnauthorized = useCallback(() => {
-    setSession(null);
-    setAuthNotice('Your session expired. Sign in to continue.');
-    setScreen('home');
-  }, []);
-  const api = useMemo(() => createApi({ onLog, onUnauthorized }), [onLog, onUnauthorized]);
+
+  /* ---------- the auth concern ---------- */
+  /* The stored-session restore, the session, `authReady`, the notice and the
+     account actions live in `useAuth`. The adapter is created first, because
+     every other concern reads it, and its 401 reaction is auth's; the hook
+     hands that reaction back through a stable delegate, so the adapter's
+     identity never changes and the hook can rebuild the handler freely. The two
+     pieces of wiring the actions trigger stay here: `goHome` moves the router,
+     and `resetHydration` clears the progress guards for the new owner. */
+  const authRef = useRef<AuthStore | null>(null);
+  const api = useMemo(
+    () => createApi({ onLog, onUnauthorized: () => authRef.current?.onUnauthorized() }),
+    [onLog]
+  );
   useEffect(() => {
     if (api.config) api.config.latency = latency;
   }, [api, latency]);
 
-  /* Restore the session once, before the app decides what to render.
-   *
-   * The offline engine has no auth server, so it runs as a local workspace. The
-   * gateway reports the current account from the stored token; no account means
-   * the auth screen.
-   * `me()` resolves to null rather than failing on a missing/expired token, so
-   * this is a plain "who am I" check. */
-  useEffect(() => {
-    let alive = true;
-    const restore = async () => {
-      if (api.mode === 'pglite') {
-        if (alive) {
-          setSession(LOCAL_SESSION);
-          setAuthReady(true);
-        }
-        return;
-      }
-      let user = null;
-      try {
-        user = await api.me();
-      } catch {
-        user = null;
-      }
-      if (!alive) return;
-      setSession(user ? { user, token: readAuthToken() ?? '', expiresAt: '' } : null);
-      setAuthReady(true);
-    };
-    void restore();
-    return () => {
-      alive = false;
-    };
-  }, [api]);
-
-  /* ---------- theme + motion ---------- */
-  /* User-defined themes: their token blocks are injected as a style element,
-     so any id resolves the moment the data-theme attribute names it. The
-     list itself is state (rendered by the Appearance picker) and is synced
-     to the account with the theme preference. */
-  const initialCustom = loadJSON<UserTheme[]>('qc.customThemes', []);
-  const [customThemes, setCustomThemes] = useState<UserTheme[]>(initialCustom);
-  /* The sync saves in setTheme read this ref, not the state variable: a save
-     and a theme change fire in the same handler, and the state variable would
-     still hold the previous render's array. The ref is updated synchronously
-     by every mutation. */
-  const customThemesRef = useRef<UserTheme[]>(initialCustom);
-  useEffect(() => {
-    injectUserThemes(customThemes);
-    saveJSON('qc.customThemes', customThemes);
-  }, [customThemes]);
-
-  const effectiveTheme = useMemo<ThemePreference>(
-    () => (theme === 'system' ? (window.matchMedia && window.matchMedia('(prefers-color-scheme: dark)').matches ? 'dark' : 'light') : theme),
-    [theme]
-  );
-  useEffect(() => {
-    document.documentElement.setAttribute('data-theme', effectiveTheme);
-  }, [effectiveTheme]);
-  /* The account's preference outranks the device's localStorage once it is
-     known: the theme follows the learner across devices. The offline adapter
-     answers null and the device choice stands. */
-  useEffect(() => {
-    if (api.mode !== 'http' || !authReady || !session) return;
-    let alive = true;
-    void api.preferences().then((prefs) => {
-      if (!alive || !prefs) return;
-      const savedTheme = typeof prefs.theme === 'string' ? prefs.theme : null;
-      const savedCustom = Array.isArray(prefs.customThemes) ? (prefs.customThemes as UserTheme[]) : null;
-      if (savedCustom) { customThemesRef.current = savedCustom; setCustomThemes(savedCustom); }
-      if (savedTheme && savedTheme !== theme) {
-        setThemeState(savedTheme as ThemePreference);
-        saveJSON(THEME_KEY, savedTheme);
-      }
-    }).catch(() => { /* the gateway could not be asked; the device choice stands */ });
-    return () => { alive = false; };
-  }, [api, authReady, session]);
-  useEffect(() => {
-    const mq = window.matchMedia ? window.matchMedia('(prefers-color-scheme: dark)') : null;
-    if (!mq) return;
-    const fn = () => {
-      if (loadJSON<ThemeName>(THEME_KEY, 'light') === 'system') document.documentElement.setAttribute('data-theme', mq.matches ? 'dark' : 'light');
-    };
-    mq.addEventListener ? mq.addEventListener('change', fn) : mq.addListener(fn);
-    return () => (mq.removeEventListener ? mq.removeEventListener('change', fn) : mq.removeListener(fn));
+  const goHome = useCallback(() => setScreen('home'), []);
+  const resetHydration = useCallback(() => {
+    hydratedRef.current = false;
+    dirtyRef.current = false;
   }, []);
-  useEffect(() => {
-    if (motion) document.documentElement.setAttribute('data-motion', 'reduced');
-    else document.documentElement.removeAttribute('data-motion');
-  }, [motion]);
+  const auth = useAuth({ api, goHome, resetHydration });
+  /* The api's `onUnauthorized` and the rest of the callbacks read the auth store
+     through this ref. A layout effect writes it after commit, before any request
+     can call back, so the ref never moves during a render React might discard. */
+  useLayoutEffect(() => {
+    authRef.current = auth;
+  }, [auth]);
+  const { session, sessionRef, authReady, authNotice, role, signup, login, logout } = auth;
 
   const toast = useCallback((msg: string) => {
     setToastMsg(msg);
@@ -624,40 +482,15 @@ export function StoreProvider({ children }: { children: React.ReactNode }) {
     saveJSON(STATE_KEY, next);
   }, []);
 
-  /* Read through a ref so this stays identity-stable. The study timer commits
-     on an interval, and a callback that changed on every progress write would
-     restart the timer effect (and its cleanup flush) on every tick. */
+  /* The progress mutations read the snapshot through this ref so they stay
+     identity-stable; `useProgressStore` keeps it in sync and reads it. */
   const progressRef = useRef(progress);
-  useEffect(() => {
-    progressRef.current = progress;
-  }, [progress]);
-
   /* Progress is owner-scoped. The owner changes on signup, login, logout, a
-     401, and session restore, and the in-memory snapshot has to change with it
-     — otherwise a learner could see the previous account's passes for a frame
-     and the next write would upload them into the new account's row. This is a
-     layout effect, not a passive one: it runs before the browser paints, so the
-     new owner's snapshot is in place for the first frame of the new session.
-     `authReady` gates it so the initial render's snapshot (loaded from the
-     stored account id) is not swapped away before the session has resolved. */
+     401, and session restore, and the in-memory snapshot has to change with it.
+     `useProgressStore` owns that swap; the provider keeps the owner so sign-in
+     and the router can read the same value. */
   const ownerId = session?.user.id ?? LOCAL_PROGRESS_ID;
   const progressOwnerRef = useRef<string>((readAuthUser() || LOCAL_PROGRESS_ID));
-  useLayoutEffect(() => {
-    if (!authReady || progressOwnerRef.current === ownerId) return;
-    progressOwnerRef.current = ownerId;
-    hydratedRef.current = false;
-    dirtyRef.current = false;
-    const next = initialProgress(ownerId);
-    progressRef.current = next;
-    setProgress(next);
-  }, [authReady, ownerId]);
-
-  const persistProgress = useCallback((next?: Progress) => {
-    const p = next || progressRef.current;
-    dirtyRef.current = true;
-    saveJSON(progressKeyFor(progressOwnerRef.current), p);
-    return p;
-  }, []);
 
   /* Where SQL actually runs, as reported by the adapter itself (§5.2). Read
      once the engine has booted; until then the screen keeps its default copy
@@ -666,12 +499,13 @@ export function StoreProvider({ children }: { children: React.ReactNode }) {
   useEffect(() => {
     let alive = true;
     let tries = 0;
+    let retry: ReturnType<typeof setTimeout> | null = null;
     const read = () => {
       api
         .capabilities()
         .then((caps) => {
           if (!alive || !caps) {
-            if (alive && tries++ < 10) setTimeout(read, 700);
+            if (alive && tries++ < 10) retry = setTimeout(read, 700);
             return;
           }
           setEngineCaps(caps);
@@ -683,6 +517,7 @@ export function StoreProvider({ children }: { children: React.ReactNode }) {
     read();
     return () => {
       alive = false;
+      if (retry !== null) clearTimeout(retry);
     };
     /* `session` is a dependency, not a detail. The gateway's answer to "can I
        write?" is about the gateway; whether *this* client can is a function of
@@ -737,123 +572,6 @@ export function StoreProvider({ children }: { children: React.ReactNode }) {
     };
   }, [api, session]);
 
-  /* A durable write that fails has to be visible (M1: "a failed write must be
-     surfaced"). The localStorage copy already holds the snapshot, so the
-     learner keeps working — but the server/IndexedDB copy is now behind, and
-     staying quiet about that would be the "it's a mock" tell all over again.
-     One notice per session, so a browser that never allows storage cannot spam
-     the toast on every keystroke. */
-  const persistFailureNoticed = useRef(false);
-  const reportPersistFailure = useCallback(
-    (e: unknown) => {
-      if (persistFailureNoticed.current) return;
-      persistFailureNoticed.current = true;
-      const code = (e as { code?: string } | null)?.code;
-      toast(
-        code === 'PERSISTENCE_FAILED'
-          ? 'This browser blocked local storage, so your work is kept in this tab only.'
-          : 'Could not sync your progress to the account. It is still saved in this browser.'
-      );
-    },
-    [toast]
-  );
-  const syncProgress = useCallback(
-    (p: Progress, courseId?: string) => {
-      api.saveProgress(p, courseId ?? uiState.selectedCourseId).catch(reportPersistFailure);
-    },
-    [api, reportPersistFailure, uiState.selectedCourseId]
-  );
-  const syncEvent = useCallback(
-    (evt: ProgressEvent) => {
-      api.logEvent(evt).catch(reportPersistFailure);
-    },
-    [api, reportPersistFailure]
-  );
-  /* Every progress mutation takes the same three steps: put the snapshot in
-     React state, write it to this browser, and push it to the gateway. One
-     helper, so the three can never drift apart. Returns the snapshot so the
-     caller can keep using the value it passed.
-     The hydration path below does not use this: it restores a snapshot rather
-     than recording a change, so it must not mark the workspace dirty. */
-  const commitProgress = useCallback(
-    (next: Progress, courseId?: string): Progress => {
-      setProgress(next);
-      persistProgress(next);
-      syncProgress(next, courseId);
-      return next;
-    },
-    [persistProgress, syncProgress]
-  );
-
-  /* Learner data lives on the server, so pull it once per owner.
-   *
-   * Without this the UI was localStorage-only: the gateway recorded progress
-   * that no client ever read back, so a second browser (or a cleared cache)
-   * showed an empty workspace next to a full server row — the classic
-   * "it's a mock" tell. The server snapshot now wins, but only if the learner
-   * has not already touched something locally while the request was in flight.
-   *
-   * An absent snapshot on the gateway is authoritative, not "no opinion": it
-   * means this account has never saved anything, so any local copy is cleared
-   * rather than kept. Keeping it was how one learner's history bled into the
-   * next account on a shared browser. The offline adapters are the opposite —
-   * their store *is* the local one — so an empty read there leaves the local
-   * workspace snapshot alone and it still survives a reload. */
-  useEffect(() => {
-    /* Progress and events are owner-scoped by the bearer token, so there is
-       nothing to pull until the session is restored and a user is present. */
-    if (!authReady || !session) return;
-    if (hydratedRef.current) return;
-    hydratedRef.current = true;
-    let alive = true;
-    const ownerId = session.user.id;
-    api
-      .getProgress(uiState.selectedCourseId)
-      .then(({ ok, snapshot }) => {
-        if (!alive || !ok) return;
-        const hasSnapshot = !!snapshot && typeof snapshot === 'object';
-        if (!hasSnapshot) {
-          /* The gateway has no row for this account: clear the local snapshot
-             so a shared browser never shows the previous account's work. A
-             learner who changed something while the read was in flight keeps
-             their edits; the server row is empty, not conflicting. */
-          if (api.mode === 'http' && !dirtyRef.current) {
-            const fresh = emptyProgress();
-            progressRef.current = fresh;
-            setProgress(fresh);
-            saveJSON(progressKeyFor(ownerId), fresh);
-          }
-          return;
-        }
-        const remote = snapshot as Progress;
-        /* A server row that only holds generated sample data is legacy residue
-           from the old first-run seed; drop it instead of showing it as real. */
-        if (isSampleProgress(remote)) {
-          const fresh = emptyProgress();
-          progressRef.current = fresh;
-          setProgress(fresh);
-          saveJSON(progressKeyFor(ownerId), fresh);
-          syncProgress(fresh, uiState.selectedCourseId);
-          return;
-        }
-        const migrated = migrateProgress(remote);
-        if (!migrated || dirtyRef.current) return;
-        const remoteProgress = migrated;
-        progressRef.current = remoteProgress;
-        setProgress(remoteProgress);
-        saveJSON(progressKeyFor(ownerId), remoteProgress);
-        /* A snapshot that needed upgrading must be written back, or the next
-           boot would migrate it again from the same stale row. */
-        if (remoteProgress !== remote) syncProgress(remoteProgress, uiState.selectedCourseId);
-      })
-      .catch(() => {
-        /* offline or degraded gateway: keep the local snapshot */
-      });
-    return () => {
-      alive = false;
-    };
-  }, [api, syncProgress, uiState.selectedCourseId, authReady, session]);
-
   const course = useMemo(() => currentCourseOf(uiState), [uiState]);
   /* M5. The dataset the course runs on is part of the course, so the workspace
      it needs can be built while the learner is reading. Two effects follow from
@@ -867,65 +585,119 @@ export function StoreProvider({ children }: { children: React.ReactNode }) {
      `pglite` the two produce different SQL, so the statement would run somewhere
      the chapter never asked for. */
   const courseDialect = dialectFor({ course });
+  /* M9. A stored course carries its own workspace setup. Preparing it when the
+     course opens applies that setup before the first exercise runs, so the
+     exercise does not die with "relation does not exist". The id is a
+     primitive, so the effect runs once per course change instead of on every
+     render, and a prepare refusal is a non-blocking toast, never a navigation
+     block. */
+  const storedCourseId = course?.gateway === true ? course.id : null;
   useEffect(() => {
-    api.warmUp(courseDataset, courseDialect);
-  }, [api, courseDataset, courseDialect]);
+    warmUpCourse(api, courseDataset, courseDialect, storedCourseId, toast);
+  }, [api, courseDataset, courseDialect, storedCourseId, toast]);
   const draftCourse = draftCourseId ? COURSES.find((c) => c.id === draftCourseId) ?? null : null;
   const modules = useMemo(() => activeModulesOf(course), [course]);
   const pct = useMemo(() => lessonPercentOf(course, progress), [course, progress]);
-  /* The account's role, read once: the router gates the authoring screens with
-     the same rule App renders behind. */
-  const role = useMemo<UserRole>(() => session?.user.role ?? 'learner', [session]);
-  /* M8. A fragment that names a course we have not resolved yet. The shell waits
-     on the splash for it — but only for a learner the resolve can run for:
-     signed out, the sign-in screen comes first and the link is picked up after
-     the session arrives. */
-  const courseResolving = pendingCourse !== null && authReady && session !== null;
 
-  /* ---------- accounts ---------- */
-  /* The layer stores the bearer token; the actions only track which account is
-     signed in and let failures (bad credentials, taken email) reach the form. */
-  const signup = useCallback(
-    async (input: SignupInput) => {
-      const next = await api.signup(input);
-      hydratedRef.current = false;
-      dirtyRef.current = false;
-      setAuthNotice(null);
-      setSession(next);
-      setScreen('home');
-    },
-    [api]
-  );
-  const login = useCallback(
-    async (input: LoginInput) => {
-      const next = await api.login(input);
-      hydratedRef.current = false;
-      dirtyRef.current = false;
-      setAuthNotice(null);
-      setSession(next);
-      setScreen('home');
-    },
-    [api]
-  );
-  const logout = useCallback(async () => {
-    try {
-      await api.logout();
-    } catch {
-      /* clearing the local session matters more than the revoke round trip */
-    }
-    hydratedRef.current = false;
-    dirtyRef.current = false;
-    /* The offline engine has no session to end: stay on the local workspace. */
-    setSession(api.mode === 'pglite' ? LOCAL_SESSION : null);
-    setScreen('home');
-  }, [api]);
+  /* ---------- the progress concern ---------- */
+  /* The snapshot's load/migrate, owner-scoped persistence, gateway sync and
+     every mutation live in `useProgressStore`. Its state (`progress`), refs and
+     the shared `course`/`modules`/`activeLesson` stay here because other
+     concerns read them: navigation starts from `progress`, the router reads
+     `progressRef`, and sign-in resets `hydratedRef`/`dirtyRef`. The hook takes
+     them in and returns the mutations, so `StoreValue` and every member keep
+     their shape. */
+  const {
+    recordEvent,
+    addNote,
+    toggleBookmark,
+    removeWorkbookItem,
+    isBookmarked,
+    saveQuery,
+    removeSaved,
+    addStudyTime,
+    markLessonDone,
+    loadSampleProgress,
+    clearProgress,
+    exportData,
+    importData,
+  } = useProgressStore({
+    api,
+    progress,
+    setProgress,
+    progressRef,
+    ownerId,
+    session,
+    authReady,
+    course,
+    modules,
+    activeLesson,
+    selectedCourseId: uiState.selectedCourseId,
+    toast,
+    hydratedRef,
+    dirtyRef,
+    progressOwnerRef,
+  });
+
+  /* ---------- the hash router ---------- */
+  /* The fragment ↔ state binding lives in `useHashRouter`. Its state and
+     setters stay here because other concerns share them: auth and the run
+     recovery set the screen, the course resolver fills `pendingCourse`, and
+     progress reads `activeLesson`. The hook takes them in and returns only
+     `showScreen`, so `StoreValue` and every member keep their shape. */
+  const { showScreen } = useHashRouter({
+    screen,
+    challengeId,
+    activeLesson,
+    course,
+    role,
+    authReady,
+    pendingCourse,
+    uiState,
+    uiStateRef,
+    progressRef,
+    saveUiState,
+    setScreen,
+    setChallengeId,
+    setActiveLesson,
+    setPendingCourse,
+  });
+
+  /* ---------- the catalog concern ---------- */
+  /* The stored-course list, its mirror into `COURSES`, the fragment resolve,
+     deletion, adoption and the `catalogVersion` re-render trigger live in
+     `useCatalog`. The state and setters it reads stay here because other
+     concerns share them: the router hands `pendingCourse` over, auth owns the
+     session, and navigation owns the selected course and the active lesson.
+     The hook takes them in and returns its members, so `StoreValue` and every
+     member keep their shape. */
+  const { catalogVersion, bumpCatalog, courseResolving, deleteCourse, adoptStoredCourse } = useCatalog({
+    api,
+    authReady,
+    session,
+    pendingCourse,
+    setPendingCourse,
+    setScreen,
+    setActiveLesson,
+    uiStateRef,
+    saveUiState,
+    toast,
+  });
+
+  /* ---------- the theme + motion concern ---------- */
+  /* The device theme and motion preferences, the user-defined theme list, the
+     account sync that carries them across devices, and the effects that apply
+     them to the document live in `useTheme`. The hook owns that state because
+     no other concern reads it; the provider passes in the API adapter and the
+     session, which the account sync needs, and spreads the returned members
+     into `StoreValue`, so the public shape and every member keep their shape. */
+  const { theme, setTheme, customThemes, saveCustomTheme, deleteCustomTheme, motion, setMotion } = useTheme({
+    api,
+    authReady,
+    session,
+  });
 
   /* ---------- navigation ---------- */
-  const showScreen = useCallback((id: Screen) => {
-    setScreen(id);
-    const ws = document.querySelector('.workspace');
-    if (ws) ws.scrollTop = 0;
-  }, []);
   const openLessonIn = useCallback(
     (courseId: string, index?: number) => {
       const c = COURSES.find((x) => x.id === courseId);
@@ -975,161 +747,6 @@ export function StoreProvider({ children }: { children: React.ReactNode }) {
     toast('Added to My learning.');
   }, [draftCourseId, selectCourse, showScreen, toast]);
 
-  /* ---------- fragment ⇄ state (the router) ----------
-   *
-   * The URL is this app's history. Navigating inside the app writes the
-   * fragment with `pushState` — which fires no event, so the two directions
-   * cannot chase each other — and a `hashchange` (back, forward, a pasted link)
-   * writes the state back. Both directions are guarded by the same comparison,
-   * so a change that produces the fragment already in the address bar is a
-   * no-op: a state change never re-emits the route it came from, and a
-   * `hashchange` that matches the current screen changes nothing. */
-  const uiStateRef = useRef(uiState);
-  useEffect(() => {
-    uiStateRef.current = uiState;
-  }, [uiState]);
-
-  /* Authoring is the admin surface; App turns a learner away from those
-     screens, and the fragment follows the same rule so it never names a screen
-     nobody is looking at. */
-  const gated = useCallback(
-    (target: RouteTarget): RouteTarget => (role !== 'admin' && AUTHORING_SCREENS.includes(target.screen) ? routeTarget(HOME_HASH) : target),
-    [role]
-  );
-
-  /* state → URL.
-     While a course the fragment named is still being fetched, the selected
-     course is a placeholder and writing the fragment now would replace the
-     learner's link with the placeholder's id. The effect waits for the real
-     course: `pendingCourse` clears in the same commit that puts it in the
-     catalog, and then this writes the fragment the learner already has. */
-  useEffect(() => {
-    if (pendingCourse !== null) return;
-    const next = hashForState({ screen, courseId: course.id, chapterIndex: activeLesson, challengeId });
-    const current = window.location.hash;
-    if (current === next) return;
-    /* A fragment that is not canonical (`#/nope`, a bare URL, `#/create` for a
-       learner) is rewritten in place; only a real navigation adds an entry, so
-       the back stack stays the learner's own. */
-    if (gated(routeTarget(current)).hash === current) window.history.pushState(null, '', next);
-    else window.history.replaceState(null, '', next);
-  }, [screen, course.id, activeLesson, challengeId, gated, pendingCourse]);
-
-  /* URL → state */
-  const applyHash = useCallback(() => {
-    const raw = window.location.hash;
-    /* The shell's skip link moves the fragment to `#main`. That is an in-page
-       anchor, not a route, so it is left to the browser. */
-    if (!isRouteHash(raw)) return;
-    const target = gated(routeTarget(raw));
-    if (target.hash !== raw) window.history.replaceState(null, '', target.hash);
-    if (target.courseId && target.courseId !== uiStateRef.current.selectedCourseId) {
-      const nextState = { ...uiStateRef.current, selectedCourseId: target.courseId };
-      uiStateRef.current = nextState;
-      saveUiState(nextState);
-    }
-    if (target.chapterIndex != null) setActiveLesson(target.chapterIndex);
-    else if (target.courseId) {
-      const linked = courseById(target.courseId);
-      if (linked) setActiveLesson(nextChapterIndexOf(linked, progressRef.current));
-    }
-    setChallengeId(target.challengeId);
-    setScreen(target.screen);
-    /* A fragment that names a course the catalog does not have keeps its id
-       pending, so the gateway can answer for it before the router gives up. A
-       link typed into the address bar is a `hashchange`, not a fresh load, so
-       this is the only place that sees it. */
-    /* The same link is re-resolved when the session is restored, so this only
-       writes when the value actually changed: a fresh object holding the same id
-       would be a new identity to React, and the resolver would fetch the course
-       a second time for a link that never moved. */
-    const pending = target.courseUnresolved && target.courseId ? { id: target.courseId, chapterId: target.chapterId ?? null } : null;
-    setPendingCourse((prev) =>
-      prev && pending && prev.id === pending.id && prev.chapterId === pending.chapterId ? prev : pending
-    );
-    const ws = document.querySelector('.workspace');
-    if (ws) ws.scrollTop = 0;
-  }, [gated, saveUiState]);
-
-  useEffect(() => {
-    window.addEventListener('hashchange', applyHash);
-    window.addEventListener('popstate', applyHash);
-    return () => {
-      window.removeEventListener('hashchange', applyHash);
-      window.removeEventListener('popstate', applyHash);
-    };
-  }, [applyHash]);
-
-  /* The role is not known until the session is restored, so the fragment is
-     resolved once more when it is: an authoring link that a learner may not open
-     is turned away in place, and a link a signed-in learner opened still lands
-     where it pointed. */
-  useEffect(() => {
-    if (!authReady) return;
-    applyHash();
-  }, [authReady, applyHash]);
-
-  /* ---------- progress mutations ---------- */
-  const recordEvent = useCallback(
-    (id: string, kind: EventKind, label?: string) => {
-      const f = findExercise(id);
-      const evt = {
-        ts: Date.now(),
-        id,
-        /* §8.2: one id per attempt, so two tries at one exercise are two rows. */
-        attemptId: newAttemptId(),
-        kind,
-        title: label || eventTitle(id),
-        course: f ? f.course.id : uiState.selectedCourseId,
-        lesson: f ? f.index : activeLesson,
-        /* §7.3: the attempt carries the versions it was made against. */
-        ...stampFor(f?.block, datasetVersion),
-      };
-      const next = { ...progress, events: [...(progress.events || []), evt] };
-      rebuildProgressFromEvents(next);
-      commitProgress(next, evt.course);
-      syncEvent(evt);
-    },
-    [progress, activeLesson, uiState.selectedCourseId, commitProgress, syncEvent]
-  );
-
-  /* Measured study time. The lesson screen accumulates visible time and hands
-     it over in chunks; this adds it to the running total for the course and
-     syncs the snapshot so the gateway has the same number as the UI. */
-  const addStudyTime = useCallback(
-    (courseId: string, ms: number) => {
-      if (!courseId || !(ms > 0)) return;
-      const prev = progressRef.current;
-      const total = (prev.timeMs?.[courseId] || 0) + ms;
-      const next: Progress = { ...prev, timeMs: { ...(prev.timeMs || {}), [courseId]: total } };
-      progressRef.current = next;
-      commitProgress(next, courseId);
-    },
-    [commitProgress]
-  );
-
-  const markLessonDone = useCallback(() => {
-    const m = modules[activeLesson];
-    if (!m) return;
-    /* The learner's explicit signal lives in `manuallyDone`, not `done`: a
-       rebuild of `done` from graded attempts runs on every event and would
-       otherwise erase this. `done` is the union (see rebuildProgressFromEvents). */
-    const manual = { ...(progress.manuallyDone || {}) };
-    const nowDone = !(progress.done[m.id] || manual[m.id]);
-    if (nowDone) manual[m.id] = true;
-    else delete manual[m.id];
-    const next = {
-      ...progress,
-      manuallyDone: manual,
-      done: { ...progress.done, [m.id]: nowDone },
-    };
-    /* Chapter completion is progress like any other mutation, so it must reach
-       the gateway too — otherwise the server snapshot disagrees with the UI and
-       the signal is lost on a different browser or a cleared cache. */
-    commitProgress(next, uiState.selectedCourseId);
-    toast(nowDone ? 'Chapter marked complete.' : 'Chapter marked incomplete.');
-  }, [modules, activeLesson, progress, commitProgress, uiState.selectedCourseId, toast]);
-
   const stepLesson = useCallback(
     (d: number) => {
       const n = activeLesson + d;
@@ -1141,142 +758,6 @@ export function StoreProvider({ children }: { children: React.ReactNode }) {
       openLessonIn(uiState.selectedCourseId, n);
     },
     [activeLesson, modules.length, openLessonIn, uiState.selectedCourseId, toast]
-  );
-
-  const addNote = useCallback(
-    (text: string) => {
-      if (!text) return;
-      const c = course;
-      const next: Progress = {
-        ...progress,
-        notes: [...(progress.notes || []), { course: c.id, lesson: activeLesson + 1, kind: 'note', ts: Date.now(), text }],
-      };
-      commitProgress(next, c.id);
-      toast('Note saved to your workbook.');
-    },
-    [course, progress, activeLesson, commitProgress, toast]
-  );
-
-  /* Design §10: a bookmark is a note that points at one section, plus a history
-     event so the learner's own record shows when they flagged it. It is written
-     as one snapshot so the note and the event cannot disagree. */
-  const toggleBookmark = useCallback(
-    (title: string, lesson: number, section: number) => {
-      const c = course;
-      const existing = (progress.notes || []).find(
-        (n) => n.course === c.id && n.kind === 'bookmark' && n.lesson === lesson && n.section === section,
-      );
-      if (existing) {
-        const next: Progress = {
-          ...progress,
-          notes: (progress.notes || []).filter((n) => n !== existing),
-        };
-        commitProgress(next, c.id);
-        toast('Bookmark removed.');
-        return;
-      }
-      const ts = Date.now();
-      const event: ProgressEvent = {
-        ts,
-        id: `bookmark.${c.id}.${lesson}.${section}`,
-        attemptId: newAttemptId(),
-        kind: 'bookmark',
-        title: title || `Chapter ${lesson}`,
-        course: c.id,
-        lesson,
-      };
-      const next: Progress = {
-        ...progress,
-        notes: [...(progress.notes || []), { course: c.id, lesson, section, kind: 'bookmark', ts, text: title }],
-        events: [...(progress.events || []), event],
-      };
-      commitProgress(next, c.id);
-      syncEvent(event);
-      toast('Bookmarked for your workbook.');
-    },
-    [course, progress, commitProgress, syncEvent, toast]
-  );
-
-  /* Design §10: a kept query stores the SQL plus the versions it was written
-     against, deduped on (course, exercise, sql) so pressing Keep twice is not
-     two rows. The cap is stated before it bites rather than silently truncating. */
-  const saveQuery = useCallback(
-    (sql: string, block?: Block) => {
-      const text = String(sql || '').trim();
-      if (!text) {
-        toast('Write a query first, then keep it.');
-        return;
-      }
-      const c = course;
-      /* Only a real exercise gets an exercise id; an example's id is a demo
-         label, and treating it as an exercise would put a fake one in the
-         workbook's dedupe key. */
-      const exercise = block?.type === 'exercise' ? block.id : undefined;
-      const saved = progress.saved || [];
-      if (saved.some((q) => q.course === c.id && q.exercise === exercise && q.sql === text)) {
-        toast('That query is already in your workbook.');
-        return;
-      }
-      if (saved.filter((q) => q.course === c.id).length >= SAVED_PER_COURSE) {
-        toast(`Your workbook keeps ${SAVED_PER_COURSE} queries per course. Remove one first.`);
-        return;
-      }
-      const vers = stampFor(block, datasetVersion);
-      const next: Progress = {
-        ...progress,
-        saved: [
-          ...saved,
-          {
-            course: c.id,
-            lesson: activeLesson + 1,
-            name: (exercise ? eventTitle(exercise) : block?.note ? String(block.note) : text.split('\n')[0]).slice(0, 60),
-            sql: text,
-            exercise,
-            contract: block?.contract,
-            datasetVersion: vers.datasetVersion,
-            exerciseVersion: vers.exerciseVersion,
-            ts: Date.now(),
-          },
-        ],
-      };
-      commitProgress(next, c.id);
-      toast('Query kept in your workbook.');
-    },
-    [course, progress, activeLesson, commitProgress, toast]
-  );
-
-  const removeSaved = useCallback(
-    (ts: number) => {
-      const c = course;
-      const next: Progress = {
-        ...progress,
-        saved: (progress.saved || []).filter((q) => !(q.course === c.id && q.ts === ts)),
-      };
-      commitProgress(next, c.id);
-      toast('Saved query removed.');
-    },
-    [course, progress, commitProgress, toast]
-  );
-
-  const removeWorkbookItem = useCallback(
-    (ts: number) => {
-      const c = course;
-      const next: Progress = {
-        ...progress,
-        notes: (progress.notes || []).filter((n) => !(n.course === c.id && n.ts === ts)),
-      };
-      commitProgress(next, c.id);
-      toast('Removed from your workbook.');
-    },
-    [course, progress, commitProgress, toast]
-  );
-
-  const isBookmarked = useCallback(
-    (lesson: number, section: number) =>
-      (progress.notes || []).some(
-        (n) => n.course === course.id && n.kind === 'bookmark' && n.lesson === lesson && n.section === section,
-      ),
-    [progress.notes, course.id]
   );
 
   const openBookmark = useCallback(
@@ -1311,120 +792,6 @@ export function StoreProvider({ children }: { children: React.ReactNode }) {
     },
     [openLessonIn]
   );
-
-  const clearProgress = useCallback(() => {
-    commitProgress(emptyProgress(), uiState.selectedCourseId);
-    toast('Your data was cleared on this account.');
-  }, [commitProgress, uiState.selectedCourseId, toast]);
-
-  /* Sample data is a demo, not a default. It has to be asked for by name so the
-     workspace never looks pre-populated with work nobody did. */
-  const loadSampleProgress = useCallback(() => {
-    commitProgress(seedProgress(), uiState.selectedCourseId);
-    toast('Sample data loaded. Clear it any time from Appearance.');
-  }, [commitProgress, uiState.selectedCourseId, toast]);
-
-  /* The export is built from the same Progress the server holds, plus the
-     local editor drafts, so it is complete and credential-free. */
-  const exportData = useCallback(() => {
-    const filename = downloadExport(buildExportBundle(progress, collectDrafts(), datasetVersion));
-    toast(`Exported to ${filename}`);
-    return filename;
-  }, [progress, toast]);
-
-  /* The other half of the same document. Validation happens before anything is
-     written, the merge never removes what is already here, and the adapter is
-     whichever one is live — the merge itself is adapter-independent. */
-  const importData = useCallback(
-    (text: string): ImportOutcome => {
-      const parsed = readImport(text);
-      if (!parsed.ok) {
-        toast(parsed.message);
-        return parsed;
-      }
-      const result = applyImport(progress, parsed.bundle, collectDrafts());
-      commitProgress(result.progress, uiState.selectedCourseId);
-      for (const [cellId, sql] of Object.entries(result.drafts)) api.saveDraft(cellId, sql);
-      toast(describeImport(result));
-      return result;
-    },
-    [api, progress, commitProgress, uiState.selectedCourseId, toast],
-  );
-
-  /* ---------- course content mutations (bump catalogVersion to re-render) ---------- */
-  const bumpCatalog = useCallback(() => setCatalogVersion((v) => v + 1), []);
-
-  /* A course the gateway does not have. Both spellings are the same fact: the
-     generic route answers 404 `NOT_FOUND`, the AI contract names the same thing
-     `AI_NOT_FOUND`. */
-  function isMissingCourse(e: unknown): boolean {
-    const err = e as { code?: string; status?: number } | null;
-    return err?.status === 404 || err?.code === 'NOT_FOUND' || err?.code === 'AI_NOT_FOUND';
-  }
-
-  /* ---------- M8: the learner's stored courses ----------
-   *
-   * The gateway stores a generated course; this tab used to keep it only in
-   * React state, so a reload threw it away and `#/course/{id}` landed on
-   * whatever built-in course the router fell back to. Everything below makes
-   * the gateway the source of truth: read the list on sign-in, resolve a course
-   * a link names, and delete through the API so the change is the server's.
-   *
-   * `gateway: true` is the flag that says where a course came from. A built-in
-   * course never carries it, so the two can never be confused for one another,
-   * and it is what tells a later list refresh which entries are the learner's
-   * own records and may be replaced or dropped. */
-  const materialise = useCallback(
-    (rec: AiCourseRecord): Course =>
-      ({
-        ...courseFromPlan(rec.plan, rec.plan.subtitle || rec.plan.title),
-        gateway: true,
-        recordStatus: rec.status,
-      }) as Course,
-    []
-  );
-
-  /* Mirror a list of stored courses into the catalog. The catalog is what every
-     screen and the router resolve an id against, so a stored course has to be
-     in it to be reachable; a course that is no longer in the list is dropped,
-     so a delete is visible everywhere at once. */
-  const applyStored = useCallback(
-    (next: Course[]) => {
-      const keep = new Set(next.map((c) => c.id));
-      for (let i = COURSES.length - 1; i >= 0; i--) {
-        const c = COURSES[i];
-        if (c.gateway === true && !keep.has(c.id)) COURSES.splice(i, 1);
-      }
-      for (const c of next) {
-        const at = COURSES.findIndex((x) => x.id === c.id);
-        if (at >= 0) COURSES[at] = c;
-        else COURSES.push(c);
-      }
-      storedRef.current = next;
-      bumpCatalog();
-    },
-    [bumpCatalog]
-  );
-
-  /* The learner's courses, read once the session is known. `session` is a
-     dependency because the list belongs to the account: signing in as somebody
-     else must not keep the previous account's courses on screen. */
-  useEffect(() => {
-    if (api.mode !== 'http' || !authReady || !session) return;
-    let alive = true;
-    void api
-      .listCourses()
-      .then((records) => {
-        if (alive) applyStored(records.map(materialise));
-      })
-      .catch(() => {
-        /* The list is unavailable. Nothing is dropped: the catalog keeps what it
-           already has rather than presenting a failed read as "no courses". */
-      });
-    return () => {
-      alive = false;
-    };
-  }, [api, authReady, session, applyStored, materialise]);
 
   /* A run this tab started before the page went away. The gateway went on
      building it; only the view of it was lost, and asking the gateway what
@@ -1473,7 +840,7 @@ export function StoreProvider({ children }: { children: React.ReactNode }) {
       if (!ownerId) return;
       writeRun({ jobId, ownerId, goal, startedAt: Date.now() });
     },
-    []
+    [sessionRef]
   );
 
   const runSettled = useCallback((jobId: string): void => {
@@ -1489,97 +856,6 @@ export function StoreProvider({ children }: { children: React.ReactNode }) {
   const buildSettled = useCallback((): void => {
     setResumeBuild(null);
   }, []);
-
-  /* A course the fragment named. The gateway may own an id this tab has never
-     seen, so the store asks before the router is allowed to give up. */
-  useEffect(() => {
-    if (!pendingCourse || !authReady) return;
-    if (!session) return;
-    const goHome = (message: string | null) => {
-      setPendingCourse(null);
-      setScreen('home');
-      window.history.replaceState(null, '', HOME_HASH);
-      if (message) toast(message);
-    };
-    if (api.mode !== 'http') {
-      /* The offline adapters keep no course store, so this link is not theirs. */
-      goHome(null);
-      return;
-    }
-    let alive = true;
-    void api
-      .getCourse(pendingCourse.id)
-      .then((rec) => {
-        if (!alive) return;
-        if (!rec) {
-          goHome('That course is not in your library.');
-          return;
-        }
-        const course = materialise(rec);
-        const others = storedRef.current.filter((c) => c.id !== course.id);
-        applyStored([...others, course]);
-        if (pendingCourse.chapterId) {
-          const index = (course.modules || []).findIndex((m) => m.id === pendingCourse.chapterId);
-          if (index >= 0) setActiveLesson(index);
-        }
-        setPendingCourse(null);
-      })
-      .catch(() => {
-        if (alive) goHome('That course could not be opened.');
-      });
-    return () => {
-      alive = false;
-    };
-  }, [api, authReady, session, pendingCourse, applyStored, materialise, toast]);
-
-  /* Removing a course is the gateway's decision, so it goes there first and the
-     list changes only once it agreed. A course the gateway has already
-     forgotten is not a failure: the learner asked for it to be gone and it is. */
-  const deleteCourse = useCallback(
-    async (id: string): Promise<boolean> => {
-      if (api.mode !== 'http') {
-        toast('Generated courses live on the gateway; there is nothing to remove offline.');
-        return false;
-      }
-      try {
-        await api.deleteCourse(id);
-      } catch (e) {
-        /* A course the gateway has already forgotten is the outcome the learner
-           asked for, so it is not a failure: the route answers 404 `NOT_FOUND`
-           (and the AI surface also spells it `AI_NOT_FOUND`). Anything else is a
-           real refusal and the list is left exactly as it was. */
-        if (!isMissingCourse(e)) {
-          toast('The course could not be removed. Try again.');
-          return false;
-        }
-      }
-      applyStored(storedRef.current.filter((c) => c.id !== id));
-      if (uiStateRef.current.selectedCourseId === id) {
-        const next = { ...uiStateRef.current, selectedCourseId: COURSES[0].id };
-        uiStateRef.current = next;
-        saveUiState(next);
-        setActiveLesson(0);
-        setScreen('library');
-      }
-      toast('Course removed.');
-      return true;
-    },
-    [api, applyStored, saveUiState, toast]
-  );
-
-  /* Register one stored course from the gateway, replacing any copy already in
-     the catalog. Used mid-run: a course the pipeline is still writing is real,
-     it is the learner's, and reading it as it grows is the whole point of
-     generating chapter by chapter. Returns the catalog course so the caller can
-     show it without waiting for a render. */
-  const adoptStoredCourse = useCallback(
-    (rec: AiCourseRecord): Course => {
-      const course = materialise(rec);
-      applyStored([...storedRef.current.filter((c) => c.id !== course.id), course]);
-      return course;
-    },
-    [applyStored, materialise]
-  );
 
   /* Course authoring is the admin surface. The screens and nav hide it from a
      learner, but these actions mutate the shared draft, so they enforce the rule
@@ -1607,40 +883,75 @@ export function StoreProvider({ children }: { children: React.ReactNode }) {
   );
 
   const saveCourseEdits = useCallback(
-    ({ title }: { title?: string }) => {
+    async ({ title }: { title?: string }) => {
       if (!canAuthor()) return;
-      if (title && title.trim()) COURSES[0].title = title.trim();
+      const next = title && title.trim() ? title.trim() : undefined;
+      /* A stored course lives on the gateway, so the edit goes there first and
+         the catalog changes only once it agreed. A built-in course has no row
+         to write, so it keeps today's local-only edit. */
+      if (course.gateway === true) {
+        if (next === undefined) return;
+        try {
+          await api.updateCourse(course.id, { title: next });
+        } catch (e) {
+          toast(editFailureMessage(e));
+          return;
+        }
+        course.title = next;
+        bumpCatalog();
+        toast('Course details saved.');
+        return;
+      }
+      if (next !== undefined) COURSES[0].title = next;
       bumpCatalog();
       toast('Course details saved.');
     },
-    [canAuthor, bumpCatalog, toast]
+    [api, bumpCatalog, canAuthor, course, toast]
   );
 
   const saveLessonEdits = useCallback(
-    ({ title, summary }: { title?: string; summary?: string }) => {
+    async ({ title, summary }: { title?: string; summary?: string }) => {
       if (!canAuthor()) return;
-      const m = MODULES[activeLesson];
+      const m = activeModulesOf(course)[activeLesson];
       if (!m) return;
-      if (title && title.trim()) m.title = title.trim();
-      if (summary && summary.trim()) m.summary = summary.trim();
+      const nextTitle = title && title.trim() ? title.trim() : undefined;
+      const nextSummary = summary && summary.trim() ? summary.trim() : undefined;
+      if (nextTitle === undefined && nextSummary === undefined) return;
+      /* The gateway owns a stored course's chapters; the route edits them by
+         chapter id, so a chapter the stored plan does not have is refused there
+         rather than quietly diverging from the row. */
+      if (course.gateway === true) {
+        const edit: AiChapterEdit = { id: m.id };
+        if (nextTitle !== undefined) edit.title = nextTitle;
+        if (nextSummary !== undefined) edit.summary = nextSummary;
+        try {
+          await api.updateCourse(course.id, { chapters: [edit] });
+        } catch (e) {
+          toast(editFailureMessage(e));
+          return;
+        }
+      }
+      if (nextTitle !== undefined) m.title = nextTitle;
+      if (nextSummary !== undefined) m.summary = nextSummary;
       bumpCatalog();
       toast('Chapter updated.');
     },
-    [canAuthor, activeLesson, bumpCatalog, toast]
+    [activeLesson, api, bumpCatalog, canAuthor, course, toast]
   );
 
   const applyExtension = useCallback(
     (kind: string, prompt?: string) => {
       if (!canAuthor()) return;
-      const PRESETS: Record<string, string[]> = {
-        deeper: ['Edge cases and advanced variants', 'Add harder exercises with ties, NULLs, missing periods, duplicate-producing joins, and performance trade-offs.'],
-        advanced: ['Advanced SQL patterns', 'Add advanced modules on lateral joins, recursive CTEs, percentile analysis, and efficient analytical queries.'],
-        project: ['Integrated capstone project', 'Add an open-ended marketplace analytics project with staged milestones, tests, and a final review.'],
-        branch: ['Query planning and indexing branch', 'Add an optional branch on EXPLAIN ANALYZE, index design, cardinality estimates, and query rewrites.'],
-        practice: ['Interview practice set', 'Add a graduated set of interview problems with hidden edge cases and explanation after submission.'],
-        context: ['Domain-specific adaptation', 'Adapt exercises to a domain-specific schema and business rules supplied by the learner.'],
-      };
-      const p = PRESETS[kind] || PRESETS.deeper;
+      const deeperPreset = ['Edge cases and advanced variants', 'Add harder exercises with ties, NULLs, missing periods, duplicate-producing joins, and performance trade-offs.'];
+      const PRESETS = new Map<string, string[]>([
+        ['deeper', deeperPreset],
+        ['advanced', ['Advanced SQL patterns', 'Add advanced modules on lateral joins, recursive CTEs, percentile analysis, and efficient analytical queries.']],
+        ['project', ['Integrated capstone project', 'Add an open-ended marketplace analytics project with staged milestones, tests, and a final review.']],
+        ['branch', ['Query planning and indexing branch', 'Add an optional branch on EXPLAIN ANALYZE, index design, cardinality estimates, and query rewrites.']],
+        ['practice', ['Interview practice set', 'Add a graduated set of interview problems with hidden edge cases and explanation after submission.']],
+        ['context', ['Domain-specific adaptation', 'Adapt exercises to a domain-specific schema and business rules supplied by the learner.']],
+      ]);
+      const p = PRESETS.get(kind) ?? deeperPreset;
       const ts = Date.now();
       MODULES.push({
         id: 'ext' + ts,
@@ -1861,6 +1172,11 @@ export function StoreProvider({ children }: { children: React.ReactNode }) {
     setReviewTab,
     tablesOpen,
     setTablesOpen,
+    tablesFocus,
+    openTables,
+    tutorTarget,
+    openTutor,
+    closeTutor,
     chaptersOpen,
     setChaptersOpen,
     navOpen,
@@ -1875,42 +1191,12 @@ export function StoreProvider({ children }: { children: React.ReactNode }) {
     closePrompt: () => setPromptRequest(null),
     // theme
     theme,
-    setTheme: (m: ThemePreference) => {
-      setThemeState(m);
-      saveJSON(THEME_KEY, m);
-      // The preference follows the account: written to the gateway when one
-      // is attached, in addition to the device's localStorage above.
-      if (api.mode === 'http' && session?.token) {
-        void api.savePreferences({ theme: m, customThemes: customThemesRef.current }).catch(() => { /* device keeps it */ });
-      }
-    },
+    setTheme,
     customThemes,
-    saveCustomTheme: (t: UserTheme) => {
-      const next = customThemesRef.current.some((x) => x.id === t.id)
-        ? customThemesRef.current.map((x) => (x.id === t.id ? t : x))
-        : [...customThemesRef.current, t];
-      customThemesRef.current = next;
-      setCustomThemes(next);
-      saveJSON('qc.customThemes', next);
-      if (api.mode === 'http' && session?.token) {
-        void api.savePreferences({ theme, customThemes: next }).catch(() => { /* device keeps it */ });
-      }
-    },
-    deleteCustomTheme: (id: string) => {
-      const next = customThemesRef.current.filter((x) => x.id !== id);
-      customThemesRef.current = next;
-      setCustomThemes(next);
-      saveJSON('qc.customThemes', next);
-      if (api.mode === 'http' && session?.token) {
-        void api.savePreferences({ theme, customThemes: next }).catch(() => { /* device keeps it */ });
-      }
-    },
+    saveCustomTheme,
+    deleteCustomTheme,
     motion,
-    setMotion: () => {
-      const next = !motion;
-      setMotionState(next);
-      saveJSON(MOTION_KEY, next);
-    },
+    setMotion,
     // navigation
     openLessonIn,
     selectCourse,
@@ -1970,12 +1256,13 @@ export function StoreProvider({ children }: { children: React.ReactNode }) {
       activeLesson, addLesson, addNote, addSection, addStudyTime, adminPasswordEmpty, adoptGeneratedCourse, adoptStoredCourse,
       aiAvailability, api, apiCount, apiLog, applyExtension, authNotice, authReady, buildContext, buildSettled, catalogVersion,
       challengeId, chaptersOpen, clearProgress, content, contextState, course, courseResolving, courseSubtitle, customThemes,
-      deleteCourse, draftCourse, draftReport, effectiveTheme, engineCaps, enrollCourse, exportData, goalInput, importData,
+      deleteCourse, deleteCustomTheme, draftCourse, draftReport, engineCaps, enrollCourse, exportData, goalInput, importData,
       isBookmarked, latency, loadSampleProgress, login, logout, markLessonDone, modal, modules, motion, moveLesson, navOpen,
       openBookmark, openLessonIn, openSearchHit, pct, progress, promptRequest, recordEvent, removeSaved, removeWorkbookItem,
       resumeBuild, resumeCourse, resumeRun, resumeStoredCourse, reviewGoal, reviewTab, role, runSettled, runStarted,
-      saveCourseEdits, saveLessonEdits, saveQuery, screen, selectCourse, session, setDraftReport, setReviewGoal, showScreen,
-      signup, startLearning, stepLesson, submitBuild, tablesOpen, theme, toast, toastMsg, toggleBookmark, uiState, useAuthoredDraft,
+      saveCourseEdits, saveCustomTheme, saveLessonEdits, saveQuery, screen, selectCourse, session, setDraftReport, setMotion, setReviewGoal, setTheme, showScreen,
+      signup, startLearning, stepLesson, submitBuild, tablesOpen, tablesFocus, openTables, theme, toast, toastMsg, toggleBookmark, uiState, useAuthoredDraft,
+      tutorTarget, openTutor, closeTutor,
     ]
   );
 

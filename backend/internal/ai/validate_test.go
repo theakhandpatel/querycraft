@@ -76,15 +76,21 @@ func filledTopics(n int) []string {
 }
 
 func TestNormalizeRequestClampsAndDefaults(t *testing.T) {
-	req := normalizeRequest(schema.GenerationRequest{Title: "x", ExerciseCount: 99}, DefaultLimits())
-	if req.ExerciseCount != 40 {
-		t.Errorf("exercise_count = %d, want 40", req.ExerciseCount)
+	for _, tc := range []struct {
+		in   int
+		want int
+	}{
+		{0, 1},
+		{-3, 1},
+		{41, 40},
+		{99, 40},
+	} {
+		req := normalizeRequest(schema.GenerationRequest{Title: "x", ExerciseCount: tc.in}, DefaultLimits())
+		if req.ExerciseCount != tc.want {
+			t.Errorf("exercise_count %d = %d, want %d", tc.in, req.ExerciseCount, tc.want)
+		}
 	}
-	req = normalizeRequest(schema.GenerationRequest{Title: "x", ExerciseCount: -3}, DefaultLimits())
-	if req.ExerciseCount != 1 {
-		t.Errorf("exercise_count = %d, want 1", req.ExerciseCount)
-	}
-	req = normalizeRequest(schema.GenerationRequest{Title: "x"}, DefaultLimits())
+	req := normalizeRequest(schema.GenerationRequest{Title: "x"}, DefaultLimits())
 	if req.Difficulty != schema.Intermediate {
 		t.Errorf("difficulty = %q, want %q", req.Difficulty, schema.Intermediate)
 	}

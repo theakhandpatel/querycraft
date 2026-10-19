@@ -38,12 +38,13 @@ const (
 	toolFinishCourse = "finish_course"
 )
 
-// bootPG starts a cluster and returns a writable executor. The pipeline applies
-// setup statements and the evaluator runs learner SQL, so the executor must be
+// bootPG returns a writable executor over this test's own database on the
+// package's shared cluster (pgtest.Shared). The pipeline applies setup
+// statements and the evaluator runs learner SQL, so the executor must be
 // writable; whether the SQL is real PostgreSQL does not depend on the role.
 func bootPG(t *testing.T) engine.Executor {
 	t.Helper()
-	srv := pgtest.Start(t)
+	srv := pgtest.Shared(t)
 	ctx, cancel := context.WithTimeout(context.Background(), 2*time.Minute)
 	t.Cleanup(cancel)
 	ex, err := engine.NewPgxExecutorWithConfig(ctx, srv.DSN, engine.PgxConfig{MaxConns: 2, MinConns: 1, Writable: true})
@@ -60,6 +61,10 @@ func testContext(t *testing.T) context.Context {
 	t.Cleanup(cancel)
 	return ctx
 }
+
+// TestMain gives the package one shared PostgreSQL cluster; every test that
+// asks pgtest.Shared for a server gets its own database on it.
+func TestMain(m *testing.M) { pgtest.Main(m) }
 
 // gatedProvider stops every provider call until the test opens the gate, which
 // is what makes "what does a poller see while the run is in flight" a fact

@@ -19,7 +19,7 @@ import (
 // the difference must be a transaction mode rather than a convention — if the
 // read-only executor leaked a write, the shared dataset would be mutable.
 func TestWritableExecutorCommitsAndReadOnlyRollsBack(t *testing.T) {
-	srv := pgtest.Start(t)
+	srv := pgtest.Shared(t)
 	ctx, cancel := context.WithTimeout(context.Background(), 2*time.Minute)
 	defer cancel()
 

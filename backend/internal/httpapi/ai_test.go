@@ -3,6 +3,7 @@ package httpapi
 import (
 	"context"
 	"net/http"
+	"net/http/httptest"
 	"strings"
 	"testing"
 	"time"
@@ -24,6 +25,7 @@ import (
 type recordingDepot struct {
 	saved        []schema.Record
 	savedCourses []schema.CourseRecord
+	patched      []string
 }
 
 func (d *recordingDepot) SaveChallenge(_ context.Context, rec schema.Record) error {
@@ -41,7 +43,8 @@ func (d *recordingDepot) DeleteChallenge(context.Context, string) error { return
 func (d *recordingDepot) SavePatch(context.Context, schema.PatchProposal) error {
 	return nil
 }
-func (d *recordingDepot) Patch(context.Context, string) (schema.PatchProposal, bool, error) {
+func (d *recordingDepot) Patch(_ context.Context, id string) (schema.PatchProposal, bool, error) {
+	d.patched = append(d.patched, id)
 	return schema.PatchProposal{}, false, nil
 }
 func (d *recordingDepot) ApprovePatch(context.Context, string, string) error { return nil }
@@ -203,6 +206,52 @@ func TestAIChallengeRoutesRefuseAnonymousCallers(t *testing.T) {
 		if w.Code != http.StatusUnauthorized {
 			t.Errorf("%s %s status = %d, want 401", rt.method, rt.path, w.Code)
 		}
+	}
+}
+
+func TestPatchDecisionIgnoresBodyIdentity(t *testing.T) {
+	r := httptest.NewRequest(http.MethodPost, "/challenges/path-challenge/patches/path-patch", nil)
+	r.SetPathValue("id", "path-challenge")
+	r.SetPathValue("patchID", "path-patch")
+
+	dec := patchRouteDecision(ai.PatchDecision{
+		PatchID:     "body-patch",
+		ChallengeID: "body-challenge",
+		Approved:    true,
+		ApprovedBy:  "attacker@example.test",
+	}, r, "session@example.test")
+
+	if dec.PatchID != "path-patch" {
+		t.Errorf("PatchID = %q, want the path id", dec.PatchID)
+	}
+	if dec.ChallengeID != "path-challenge" {
+		t.Errorf("ChallengeID = %q, want the path challenge", dec.ChallengeID)
+	}
+	if dec.ApprovedBy != "session@example.test" {
+		t.Errorf("ApprovedBy = %q, want the session account", dec.ApprovedBy)
+	}
+	if !dec.Approved {
+		t.Error("the body's approval flag was discarded")
+	}
+}
+
+func TestPatchApprovalLoadsThePatchFromThePath(t *testing.T) {
+	depot := &recordingDepot{}
+	s := newTestServer(&fakeExecutor{})
+	s.UseAI(ai.Config{
+		Provider: ai.NewFakeProvider(),
+		Depot:    depot,
+		Runner:   stubRunner{exec: &fakeExecutor{}},
+	})
+	token := signupUser(t, s, "patch-path@example.test")
+
+	w := doAs(t, s, token, http.MethodPost, "/challenges/path-challenge/patches/path-patch",
+		`{"patch_id":"body-patch","challenge_id":"body-challenge","approved":true,"approved_by":"attacker@example.test"}`)
+	if w.Code != http.StatusNotFound {
+		t.Fatalf("status = %d body = %s, want 404 for the missing path patch", w.Code, w.Body.String())
+	}
+	if len(depot.patched) != 1 || depot.patched[0] != "path-patch" {
+		t.Fatalf("patch lookup = %v, want [path-patch]", depot.patched)
 	}
 }
 

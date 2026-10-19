@@ -38,7 +38,7 @@ Code: `web/src/components/screens/`, `web/src/lib/exportBundle.ts`,
 | Result grading | Compares your result against the contract in four checks: the columns and their order, the row count, the row values, and the row order. Any correct query passes. The app never compares SQL text. |
 | Feedback | Names the check that failed and an error code from one closed set. Examples: `QUERY_TIMEOUT`, `QUERY_SYNTAX_ERROR`, `DIALECT_MISMATCH`. |
 | Cell controls | Run, Check answer, Show hint, Show solution, Accept my answer, Keep query, Reset, and Bookmark. Ctrl+Enter or Cmd+Enter runs the cell. |
-| Tutor | The button "Explain my mistake" calls `POST /tutor` on the gateway. |
+| Tutor | "Ask tutor" and "Explain my mistake" call `POST /tutor`. The gateway runs your SQL, assembles the context, and sees the expected result after your first attempt but never the reference query (ADR 0008). |
 | Limits | One function applies the statement deadline, the row cap, the byte cap, and the concurrency cap. The result reports `truncated` or `QUERY_TIMEOUT` when a cap applies. |
 | Tables drawer | Shows the live schema: tables, columns, types, key flags, null flags, and sample rows. It also resets your workspace. |
 
@@ -125,7 +125,7 @@ Code: `Makefile`, `backend/internal/localdb/`, `web/src/api/index.ts`.
 | `make doctor` | Runs React Doctor over `web/src` for accessibility, render behaviour and bundle findings. It is a report, not a gate, and it exits 1 when it finds something. |
 | 55 fixtures | The Go evaluator and the JavaScript evaluator read the same `contracts/fixtures/*.json`. Neither language keeps its own answers. |
 | 24 audit suites | Cover courses, content, lessons, search, shell, progress, export, import, storage, accessibility, AI, adapter parity, load, adversarial cases, metrics, the dataset map, and SQLite error codes. |
-| Adversarial suite | Runs the ten cases from design section 13.3 on a new gateway. It also publishes what it does not protect. |
+| Adversarial suite | Runs the ten cases from design section 13.3 and a seeded resource-exhaustion fuzz phase on a new gateway. It also publishes what it does not protect. |
 | Load test | Proves the concurrency cap by filling every slot. It compares the client numbers against `/metrics`. |
 | Adapter parity | Runs the same SQL on PGlite and on the gateway, then compares each row. |
 
@@ -143,51 +143,23 @@ Doctor scan found.
 
 ## 10. What is not finished
 
-- "Report a problem" shows a message. It does not start the critique flow.
-  (`web/src/components/SqlCell.tsx`)
-- "Save challenge" shows a message. It does not save the request.
-  (`web/src/components/screens/ChallengeLabScreen.tsx`)
-- The setup statements of a new course run only when you reset the workspace by
-  hand. They do not run when you open the course.
-  (`web/src/components/TablesDrawer.tsx`)
-- No accessibility runner runs in the build. The evidence is a keyboard-only
-  walkthrough. (`docs/accessibility.md`)
-- The gateway session token is stored in `localStorage` and sent as
-  `Authorization: Bearer`. Any XSS on the page can read it. An `HttpOnly` cookie
-  is the standard answer and is an architecture change.
-  (`web/src/api/execution/`)
-- The `/runs` transcripts have no screen. The gateway stores them. (`progress.md`)
-- Chapter markdown re-renders on unrelated store changes. `Markdown` is not
-  memoized, so a query result, a search keystroke, or a theme change makes the
-  page parse and sanitize every block again. React Scan measured 6.8 ms of
-  markdown work for one query result and 13.2 ms for a search keystroke.
-  (`web/src/components/ui/Markdown.tsx`)
-- `src/api/ai.ts` decodes the model's reply by hand with `typeof` checks and
-  `as unknown as` chains, instead of decoding it with Effect `Schema` the way
-  `src/api/contract.ts` does. The linter reports 12 assertion chains and 175
-  `typeof` narrowings there. The contract rules that name this gap stay off in
-  `web/oxlint.config.ts` until the decoders move to `Schema`.
-- The linter reports 28 warnings and no errors. 12 are the assertion chains
-  above, 3 are `unknown` in a function contract, 3 are adjacent `map` and
-  `filter` passes, 7 are `new Array(n).fill(null)`, 2 are an unnecessary `|| {}`
-  in a spread, and 1 is a short-circuit used as a statement.
-  (`web/oxlint.config.ts`)
-- React Doctor reports 70 issues and exits 1. The first scan reported 114. The
-  accessibility batch cut the accessibility count from 21 to 2. The four errors
-  are triaged and left visible: two are deliberate ref reads, one is a false
-  positive, and one has no leak. `progress.md` records each verdict. The rule
-  stays on because a missing effect cleanup is a real bug class.
+- React Doctor reports 42 issues and exits 1 (2 errors, 40 warnings), down from
+  114 at the first scan. The two errors are the same `effect-needs-cleanup` false
+  positive: the cleanup exists but the rule cannot follow the ref that owns it.
+  Every remaining warning is a recorded verdict in `progress.md`: the custom
+  drawers (tested focus trap and `inert`; a `<dialog>` migration is its own
+  item), the two modal-backdrop click handlers, the high-complexity and giant
+  components (splits tracked), and the deliberately ordered sequential loops.
+  The target stays informational so a new finding is read rather than gated.
 - Two React Doctor accessibility findings stay on a modal backdrop's click
   handler. The backdrop click is a pointer convenience; the Close button, Escape
   and the dialog's focus trap are the keyboard path. A `role` would name the
   backdrop a control it is not.
   (`web/src/components/Modals.tsx`, `web/src/components/ui/PromptDialog.tsx`)
-- The system Node on this machine is v20.17.0 and belongs to root, so
-  `react-doctor` cannot start in a non-interactive shell. Lifting it needs
-  `sudo n 22.18.0`. (`.nvmrc`, `web/package.json`)
-- The adversarial suite is not a proof against resource exhaustion. It does no
-  protocol fuzzing. `docs/adversarial-suite.md` lists what a learner can still
-  read.
+- Slowloris and TLS handshake stalls stay outside the adversarial suite. The
+  seeded fuzz phase covers malformed bodies, oversized bodies and the row, byte,
+  time and concurrency caps; `docs/adversarial-suite.md` lists that coverage and
+  what a learner can still read.
 
 ---
 

@@ -168,48 +168,39 @@
       "indexes": [
         {
           "relation": "customers",
-          "name": "customers_pkey",
-          "definition": "CREATE UNIQUE INDEX customers_pkey ON dataset.customers USING btree (id)"
+          "name": "customers_pkey"
         },
         {
           "relation": "dataset_meta",
-          "name": "dataset_meta_pkey",
-          "definition": "CREATE UNIQUE INDEX dataset_meta_pkey ON dataset.dataset_meta USING btree (dataset)"
+          "name": "dataset_meta_pkey"
         },
         {
           "relation": "order_items",
-          "name": "order_items_order_id_idx",
-          "definition": "CREATE INDEX order_items_order_id_idx ON dataset.order_items USING btree (order_id)"
+          "name": "order_items_order_id_idx"
         },
         {
           "relation": "order_items",
-          "name": "order_items_pkey",
-          "definition": "CREATE UNIQUE INDEX order_items_pkey ON dataset.order_items USING btree (id)"
+          "name": "order_items_pkey"
         },
         {
           "relation": "order_items",
-          "name": "order_items_product_id_idx",
-          "definition": "CREATE INDEX order_items_product_id_idx ON dataset.order_items USING btree (product_id)"
+          "name": "order_items_product_id_idx"
         },
         {
           "relation": "orders",
-          "name": "orders_customer_id_idx",
-          "definition": "CREATE INDEX orders_customer_id_idx ON dataset.orders USING btree (customer_id)"
+          "name": "orders_customer_id_idx"
         },
         {
           "relation": "orders",
-          "name": "orders_pkey",
-          "definition": "CREATE UNIQUE INDEX orders_pkey ON dataset.orders USING btree (id)"
+          "name": "orders_pkey"
         },
         {
           "relation": "orders",
-          "name": "orders_status_idx",
-          "definition": "CREATE INDEX orders_status_idx ON dataset.orders USING btree (status)"
+          "name": "orders_status_idx"
         },
         {
           "relation": "products",
-          "name": "products_pkey",
-          "definition": "CREATE UNIQUE INDEX products_pkey ON dataset.products USING btree (id)"
+          "name": "products_pkey"
         }
       ],
       "settings": {

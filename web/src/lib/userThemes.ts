@@ -30,9 +30,7 @@ export interface UserTheme {
   tokens: Record<string, string>;
 }
 
-type TokenMap = Record<string, string>;
-
-const LIGHT_BASE: TokenMap = {
+const LIGHT_BASE = {
   '--bg': '#f4f5f7',
   '--surface': '#ffffff',
   '--surface-2': '#f7f8fa',
@@ -60,7 +58,7 @@ const LIGHT_BASE: TokenMap = {
   '--accent-line-alpha': '0.26',
 };
 
-const DARK_BASE: TokenMap = {
+const DARK_BASE = {
   '--bg': '#121316',
   '--surface': '#181a1f',
   '--surface-2': '#1d2025',
@@ -136,28 +134,30 @@ function tuneInk(color: string, surfaceHex: string, dark: boolean): string {
 }
 
 /** Derive a full token set from a base family plus the user's accent. */
-export function deriveUserTokens(accentHex: string, base: 'light' | 'dark'): TokenMap {
+export function deriveUserTokens(accentHex: string, base: 'light' | 'dark') {
   const source = base === 'dark' ? DARK_BASE : LIGHT_BASE;
-  const tokens: TokenMap = { ...source };
   const accent = hexrgb(accentHex);
   const dark = base === 'dark';
-
-  tokens['--accent'] = accentHex;
-  tokens['--accent-solid'] = tohex(dark ? mix(accent, [0, 0, 0], 0.08) : mix(accent, [0, 0, 0], 0.04));
-  tokens['--accent-hover'] = tohex(dark ? mix(accent, [255, 255, 255], 0.18) : mix(accent, [0, 0, 0], 0.16));
-  tokens['--accent-soft'] = `rgba(${accent.join(',')},${source['--accent-soft-alpha']})`;
-  tokens['--accent-line'] = `rgba(${accent.join(',')},${source['--accent-line-alpha']})`;
-  // The two inks are tuned, never taken raw: a neon accent must not become
-  // unreadable text, and a dark accent must not become a black button.
-  tokens['--accent-ink'] = tuneInk(accentHex, source['--surface'], dark);
-  const solid = hexrgb(tokens['--accent-solid']);
   const white: [number, number, number] = [255, 255, 255];
   const black: [number, number, number] = [0, 0, 0];
-  tokens['--on-accent'] = contrastRatio(tohex(white), tohex(solid)) >= 4.5 ? '#ffffff' : '#000000';
+  const solidHex = tohex(dark ? mix(accent, black, 0.08) : mix(accent, black, 0.04));
+  const tokens = {
+    ...source,
+    '--accent': accentHex,
+    '--accent-solid': solidHex,
+    '--accent-hover': tohex(dark ? mix(accent, white, 0.18) : mix(accent, black, 0.16)),
+    '--accent-soft': `rgba(${accent.join(',')},${source['--accent-soft-alpha']})`,
+    '--accent-line': `rgba(${accent.join(',')},${source['--accent-line-alpha']})`,
+    // The two inks are tuned, never taken raw: a neon accent must not become
+    // unreadable text, and a dark accent must not become a black button.
+    '--accent-ink': tuneInk(accentHex, source['--surface'], dark),
+    '--on-accent': contrastRatio(tohex(white), solidHex) >= 4.5 ? '#ffffff' : '#000000',
+  };
   if (contrastRatio(tokens['--on-accent'], tokens['--accent-solid']) < 4.5) {
     // Neither pure ink clears it: pull the fill toward the accent until the
     // chosen ink does, keeping the hue.
     const inkIsWhite = tokens['--on-accent'] === '#ffffff';
+    const solid = hexrgb(tokens['--accent-solid']);
     for (let step = 1; step <= 40; step++) {
       const adjusted = mix(solid, inkIsWhite ? black : white, step / 40);
       if (contrastRatio(tokens['--on-accent'], tohex(adjusted)) >= 4.5) {

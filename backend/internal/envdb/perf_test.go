@@ -16,7 +16,7 @@ import (
 // from the challenge environment, so a CREATE INDEX in a plan lesson cannot
 // decide the answer a challenge lesson is graded on.
 func TestEnsurePerfProvidesThePlanFixture(t *testing.T) {
-	srv := pgtest.Start(t)
+	srv := pgtest.Shared(t)
 	ctx, cancel := context.WithTimeout(context.Background(), 4*time.Minute)
 	defer cancel()
 
@@ -102,7 +102,7 @@ func TestEnsurePerfProvidesThePlanFixture(t *testing.T) {
 // one resetAt map, keyed by kind prefix, so a plan reset that wrote the bare
 // account digest would overwrite the challenge time Facts reports.
 func TestPerfResetKeepsTheChallengeResetTime(t *testing.T) {
-	srv := pgtest.Start(t)
+	srv := pgtest.Shared(t)
 	ctx, cancel := context.WithTimeout(context.Background(), 4*time.Minute)
 	defer cancel()
 

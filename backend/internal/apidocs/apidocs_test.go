@@ -22,6 +22,7 @@ var openAPIOperations = []struct {
 	{http.MethodPost, "/answers/evaluate"},
 	{http.MethodGet, "/environment"},
 	{http.MethodPost, "/environment/reset"},
+	{http.MethodPost, "/environment/prepare"},
 	{http.MethodGet, "/datasets/{id}/tables"},
 	{http.MethodPost, "/auth/signup"},
 	{http.MethodPost, "/auth/login"},

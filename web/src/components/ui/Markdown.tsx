@@ -1,4 +1,4 @@
-import { useEffect, useRef, useState } from 'react';
+import { memo, useEffect, useRef, useState } from 'react';
 import { renderMarkdown } from '../../lib/markdown';
 
 const RENDERED_ATTR = 'data-rendered';
@@ -16,7 +16,7 @@ function showMermaidSource(host: HTMLElement, source: string): void {
   host.setAttribute(RENDERED_ATTR, '1');
 }
 
-export default function Markdown({ source, className }: { source: string; className?: string }) {
+function Markdown({ source, className }: { source: string; className?: string }) {
   const ref = useRef<HTMLDivElement>(null);
   /* Mermaid paints its diagram into inline SVG attributes at render time, so a
      diagram rendered for one palette keeps that palette's label fills when the
@@ -86,6 +86,8 @@ export default function Markdown({ source, className }: { source: string; classN
         themeVariables: { fontFamily: pageFont, fontSize: '14px' },
       });
 
+      /* Mermaid renders into one shared document, so one diagram at a time is
+         the only safe order; the loop is sequential by design. */
       for (const node of nodes) {
         if (!alive) return;
         const text = node.getAttribute('data-mermaid') ?? '';
@@ -119,3 +121,11 @@ export default function Markdown({ source, className }: { source: string; classN
     />
   );
 }
+
+/* Both props are plain strings at every call site: `LessonScreen` passes the
+   block's stored markdown, `TutorDrawer` the turn's text, and neither passes
+   `className`. An unrelated store change re-renders the parent while the block
+   string keeps its identity, so a shallow compare on `source` and `className`
+   is the honest boundary: it skips `renderMarkdown` exactly when the input is
+   unchanged, and nothing else can affect the output. */
+export default memo(Markdown, (prev, next) => prev.source === next.source && prev.className === next.className);

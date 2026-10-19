@@ -339,63 +339,6 @@ func critiqueText(req provider.ProviderRequest) string {
 	return "The query runs against the commerce dataset. Check the join keys and the grouping first: those are where most wrong answers start. Then confirm the ORDER BY leaves no ties."
 }
 
-/* ---------- schema advertised to a provider ---------- */
-
-// challengeSchema is the JSON Schema the pipeline advertises in
-// ProviderRequest.Schema. It is a subset of contracts/ai.schema.json: the
-// language-neutral contract is the source of truth, and this string keeps the
-// request self-describing without reading a file at runtime. A provider that
-// ignores it is still validated by validateArtifact, so the schema is a hint,
-// never the gate.
-//
-// The bounds are part of the hint. Without minLength a model may satisfy the
-// schema with `"statements": [""]`, and validateArtifact refuses the bundle only
-// later, after the repair budget has been spent re-asking the same question. A
-// schema that cannot describe an empty statement removes that round trip, and a
-// provider that enforces json_schema removes the possibility.
-//
-// `setup.statements` carries minLength on its items but no minItems: an empty
-// list is the correct answer for a challenge over the sealed dataset (see
-// SetupPlan). Demanding one entry would only push a model into inventing a
-// statement the environment already provides: a `CREATE TABLE customers`
-// collides with the loaded dataset, and a `DROP` is refused.
-const challengeSchema = `{
-  "$schema": "https://json-schema.org/draft/2020-12/schema",
-  "title": "challengeArtifact",
-  "type": "object",
-  "required": ["title", "prompt", "difficulty", "objectives", "hints", "setup", "reference_solution", "cross_check_solution", "result_contract"],
-  "properties": {
-    "title": {"type": "string", "minLength": 1},
-    "prompt": {"type": "string", "minLength": 1},
-    "difficulty": {"enum": ["beginner", "intermediate", "advanced"]},
-    "objectives": {"type": "array", "minItems": 1, "items": {"type": "string", "minLength": 1}},
-    "hints": {"type": "array", "items": {"type": "string", "minLength": 1}},
-    "setup": {
-      "type": "object",
-      "required": ["dataset", "schema_version", "seed_version", "statements"],
-      "properties": {
-        "dataset": {"type": "string", "minLength": 1},
-        "schema_version": {"type": "integer"},
-        "seed_version": {"type": "integer"},
-        "statements": {"type": "array", "items": {"type": "string", "minLength": 1}}
-      }
-    },
-    "reference_solution": {"type": "string", "minLength": 1},
-    "cross_check_solution": {"type": "string", "minLength": 1},
-    "result_contract": {
-      "type": "object",
-      "required": ["columns", "column_order", "row_order", "duplicates", "numeric_tolerance"],
-      "properties": {
-        "columns": {"type": "array", "minItems": 1, "items": {"type": "string", "minLength": 1}},
-        "column_order": {"enum": ["exact", "ignored"]},
-        "row_order": {"enum": ["exact", "ignored"]},
-        "duplicates": {"enum": ["preserved", "ignored"]},
-        "numeric_tolerance": {"type": "number"}
-      }
-    }
-  }
-}`
-
 /* ---------- the deterministic course ---------- */
 
 // coursePlanShape is the authored course the built-in provider serves, as a

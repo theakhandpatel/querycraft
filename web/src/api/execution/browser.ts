@@ -28,8 +28,8 @@ import { datasetFor } from '../../lib/dataset';
 import { dialectFor } from '../../lib/dialect';
 import { datasetVersion } from '../dataset';
 import { DEFAULT_DATASET, DEFAULT_DIALECT } from '../../types';
-import type { ApiConfig, Course, DatasetId, Dialect, EnvironmentInfo } from '../../types';
-import { ExecutionService, clearAuthToken, nowMs, offlineDraft } from './shared';
+import type { ApiConfig, Course, DatasetId, Dialect, EnvironmentInfo, EnvironmentPrepare } from '../../types';
+import { ExecutionService, clearAuthUser, nowMs, offlineDraft } from './shared';
 import type { ExecutionServiceShape, NoteFn } from './shared';
 
 /* The browser layer: PGlite runs PostgreSQL chapters and the SQLite WASM
@@ -90,7 +90,7 @@ function jsonClone<T>(value: T): T {
 /** An id for an event that arrived without one. Prefers the platform UUID. */
 function newEventId(): string {
   const c = typeof crypto === 'undefined' ? undefined : crypto;
-  if (c && typeof c.randomUUID === 'function') return 'evt_' + c.randomUUID();
+  if (c && 'randomUUID' in c) return 'evt_' + c.randomUUID();
   return 'evt_' + Date.now().toString(36) + Math.random().toString(36).slice(2, 10);
 }
 
@@ -195,9 +195,9 @@ function offlineAuthMethods(): Pick<ExecutionServiceShape, 'signup' | 'login' | 
   return {
     signup: () => unavailable(),
     login: () => unavailable(),
-    /* Nothing to revoke in the offline engine, but drop any stale token so a
-       later switch to gateway mode does not carry an invalid one. */
-    logout: () => Effect.sync(() => clearAuthToken()),
+    /* Nothing to revoke in the offline engine, but drop any stale account
+       marker so a later switch to gateway mode does not carry one. */
+    logout: () => Effect.sync(() => clearAuthUser()),
     me: () => Effect.succeed(null),
   };
 }
@@ -392,10 +392,15 @@ export function pgliteLayer(config: ApiConfig = PGLITE_CONFIG, note: NoteFn = ()
           duration_ms: out.duration_ms,
           /* The SQLite workspace has no course setup of its own, so it reports
              the zero it applied rather than a value it never had. */
-          setup_statements: 'setup_statements' in out && typeof out.setup_statements === 'number' ? out.setup_statements : 0,
+          setup_statements: out.setup_statements,
           environment: { database: config.baseUrl, exists: true, writable: true },
         };
       }),
+    /* A stored course exists only on the gateway, and this adapter has none, so
+       there is no stored setup to apply here. It reports the zero it applied
+       rather than pretending to have prepared a workspace it never had; a
+       `gateway` course never reaches this adapter. */
+    prepareEnvironment: () => Effect.succeed<EnvironmentPrepare>({ ok: true, setup_statements: 0 }),
     ...localMethods(config, note),
     /* Chapter content comes out of the database, not the bundled markdown the
        gateway adapter serves: this layer has a real Postgres to read it from. */

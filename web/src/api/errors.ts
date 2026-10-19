@@ -13,6 +13,7 @@ export class GatewayError extends Data.TaggedError('GatewayError')<{
 }> {}
 
 /** A failed call, normalised to the typed error channel. */
+// oxlint-disable-next-line anti-slop/no-unknown-parameters -- a thrown or rejected value is untrusted; this is its normalise boundary.
 export function asGatewayError(e: unknown): GatewayError {
   if (e instanceof GatewayError) return e;
   return new GatewayError({

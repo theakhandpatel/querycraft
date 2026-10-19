@@ -7,10 +7,9 @@ import (
 	"net/http"
 	"net/http/httptest"
 	"strconv"
-	"sync"
 	"testing"
-	"time"
 
+	"github.com/querycraft/sqlquery/backend/internal/auth"
 	"github.com/querycraft/sqlquery/backend/internal/store"
 )
 
@@ -18,10 +17,11 @@ import (
  * auth_test.go does. The throttle is part of Server, so these tests speak HTTP
  * rather than calling the counter directly: what has to hold is the endpoint's
  * behaviour — a 429 after N failures, a 401 below the limit, a success that
- * clears the count, and a source or account that is unaffected — not the map's
- * internal shape. The two tests that pin the bound and the window drive the
- * throttle directly, because there is no HTTP-visible difference between "the
- * entry is still there" and "the entry is gone" at the moment it goes. */
+ * clears the count, and a source or account that is unaffected. The bound test
+ * reads the Server's table through auth.Throttle.Size, because there is no
+ * HTTP-visible difference between "the entry is still there" and "the entry is
+ * gone" at the moment it goes. The window and concurrency tests drive the
+ * counter directly and live beside it in internal/auth. */
 
 func loginBody(email, password string) string {
 	b, _ := json.Marshal(map[string]string{"email": email, "password": password})
@@ -60,7 +60,7 @@ func TestLoginThrottleRefusesAfterFailures(t *testing.T) {
 
 	// Below the limit the answer is the ordinary 401, unchanged, and the body
 	// never echoes the attempted password.
-	for i := 0; i < DefaultLoginMaxFailures; i++ {
+	for i := 0; i < auth.DefaultLoginMaxFailures; i++ {
 		w := doFromIP(t, s, ip, http.MethodPost, "/auth/login", loginBody(email, "wrong-password"))
 		if w.Code != http.StatusUnauthorized {
 			t.Fatalf("failure %d status = %d, want 401 (body %s)", i+1, w.Code, w.Body.String())
@@ -72,7 +72,7 @@ func TestLoginThrottleRefusesAfterFailures(t *testing.T) {
 
 	blocked := doFromIP(t, s, ip, http.MethodPost, "/auth/login", loginBody(email, "wrong-password"))
 	if blocked.Code != http.StatusTooManyRequests {
-		t.Fatalf("status after %d failures = %d, want 429 (body %s)", DefaultLoginMaxFailures, blocked.Code, blocked.Body.String())
+		t.Fatalf("status after %d failures = %d, want 429 (body %s)", auth.DefaultLoginMaxFailures, blocked.Code, blocked.Body.String())
 	}
 	if !containsAny(blocked.Body.String(), "AUTH_RATE_LIMITED") {
 		t.Fatalf("429 body missing AUTH_RATE_LIMITED: %s", blocked.Body.String())
@@ -90,9 +90,9 @@ func TestLoginThrottleRefusesAfterFailures(t *testing.T) {
 	// 429, because the throttle never consults the store.
 	const unknownIP = "198.51.100.9"
 	var unknown *httptest.ResponseRecorder
-	for i := 0; i <= DefaultLoginMaxFailures; i++ {
+	for i := 0; i <= auth.DefaultLoginMaxFailures; i++ {
 		unknown = doFromIP(t, s, unknownIP, http.MethodPost, "/auth/login", loginBody("nobody@example.test", "wrong-password"))
-		if i < DefaultLoginMaxFailures && unknown.Code != http.StatusUnauthorized {
+		if i < auth.DefaultLoginMaxFailures && unknown.Code != http.StatusUnauthorized {
 			t.Fatalf("unknown-account failure %d status = %d, want 401", i+1, unknown.Code)
 		}
 	}
@@ -117,19 +117,19 @@ func TestLoginThrottleSuccessResets(t *testing.T) {
 	// Spend every failure the budget allows *except one* — the reserve is what
 	// lets the real password through — and then sign in for real. The sign-in
 	// must succeed, which it can only do while the pair is not over the limit.
-	for i := 0; i < DefaultLoginMaxFailures-1; i++ {
+	for i := 0; i < auth.DefaultLoginMaxFailures-1; i++ {
 		if w := doFromIP(t, s, ip, http.MethodPost, "/auth/login", loginBody(email, "wrong-password")); w.Code != http.StatusUnauthorized {
 			t.Fatalf("failure %d status = %d, want 401", i+1, w.Code)
 		}
 	}
 	if w := doFromIP(t, s, ip, http.MethodPost, "/auth/login", loginBody(email, password)); w.Code != http.StatusOK {
-		t.Fatalf("login after %d failures status = %d body = %s", DefaultLoginMaxFailures-1, w.Code, w.Body.String())
+		t.Fatalf("login after %d failures status = %d body = %s", auth.DefaultLoginMaxFailures-1, w.Code, w.Body.String())
 	}
 
 	// The success cleared the count. Were that not so, the pair would now stand
 	// one failure from the limit and the next failure would answer 429; instead
 	// a whole fresh budget of failures is available before the limit is felt.
-	for i := 0; i < DefaultLoginMaxFailures; i++ {
+	for i := 0; i < auth.DefaultLoginMaxFailures; i++ {
 		if w := doFromIP(t, s, ip, http.MethodPost, "/auth/login", loginBody(email, "wrong-password")); w.Code != http.StatusUnauthorized {
 			t.Fatalf("post-reset failure %d status = %d, want 401 — the success did not clear the count", i+1, w.Code)
 		}
@@ -157,7 +157,7 @@ func TestLoginThrottleIsKeyedByAddressAndAccount(t *testing.T) {
 	}
 	const ip = "203.0.113.30"
 
-	for i := 0; i < DefaultLoginMaxFailures; i++ {
+	for i := 0; i < auth.DefaultLoginMaxFailures; i++ {
 		if w := doFromIP(t, s, ip, http.MethodPost, "/auth/login", loginBody(alice, "wrong-password")); w.Code != http.StatusUnauthorized {
 			t.Fatalf("failure %d status = %d, want 401", i+1, w.Code)
 		}
@@ -190,130 +190,15 @@ func TestLoginThrottleStaysBounded(t *testing.T) {
 		MaxRows: 100, TimeoutMS: 1000, MaxConcurrent: 2,
 		LoginMaxFailures: 3, LoginWindowMS: 60_000, LoginMaxTracked: maxTracked,
 	}, nil)
-	if s.login.maxKeys != maxTracked {
-		t.Fatalf("maxKeys = %d, want %d", s.login.maxKeys, maxTracked)
-	}
 
 	for i := 0; i < 100; i++ {
 		email := fmt.Sprintf("nobody%d@example.test", i)
 		doFromIP(t, s, "203.0.113.40", http.MethodPost, "/auth/login", loginBody(email, "guess"))
-		if got := s.login.size(); got > maxTracked {
+		if got := s.login.Size(); got > maxTracked {
 			t.Fatalf("after %d pairs the table holds %d, cap is %d", i+1, got, maxTracked)
 		}
 	}
-	if got := s.login.size(); got != maxTracked {
+	if got := s.login.Size(); got != maxTracked {
 		t.Fatalf("table settled at %d, want it filled to the cap %d", got, maxTracked)
-	}
-}
-
-// TestLoginThrottleDropsExpiredEntries pins the window directly: a blocked pair
-// is allowed again once its window has passed, and an expired record is removed
-// rather than lingering in the table.
-func TestLoginThrottleDropsExpiredEntries(t *testing.T) {
-	th := newLoginThrottle(2, 1000, 100)
-	now := time.Unix(1_700_000_000, 0)
-	th.now = func() time.Time { return now }
-
-	th.fail("pair")
-	th.fail("pair")
-	if ok, _ := th.allow("pair"); ok {
-		t.Fatal("a pair over its limit was allowed")
-	}
-	if th.size() != 1 {
-		t.Fatalf("size = %d, want 1", th.size())
-	}
-
-	now = now.Add(2 * time.Second) // past the 1s window
-	if ok, retry := th.allow("pair"); !ok || retry != 0 {
-		t.Fatalf("allow after the window = (%v, %d), want (true, 0)", ok, retry)
-	}
-	if th.size() != 0 {
-		t.Fatalf("the expired record was not dropped: size = %d", th.size())
-	}
-
-	// Expired records are also purged when the table is at its cap, so an
-	// attacker cannot pin old keys by filling it.
-	th = newLoginThrottle(2, 1000, 2)
-	th.now = func() time.Time { return now }
-	th.fail("old-1")
-	th.fail("old-2")
-	now = now.Add(2 * time.Second)
-	th.fail("fresh")
-	if th.size() != 1 {
-		t.Fatalf("after expiry-at-cap size = %d, want only the fresh pair", th.size())
-	}
-}
-
-// TestLoginThrottleDefaultsAreSane guards the fallback: a Config that leaves the
-// login fields unset must still throttle with the shipped numbers, so a caller
-// cannot accidentally disable the limit by passing zero.
-func TestLoginThrottleDefaultsAreSane(t *testing.T) {
-	s := New(&fakeExecutor{}, store.NewMemory(), Config{}, nil)
-	if s.login.maxFailures != DefaultLoginMaxFailures {
-		t.Fatalf("maxFailures = %d, want %d", s.login.maxFailures, DefaultLoginMaxFailures)
-	}
-	if s.login.maxKeys != DefaultLoginMaxTracked {
-		t.Fatalf("maxKeys = %d, want %d", s.login.maxKeys, DefaultLoginMaxTracked)
-	}
-	if s.login.window != time.Duration(DefaultLoginWindowMS)*time.Millisecond {
-		t.Fatalf("window = %s, want %dms", s.login.window, DefaultLoginWindowMS)
-	}
-	// A non-positive value must not remove the limit either.
-	th := newLoginThrottle(0, 0, 0)
-	th.fail("k")
-	if ok, _ := th.allow("k"); !ok {
-		t.Fatal("one failure should not block")
-	}
-	for i := 1; i < DefaultLoginMaxFailures; i++ {
-		th.fail("k")
-	}
-	if ok, retry := th.allow("k"); ok || retry < 1 {
-		t.Fatalf("allow after the default budget = (%v, %d), want (false, >0)", ok, retry)
-	}
-}
-
-// TestLoginThrottleIsConcurrencySafe runs many goroutines through the same pairs
-// at once. Any unsynchronised read or write of the map would be a data race
-// (caught by -race) or a lost update, and a nil-map write would panic. The
-// assertion is the invariant: the table never exceeds its cap, and a pair with
-// more than maxFailures recorded failures is refused.
-func TestLoginThrottleIsConcurrencySafe(t *testing.T) {
-	const (
-		maxFailures = 5
-		maxTracked  = 16
-		workers     = 8
-	)
-	th := newLoginThrottle(maxFailures, 60_000, maxTracked)
-	var wg sync.WaitGroup
-	for w := 0; w < workers; w++ {
-		wg.Add(1)
-		go func(w int) {
-			defer wg.Done()
-			key := fmt.Sprintf("203.0.113.%d\x00u%d@example.test", w, w)
-			for i := 0; i < 50; i++ {
-				th.allow(key)
-				th.fail(key)
-				// Reset periodically to exercise that path under contention, but
-				// only in the first half: the last 25 iterations are a clean run
-				// of failures the final assertion can rely on.
-				if i < 25 && i%7 == 5 {
-					th.reset(key)
-				}
-				if th.size() > maxTracked {
-					t.Errorf("table grew past its cap: %d > %d", th.size(), maxTracked)
-					return
-				}
-			}
-		}(w)
-	}
-	wg.Wait()
-
-	// Every worker's last write was a failure, so the final allow must be a
-	// refusal: at least maxFailures were recorded since the last reset.
-	for w := 0; w < workers; w++ {
-		key := fmt.Sprintf("203.0.113.%d\x00u%d@example.test", w, w)
-		if ok, _ := th.allow(key); ok {
-			t.Fatalf("worker %d's pair was allowed after %d failures", w, 50)
-		}
 	}
 }

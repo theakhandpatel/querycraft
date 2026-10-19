@@ -18,9 +18,10 @@ import (
 	"path/filepath"
 	"time"
 
+	"github.com/querycraft/sqlquery/backend/internal/ai"
 	"github.com/querycraft/sqlquery/backend/internal/ai/provider"
+	"github.com/querycraft/sqlquery/backend/internal/auth"
 	"github.com/querycraft/sqlquery/backend/internal/engine"
-	"github.com/querycraft/sqlquery/backend/internal/httpapi"
 	"github.com/querycraft/sqlquery/backend/internal/localdb"
 )
 
@@ -77,7 +78,7 @@ type Settings struct {
 	AIBaseURL        string // "ai_base_url"
 	AIModel          string // "ai_model"
 	AIKey            string // "ai_key"
-	AITimeoutMS      int    // "ai_timeout_ms"
+	AITimeoutMS      int    // "ai_timeout_ms": the per-call AI timeout in ms; the shipped default is ai.DefaultCallTimeoutMS
 	AIMaxOutputBytes int    // "ai_max_output_bytes"
 	AIRunTimeoutMS   int    // "ai_run_timeout_ms": 0 derives the run budget from AITimeoutMS
 }
@@ -92,9 +93,9 @@ func Defaults() Settings {
 		MaxBytes:         engine.DefaultMaxBytes,
 		TimeoutMS:        engine.DefaultTimeoutMS,
 		MaxConcurrent:    4,
-		LoginMaxFailures: httpapi.DefaultLoginMaxFailures,
-		LoginWindowMS:    httpapi.DefaultLoginWindowMS,
-		LoginMaxTracked:  httpapi.DefaultLoginMaxTracked,
+		LoginMaxFailures: auth.DefaultLoginMaxFailures,
+		LoginWindowMS:    auth.DefaultLoginWindowMS,
+		LoginMaxTracked:  auth.DefaultLoginMaxTracked,
 		PGDataDir:        localdb.DefaultDataDir() + "/data",
 		PGRuntimeDir:     localdb.DefaultDataDir() + "/runtime",
 		PGBinariesDir:    localdb.BinariesDir(),
@@ -105,11 +106,11 @@ func Defaults() Settings {
 		AdminEmail:       "admin@querycraft.local",
 		AdminName:        "Administrator",
 		AIProvider:       "fake",
-		// Sized for the largest legitimate answer, not the smallest: a course
-		// bundle is four chapters plus every exercise in one reply, and a
-		// hosted model needed 58.5 s for one. The pipeline's run budget is
-		// derived from this value, so the two can never disagree.
-		AITimeoutMS:      120000,
+		// The number and its sizing live once, in ai.DefaultCallTimeoutMS;
+		// this default reads it, and a saved setting with no timeout reads
+		// the same constant, so the boot path and the manage surface cannot
+		// drift.
+		AITimeoutMS:      ai.DefaultCallTimeoutMS,
 		AIMaxOutputBytes: provider.DefaultMaxOutputBytes,
 	}
 }

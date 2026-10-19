@@ -16,6 +16,7 @@ below). The table is the harness's own output, pasted, not retyped.
 make audit-adversarial            # builds a gateway, boots it with its own PostgreSQL, runs all cases
 make audit-adversarial-live       # the same against a gateway you already have (QC_GATEWAY, default :18077)
 node scripts/adversarial-audit.mjs --markdown   # print the table below again
+FUZZ_SEED=12345 FUZZ_CASES=60 make audit-adversarial   # replay another fuzz stream
 ```
 
 The harness records five facts per case: that the request returned, that it
@@ -29,8 +30,9 @@ none of it worked is to compare the data before and after.
 Run banner:
 
 ```
-engine:  PostgreSQL 18.3, pool max 8, max_concurrent 8
+engine:  PostgreSQL 18.3, pool max 8, max_concurrent 4
 learner: querycraft_learner (search_path=dataset, can_read_app=false)
+fuzz:    seed 20261019, 40 cases
 ```
 
 ## Results
@@ -77,8 +79,63 @@ learner: querycraft_learner (search_path=dataset, can_read_app=false)
 | `COPY ... TO PROGRAM`, `pg_read_file`, `pg_ls_dir`, `CREATE EXTENSION`, `CREATE ROLE`, `CREATE DATABASE`, `ALTER SYSTEM` | Every one is a runtime error within milliseconds. The learner role is `NOSUPERUSER NOCREATEDB NOCREATEROLE NOREPLICATION NOBYPASSRLS` and the transaction is `READ ONLY`, so PostgreSQL refuses all of these before any policy code runs. |
 | `DROP TABLE` / `TRUNCATE` | Refused by the read-only transaction as well as by the missing grant: two independent controls. |
 | 5 MB single value | The 1 MiB serialised-byte cap is a *hard* failure (`RESULT_LIMIT_EXCEEDED`) rather than a truncation, because a single row that does not fit cannot be represented partially. The response body stays tiny: the value is never marshalled into the response. |
-| Connection exhaustion | 24 concurrent slow statements against a cap of 8 all returned `QUERY_TIMEOUT`, none was dropped and none was a 5xx, and the pool drained to 0 acquired. Saturation is reported, not hidden. |
+| Connection exhaustion | 24 concurrent slow statements against a cap of 4 all returned `QUERY_TIMEOUT`, none was dropped and none was a 5xx, and the pool drained to 0 acquired. Saturation is reported, not hidden. |
 | Runaway query while serving | `/health` and a real learner query both answered 200 *during* the runaway statement: one request cannot take the gateway out. |
+
+## Resource-exhaustion fuzzing
+
+The ten named cases are fixed. The same script then generates a seeded batch of
+requests against the same gateway, learner and `base`. The default seed is
+`20261019` and the default count is 40. Set `FUZZ_SEED` to replay a different
+stream and `FUZZ_CASES` to change the count.
+
+The generator is `mulberry32`, written inline in
+`scripts/adversarial-audit.mjs`. The seed appears in the run banner and in the
+markdown summary. A failing case prints the seed, the case number and the
+generated input, shortened to a readable length, so one command reproduces it.
+
+The SQL generators cover:
+
+- deep parenthesis nesting, 200 to 700 levels;
+- a very long `IN` list, 5,000 to 20,000 items;
+- 400 to 1,200 `UNION ALL` arms;
+- a multi-megabyte string literal, 1.2 to 3 MiB;
+- deeply nested subqueries, 120 to 500 levels;
+- random token soup with Unicode and NUL-like escapes;
+- huge `LIMIT` and `OFFSET` values;
+- random `generate_series` cross joins with a row cap;
+- an unbounded recursive CTE in streaming and aggregate form;
+- a multi-statement script.
+
+The raw request generators cover malformed JSON, wrong field types, negative and
+huge limits, deeply nested JSON, unknown fields, a 100 KB `dataset` or `dialect`
+name, duplicate keys, and one 9 MiB body above the 8 MiB cap. The oversized body
+is built once and sent as a string, so the harness does not encode it twice.
+
+Each generated case must return within its own client bound, never answer with a
+5xx, decode as JSON, and end as `succeeded` or a code from the closed set in
+`contracts/query-result.schema.json`. A case that asks for `max_rows` must return
+`truncated: true` at that cap, and its body must stay small. The script calls
+`healthy()` after every ten cases and once at the end.
+
+The last case sends `max_concurrent + 2` heavy statements at once. All of them
+must settle within 8 seconds, and a normal query must still answer afterwards.
+That checks the admission budget under contention, not just one request at a
+time.
+
+The run below used seed `20261019` and 40 cases, and took 1.6 s with no failures.
+A second run with `FUZZ_SEED=12345 FUZZ_CASES=60` also had no failures and took
+2.9 s. The generators hit the parser depth limit, `statement_timeout`, the row
+cap, the byte cap and the concurrency limit. None produced a 5xx or an
+unclassified outcome.
+
+| Metric | Value |
+| --- | --- |
+| Cases | 40 |
+| Seed | 20261019 |
+| Failures | 0 |
+| Duration | 1.6 s |
+| Generators exercised | huge LIMIT/OFFSET, malformed JSON, recursive CTE, streamed, deep parenthesis nesting, random generate_series cross join, huge limits (clamped to the server caps), many UNION ALL arms, huge dataset name, random token soup, wrong limit type (max_rows is a string), deeply nested JSON, very long IN list, huge dialect name, multi-megabyte string literal, negative limits, deeply nested subqueries, recursive CTE behind an aggregate, oversized body (9 MiB), multi-statement script, wrong field type (sql is a number), duplicate keys, unknown fields, concurrency burst |
 
 ## Defects this suite found
 
@@ -148,11 +205,16 @@ observed in the run above; none of it is hypothetical.
   exercise cancellation by hand, and both paths surface as the same
   `QUERY_TIMEOUT`; the harness has no PostgreSQL client, so this is covered by
   Go tests (`engine/engine_test.go`) rather than end-to-end.
-- **Not a resource-exhaustion proof.** Every case runs on one machine with a
-  loopback client, a cap of 8 concurrent statements and a bounded row/byte/time
-  budget. Disk exhaustion, memory pressure, a hundreds-of-environments burst and
-  a multi-hour soak are not covered. Public hosting that accepts SQL from
-  untrusted users remains out of scope until per-query container isolation
-  exists, exactly as the design says.
-- **No protocol-level fuzzing.** The cases are SQL-level. Malformed HTTP,
-  oversized bodies beyond the 8 MiB cap, slowloris and TLS are not in this suite.
+- **Fuzzing is not a resource-exhaustion proof.** The seeded phase probes parser
+  depth, statement size, row, byte and time caps, the connection budget and
+  malformed request bodies on one loopback machine with a cap of 4 concurrent
+  statements. It does not create disk pressure, memory pressure, a
+  hundreds-of-environments burst or a multi-hour soak. Public hosting that
+  accepts SQL from untrusted users remains out of scope until per-query
+  container isolation exists, exactly as the design says.
+- **Slowloris and TLS stalls are not tested.** The fuzz phase sends malformed
+  JSON, wrong types, deeply nested JSON and bodies above the 8 MiB cap, so the
+  request decoder and that cap are covered. It does not send partial HTTP
+  headers, hold a connection open byte by byte, or exercise TLS handshakes and
+  HTTP/2. Those stay with the Go HTTP server's own timeouts and are not measured
+  here.

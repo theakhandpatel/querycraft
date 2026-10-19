@@ -73,13 +73,11 @@
       "indexes": [
         {
           "relation": "orders",
-          "name": "orders_customer_id_idx",
-          "definition": "CREATE INDEX orders_customer_id_idx ON dataset.orders USING btree (customer_id)"
+          "name": "orders_customer_id_idx"
         },
         {
           "relation": "orders",
-          "name": "orders_status_idx",
-          "definition": "CREATE INDEX orders_status_idx ON dataset.orders USING btree (status)"
+          "name": "orders_status_idx"
         }
       ],
       "settings": {

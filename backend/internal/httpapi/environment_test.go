@@ -13,6 +13,13 @@ import (
 	"github.com/querycraft/sqlquery/backend/internal/store"
 )
 
+// TestMain gives the package one shared PostgreSQL cluster; every test that
+// asks pgtest.Shared for a server gets its own database on it. The environment
+// tests share it too: each signs up its own account, so each manager's
+// cluster-global environment database is named for an account no other test
+// uses.
+func TestMain(m *testing.M) { pgtest.Main(m) }
+
 /* ADR 0003: the writable learner workspace over HTTP.
  *
  * A signed-in learner's SQL runs in their own database, copied from the sealed
@@ -128,7 +135,7 @@ func TestEnvironmentNoDatabaseReportsUnavailable(t *testing.T) {
 // next request, anonymous stays read-only on the shared dataset, and a reset
 // restores the sealed data and discards the write.
 func TestEnvironmentWorkspacePersistsAndResets(t *testing.T) {
-	srv := pgtest.Start(t)
+	srv := pgtest.Shared(t)
 	ctx, cancel := context.WithTimeout(context.Background(), 4*time.Minute)
 	defer cancel()
 

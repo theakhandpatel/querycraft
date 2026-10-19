@@ -776,7 +776,7 @@ func TestEndpointsConformToSchemas(t *testing.T) {
 			// envelope rather than inventing a course. 503 is the transport
 			// half of that answer; the body is the contract half.
 			name: "POST /courses/generate (AI off)", exec: unavailable,
-			method: http.MethodPost, path: "/courses/generate", body: `{"title":"SQL Joins","steps":["a","b","c"]}`,
+			method: http.MethodPost, path: "/courses/generate", body: `{"title":"SQL Joins"}`,
 			wantStatus: http.StatusServiceUnavailable,
 			schema:     aiOutcomeSchema, auth: true,
 		},

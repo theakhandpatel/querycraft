@@ -161,7 +161,7 @@ func jobServer(t *testing.T) *Server {
 // which is how a test drives a model that misbehaves.
 func jobServerWith(t *testing.T, provider provider.Provider) *Server {
 	t.Helper()
-	srv := pgtest.Start(t)
+	srv := pgtest.Shared(t)
 	ctx, cancel := context.WithTimeout(context.Background(), 4*time.Minute)
 	t.Cleanup(cancel)
 

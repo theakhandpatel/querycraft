@@ -79,13 +79,17 @@ export interface DraftReport {
     use. Values arrive from the driver already normalized to their wire shape;
     anything else is stringified rather than dropped, so a row never silently
     loses a cell. */
+/** A value the grid and the grader can hold, as opposed to the engine's raw
+    cell. The predicate is where the driver's value becomes that domain value. */
+function isRowValue(v: unknown): v is RowValue {
+  return v === null || typeof v === 'string' || typeof v === 'number' || typeof v === 'boolean';
+}
+
 function toRows(rows: unknown[][]): RowValue[][] {
   return rows.map((row) =>
     row.map((v): RowValue => {
       if (v === null || v === undefined) return null;
-      const t = typeof v;
-      if (t === 'string' || t === 'number' || t === 'boolean') return v as RowValue;
-      return String(v);
+      return isRowValue(v) ? v : String(v);
     }),
   );
 }
@@ -163,7 +167,7 @@ export function courseFromPlan(plan: AiCoursePlan, goal: string): Course {
 /* ---------- outcome -> report ---------- */
 
 function sum(result: AiExerciseResult): number {
-  return typeof result.reference_rows === 'number' ? result.reference_rows : 0;
+  return result.reference_rows ?? 0;
 }
 
 /**
@@ -187,10 +191,10 @@ export function reportFromOutcome(outcome: AiOutcome, goal: string): DraftReport
     for (const ex of ch.exercises ?? []) {
       if (ex.status === 'verified') verified += 1;
       rows += sum(ex);
-      crossCheckRows += typeof ex.cross_check_rows === 'number' ? ex.cross_check_rows : 0;
-      fixturesRejected += typeof ex.fixtures_rejected === 'number' ? ex.fixtures_rejected : 0;
-      fixturesTotal += typeof ex.fixtures_total === 'number' ? ex.fixtures_total : 0;
-      ms += typeof ex.ms === 'number' ? ex.ms : 0;
+      crossCheckRows += ex.cross_check_rows ?? 0;
+      fixturesRejected += ex.fixtures_rejected ?? 0;
+      fixturesTotal += ex.fixtures_total ?? 0;
+      ms += ex.ms ?? 0;
       if (ex.status !== 'verified') {
         failures.push({
           id: ex.id,
@@ -225,7 +229,7 @@ export function reportFromOutcome(outcome: AiOutcome, goal: string): DraftReport
     model: plan?.provenance?.model,
     pipelineVersion: plan?.provenance?.pipeline_version,
     datasetVersion: plan?.provenance?.dataset_version,
-    repairs: typeof plan?.provenance?.repairs === 'number' ? plan.provenance.repairs : 0,
+    repairs: plan?.provenance?.repairs ?? 0,
     chapters,
     totals: {
       chapters: plan?.chapters?.length ?? reported.length,

@@ -7,7 +7,6 @@ import (
 	"math"
 	"strconv"
 	"strings"
-	"time"
 )
 
 /* sqlite.go is the embedded SQLite profile plus the value and error encoders the
@@ -115,45 +114,14 @@ func (p Profile) EncodeValue(raw any, declaredAffinity string) any {
 	switch v := raw.(type) {
 	case nil:
 		return nil
-	case bool:
-		// No boolean storage class exists: TRUE/FALSE are 1/0 and the domain is
-		// unenforced, so report the integer rather than inventing a boolean.
-		if v {
-			return int64(1)
-		}
-		return int64(0)
-	case int:
-		return p.encodeInt(int64(v))
-	case int8:
-		return p.encodeInt(int64(v))
-	case int16:
-		return p.encodeInt(int64(v))
-	case int32:
-		return p.encodeInt(int64(v))
 	case int64:
 		return p.encodeInt(v)
-	case uint:
-		return p.encodeUint(uint64(v))
-	case uint8:
-		return p.encodeInt(int64(v))
-	case uint16:
-		return p.encodeInt(int64(v))
-	case uint32:
-		return p.encodeInt(int64(v))
-	case uint64:
-		return p.encodeUint(v)
-	case float32:
-		return p.encodeFloat(float64(v))
 	case float64:
 		return p.encodeFloat(v)
 	case string:
 		return v
 	case []byte:
 		return p.encodeBlob(v)
-	case time.Time:
-		// A driver that materialised a time.Time has already lost the stored
-		// text; keep the value a string, in UTC, rather than a host Date.
-		return v.UTC().Format(time.RFC3339)
 	default:
 		return fmt.Sprintf("%v", v)
 	}
@@ -167,15 +135,6 @@ func (p Profile) encodeInt(v int64) any {
 		return strconv.FormatInt(v, 10)
 	}
 	return v
-}
-
-// encodeUint is encodeInt for an unsigned value, which cannot be negative and
-// may not fit an int64.
-func (p Profile) encodeUint(v uint64) any {
-	if v > uint64(p.ValueEncoding.Integer.MaxSafeInteger) {
-		return strconv.FormatUint(v, 10)
-	}
-	return int64(v)
 }
 
 // encodeFloat reports a REAL as a JSON number, with the profile's named rule for

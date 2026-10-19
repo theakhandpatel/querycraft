@@ -157,7 +157,7 @@ func TestPostgresCourseRequestSurvivesARestart(t *testing.T) {
 // request) reads back as a course with no request rather than as a storage
 // fault. The resume path handles the nil, so the read must not fail.
 func TestPostgresCourseWithoutARequestReadsBackWithNone(t *testing.T) {
-	srv := pgtest.Start(t)
+	srv := pgtest.Shared(t)
 	ctx := context.Background()
 	st, err := NewPostgres(ctx, srv.DSN)
 	if err != nil {

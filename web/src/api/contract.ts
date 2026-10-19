@@ -5,7 +5,18 @@ import type { AuthSession, Evaluation, QueryResult, User } from '../types';
 /* Effect Schema decoders for the JSON the Go gateway returns. These mirror
    contracts/query-result.schema.json and contracts/evaluation.schema.json, so a
    malformed gateway response fails decoding instead of silently corrupting the
-   UI. */
+   UI.
+
+   Every entry point takes `Schema.Json`, the named type for a JSON body, rather
+   than `unknown`: that is what the gateway's transport hands over, and the
+   decoder itself is where the untrusted value becomes a domain type. The
+   mutable array combinator makes the decoded value the same mutable shape
+   `QueryResult` and `Evaluation` declare, so nothing is asserted back. */
+
+/* A row cell is the scalar union `RowValue` names. The contract allows any JSON
+   here, but only a scalar can be compared and rendered, so a non-scalar cell
+   fails decoding instead of flowing on as a value the comparator cannot read. */
+const RowValueSchema = Schema.NullOr(Schema.Union([Schema.String, Schema.Number, Schema.Boolean]));
 
 const ColumnSchema = Schema.Struct({ name: Schema.String, type: Schema.String });
 
@@ -19,8 +30,8 @@ const QueryErrorSchema = Schema.Struct({
 
 const QueryResultSchema = Schema.Struct({
   status: Schema.Literals(['succeeded', 'failed']),
-  columns: Schema.Array(ColumnSchema),
-  rows: Schema.Array(Schema.Array(Schema.Unknown)),
+  columns: Schema.mutable(Schema.Array(ColumnSchema)),
+  rows: Schema.mutable(Schema.Array(Schema.mutable(Schema.Array(RowValueSchema)))),
   row_count: Schema.Number,
   truncated: Schema.Boolean,
   duration_ms: Schema.Number,
@@ -38,7 +49,7 @@ const CheckResultSchema = Schema.Struct({
 
 const EvaluationSchema = Schema.Struct({
   qr: QueryResultSchema,
-  checks: Schema.Array(CheckResultSchema),
+  checks: Schema.mutable(Schema.Array(CheckResultSchema)),
   passed: Schema.Boolean,
   /* Milliseconds as a string, matching contracts/evaluation.schema.json and what
      both the gateway and the browser adapters now emit. The union that was here
@@ -46,11 +57,11 @@ const EvaluationSchema = Schema.Struct({
   duration_ms: Schema.String,
 });
 
-export const decodeQueryResult = (u: unknown): Effect.Effect<QueryResult, Schema.SchemaError> =>
-  Schema.decodeUnknownEffect(QueryResultSchema)(u).pipe(Effect.map((r) => r as unknown as QueryResult));
+export const decodeQueryResult = (u: Schema.Json): Effect.Effect<QueryResult, Schema.SchemaError> =>
+  Schema.decodeUnknownEffect(QueryResultSchema)(u);
 
-export const decodeEvaluation = (u: unknown): Effect.Effect<Evaluation, Schema.SchemaError> =>
-  Schema.decodeUnknownEffect(EvaluationSchema)(u).pipe(Effect.map((r) => r as unknown as Evaluation));
+export const decodeEvaluation = (u: Schema.Json): Effect.Effect<Evaluation, Schema.SchemaError> =>
+  Schema.decodeUnknownEffect(EvaluationSchema)(u);
 
 /* Auth payloads. Signup/login return the account plus a bearer token; /auth/me
    returns the account alone. The token is the only credential the client sends;
@@ -76,10 +87,8 @@ const AuthUserSchema = Schema.Struct({
   user: UserSchema,
 });
 
-export const decodeAuthSession = (u: unknown): Effect.Effect<AuthSession, Schema.SchemaError> =>
-  Schema.decodeUnknownEffect(AuthSessionSchema)(u).pipe(
-    Effect.map((r): AuthSession => ({ user: r.user as User, token: r.token, expiresAt: r.expiresAt })),
-  );
+export const decodeAuthSession = (u: Schema.Json): Effect.Effect<AuthSession, Schema.SchemaError> =>
+  Schema.decodeUnknownEffect(AuthSessionSchema)(u);
 
-export const decodeUser = (u: unknown): Effect.Effect<User, Schema.SchemaError> =>
-  Schema.decodeUnknownEffect(AuthUserSchema)(u).pipe(Effect.map((r) => r.user as User));
+export const decodeUser = (u: Schema.Json): Effect.Effect<User, Schema.SchemaError> =>
+  Schema.decodeUnknownEffect(AuthUserSchema)(u).pipe(Effect.map((r) => r.user));

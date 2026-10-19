@@ -44,6 +44,7 @@ export function isDataset(value: unknown): value is DatasetId {
 
 /** Narrow an untrusted value to a dataset, or undefined. Used when reading a
     course out of a bundle, a URL or the database, where the value is data. */
+// oxlint-disable-next-line anti-slop/no-unknown-parameters -- an untrusted value from a bundle, a URL or the database is the boundary this decodes.
 export function asDataset(value: unknown): DatasetId | undefined {
   return isDataset(value) ? value : undefined;
 }

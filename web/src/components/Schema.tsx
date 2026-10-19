@@ -1,4 +1,4 @@
-import { useEffect, useState } from 'react';
+import { useEffect, useRef, useState } from 'react';
 import { DEFAULT_DATASET, DEFAULT_DIALECT } from '../types';
 import type { DatasetId, Dialect, ExecutionApi, TableDef } from '../types';
 
@@ -6,6 +6,7 @@ export default function Schema({
   api,
   dataset = DEFAULT_DATASET,
   dialect = DEFAULT_DIALECT,
+  focus = null,
 }: {
   api: ExecutionApi;
   /** M5. Which fixture to describe. The two datasets are the same schema at two
@@ -20,9 +21,13 @@ export default function Schema({
       chapter's engine does not have. The drawer passes the dialect the open
       chapter resolves to. */
   dialect?: Dialect;
+  /** A table to bring into view once the schema has loaded. The tutor drawer's
+      table chips set this, so a chip lands on the table it names. */
+  focus?: string | null;
 }) {
   const [tables, setTables] = useState<TableDef[] | null>(null);
   const [failed, setFailed] = useState(false);
+  const rootRef = useRef<HTMLDivElement | null>(null);
   useEffect(() => {
     let alive = true;
     /* Cleared first: when the dataset changes, the previous fixture's tables are
@@ -44,11 +49,20 @@ export default function Schema({
     };
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [dataset, dialect]);
+  /* Land on the table a tutor chip named, once the schema is on screen. A plain
+     open leaves `focus` null and changes nothing. */
+  useEffect(() => {
+    if (!focus || !tables || !rootRef.current) return;
+    const node = Array.from(rootRef.current.querySelectorAll<HTMLElement>('.tabledef')).find(
+      (el) => el.dataset.table === focus
+    );
+    node?.scrollIntoView({ block: 'start' });
+  }, [focus, tables]);
   if (failed) return <div className="empty">Could not read the schema. It is still loading… try reopening the drawer.</div>;
   if (!tables) return <div className="empty">Loading schema…</div>;
   if (tables.length === 0) return <div className="empty">This workspace has no tables yet. Create one and reopen the drawer.</div>;
   return (
-    <div className="schema">
+    <div className="schema" ref={rootRef}>
       {tables.map((t) => {
         const head = t.preview[0];
         const body = t.preview.slice(1);
@@ -59,7 +73,7 @@ export default function Schema({
            learner and the column list they are writing SQL against. */
         const label = `${t.name} preview — ${head.length} column${head.length === 1 ? '' : 's'}, showing ${body.length} of ${t.rows} rows`;
         return (
-          <div className="tabledef" key={t.name}>
+          <div className="tabledef" key={t.name} data-table={t.name}>
             <header>{t.name} <span className="muted">· {t.rows} rows</span></header>
             {t.cols.map((c) => (
               <div key={c[0]}>
@@ -77,7 +91,7 @@ export default function Schema({
               >
                 <table>
                   <caption className="visually-hidden">{label}</caption>
-                  <thead><tr>{head.map((h, i) => <th key={i} scope="col">{h}</th>)}</tr></thead>
+                  <thead><tr>{/* A fixed column list; the position names the column. */}{head.map((h, i) => <th key={i} scope="col">{h}</th>)}</tr></thead>
                   <tbody>
                     {body.map((r, ri) => (
                       <tr key={ri}>{r.map((v, ci) => <td key={ci} className={v === 'NULL' ? 'null' : undefined}>{v}</td>)}</tr>

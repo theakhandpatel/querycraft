@@ -20,7 +20,7 @@
  *     a verdict to depend on.
  */
 
-import { Schema } from 'effect';
+import { Option, Schema } from 'effect';
 import type { DatasetId } from '../types';
 
 /* ---------- bundle ---------- */
@@ -84,7 +84,6 @@ interface PlanSummary {
 interface PlanIndex {
   relation: string;
   name: string;
-  definition?: string | null;
 }
 
 /** What the plan was produced against: a number is never reported without the
@@ -121,8 +120,10 @@ interface PlanErrorShape {
   detail?: string | null;
 }
 
-/** The raw engine plan node, verbatim and untrusted. */
-type PlanRawNode = Record<string, unknown>;
+/** The raw engine plan node, verbatim and untrusted. It is JSON with dynamic
+    keys, so the value type is the named JSON type the wire already produced,
+    not `unknown`. */
+type PlanRawNode = Record<string, Schema.Json>;
 
 export interface PlanBundle {
   status: PlanStatus;
@@ -258,7 +259,6 @@ const PlanEnvironmentSchema = Schema.Struct({
     Schema.Struct({
       relation: Schema.String,
       name: Schema.String,
-      definition: Schema.optional(Schema.NullOr(Schema.String)),
     }),
   ),
   settings: Schema.Record(Schema.String, Schema.String),
@@ -295,18 +295,23 @@ const PlanBundleSchema = Schema.Struct({
 /** Parse a plan bundle against the same shape `contracts/plan.schema.json`
     describes, throwing a `PlanContractError` rather than returning a half-read
     object. A malformed gateway body must fail loudly, not render emptiness. */
-export function validatePlanBundle(value: unknown): PlanBundle {
+export function validatePlanBundle(value: Schema.Json): PlanBundle {
   try {
-    return Schema.decodeUnknownSync(PlanBundleSchema)(value) as unknown as PlanBundle;
+    /* The decoder proves the shape; the single assertion only bridges the
+       schema's readonly arrays and optional leaves to the mutable, required
+       `PlanBundle` contract. */
+    return Schema.decodeUnknownSync(PlanBundleSchema)(value) as PlanBundle;
   } catch (e) {
     throw new PlanContractError(schemaIssues(e));
   }
 }
 
 /** Flatten an Effect `SchemaError` into readable `path: message` strings. */
+// oxlint-disable-next-line anti-slop/no-unknown-parameters -- a caught decode failure is untrusted; this formats it, it does not consume it.
 function schemaIssues(e: unknown): string[] {
   const issue = (e as { issue?: unknown } | null)?.issue;
   const leaves: string[] = [];
+  // oxlint-disable-next-line anti-slop/no-unknown-parameters -- the issue tree is untrusted and is walked by shape.
   const visit = (node: unknown, path: string[]): void => {
     if (!isRecord(node)) return;
     const nextPath = Array.isArray(node.path) ? path.concat(node.path.map(String)) : path;
@@ -315,7 +320,7 @@ function schemaIssues(e: unknown): string[] {
       for (const child of nested) visit(child, nextPath);
       return;
     }
-    const message = typeof node.message === 'string' ? node.message : null;
+    const message = isStringValue(node.message) ? node.message : null;
     if (message) leaves.push(nextPath.length ? `${nextPath.join('.')}: ${message}` : message);
   };
   visit(issue, []);
@@ -333,22 +338,31 @@ export const SEQ_SCAN_LARGE_ROWS = 1000;
 /** The ratio at/above which an estimate is called off by orders of magnitude. */
 export const ESTIMATE_OFF_RATIO = 100;
 
-function isRecord(value: unknown): value is Record<string, unknown> {
+function isRecord(value: unknown): value is PlanRawNode {
   return typeof value === 'object' && value !== null && !Array.isArray(value);
 }
 
-function num(node: Record<string, unknown>, ...keys: string[]): number | null {
+/** The scalar JSON leaves the plan reader accepts. */
+function isNumberValue(value: unknown): value is number {
+  return typeof value === 'number' && Number.isFinite(value);
+}
+
+function isStringValue(value: unknown): value is string {
+  return typeof value === 'string';
+}
+
+function num(node: PlanRawNode, ...keys: string[]): number | null {
   for (const key of keys) {
     const v = node[key];
-    if (typeof v === 'number' && Number.isFinite(v)) return v;
+    if (isNumberValue(v)) return v;
   }
   return null;
 }
 
-function str(node: Record<string, unknown>, ...keys: string[]): string | null {
+function str(node: PlanRawNode, ...keys: string[]): string | null {
   for (const key of keys) {
     const v = node[key];
-    if (typeof v === 'string') return v;
+    if (isStringValue(v)) return v;
   }
   return null;
 }
@@ -361,27 +375,31 @@ function str(node: Record<string, unknown>, ...keys: string[]): string | null {
  * as-is, so a caller that stored the unwrapped node still works. Anything else
  * is not a plan and reads as null rather than inventing one.
  */
-function planRootOf(raw: unknown): PlanRawNode | null {
-  let doc: unknown = raw;
-  if (Array.isArray(doc)) doc = doc[0];
-  if (!isRecord(doc)) return null;
-  const plan = doc.Plan;
+function planRootOf(raw: Schema.Json | null): PlanRawNode | null {
+  const first = Array.isArray(raw) ? raw[0] ?? null : raw;
+  if (!isRecord(first)) return null;
+  const plan = first.Plan;
   if (isRecord(plan)) return plan;
-  return isRecord(doc) && typeof doc['Node Type'] === 'string' ? (doc as PlanRawNode) : null;
+  return isStringValue(first['Node Type']) ? first : null;
 }
 
 /** Parse the engine's JSON when it arrived as text (a `json` column that was not
-    auto-decoded, or a body read as a string). */
-function parsePlanJson(value: unknown): unknown {
-  if (typeof value !== 'string') return value;
-  try {
-    return JSON.parse(value);
-  } catch {
-    return null;
+    auto-decoded, or a body read as a string), and prove whatever came back is
+    JSON before the walk reads it. */
+// oxlint-disable-next-line anti-slop/no-unknown-parameters -- the engine's output is untrusted; this is its parse boundary.
+function parsePlanJson(value: unknown): Schema.Json | null {
+  let candidate = value;
+  if (isStringValue(value)) {
+    try {
+      candidate = JSON.parse(value);
+    } catch {
+      candidate = null;
+    }
   }
+  return Option.getOrNull(Schema.decodeUnknownOption(Schema.Json)(candidate));
 }
 
-function blockReads(node: Record<string, unknown>): number | null {
+function blockReads(node: PlanRawNode): number | null {
   const read = num(node, 'Shared Read Blocks', 'Read Blocks', 'Local Read Blocks', 'Temp Read Blocks');
   if (read !== null) {
     const local = num(node, 'Local Read Blocks');
@@ -421,7 +439,7 @@ function walk(root: PlanRawNode, depth: number, out: PlanNode[], parentRelation:
     buffers_read: blockReads(root),
     filter: str(root, 'Filter'),
     index_condition: str(root, 'Index Cond'),
-    sort_key: Array.isArray(root['Sort Key']) ? (root['Sort Key'] as unknown[]).map(String) : null,
+    sort_key: Array.isArray(root['Sort Key']) ? root['Sort Key'].map(String) : null,
     warnings: [],
   };
   /* A per-node estimate flag, so the viewer can mark the row without recomputing
@@ -438,14 +456,14 @@ function walk(root: PlanRawNode, depth: number, out: PlanNode[], parentRelation:
   const children = root.Plans;
   if (Array.isArray(children)) {
     for (const child of children) {
-      if (isRecord(child)) walk(child as PlanRawNode, depth + 1, out, relation);
+      if (isRecord(child)) walk(child, depth + 1, out, relation);
     }
   }
 }
 
 /** The identical depth-first walk the Go engine performs. Given the raw plan
     node tree it returns the deterministic facts `gradePlan` reads. */
-export function summarizePlan(planRoot: unknown): PlanSummary {
+export function summarizePlan(planRoot: Schema.Json | null): PlanSummary {
   const root = planRootOf(planRoot);
   const nodes: PlanNode[] = [];
   if (root) walk(root, 0, nodes, null);
@@ -453,12 +471,15 @@ export function summarizePlan(planRoot: unknown): PlanSummary {
   const nodeTypes: string[] = [];
   const relations: string[] = [];
   const indexesUsed: string[] = [];
+  const seenTypes = new Set<string>();
+  const seenRelations = new Set<string>();
+  const seenIndexes = new Set<string>();
   const seqScans: PlanSeqScan[] = [];
   const indexScans: PlanIndexScan[] = [];
   for (const n of nodes) {
-    if (!nodeTypes.includes(n.node_type)) nodeTypes.push(n.node_type);
-    if (n.relation && !relations.includes(n.relation)) relations.push(n.relation);
-    if (n.index && !indexesUsed.includes(n.index)) indexesUsed.push(n.index);
+    if (!seenTypes.has(n.node_type)) { seenTypes.add(n.node_type); nodeTypes.push(n.node_type); }
+    if (n.relation && !seenRelations.has(n.relation)) { seenRelations.add(n.relation); relations.push(n.relation); }
+    if (n.index && !seenIndexes.has(n.index)) { seenIndexes.add(n.index); indexesUsed.push(n.index); }
     if (n.node_type === 'Seq Scan' && n.relation) {
       seqScans.push({ relation: n.relation, plan_rows: n.estimated_rows ?? 0 });
     }
@@ -467,7 +488,7 @@ export function summarizePlan(planRoot: unknown): PlanSummary {
     }
   }
 
-  const estimated = nodes.map((n) => n.estimated_rows).filter((n): n is number => n !== null);
+  const estimated = nodes.flatMap((n) => (n.estimated_rows === null ? [] : [n.estimated_rows]));
   const rootEstimate = root ? num(root, 'Plan Rows') : null;
   return {
     node_count: nodes.length,
@@ -668,11 +689,12 @@ export function gradePlan(bundle: PlanBundle, contract: PerfContract): PlanVerdi
     });
   }
 
+  const usedIndexes = new Set(summary.indexes_used);
   for (const index of contract.require_indexes ?? []) {
     checks.push({
       label: `Uses index ${index}`,
       code: 'PERF_INDEX_NOT_USED',
-      ok: summary.indexes_used.includes(index),
+      ok: usedIndexes.has(index),
     });
   }
 

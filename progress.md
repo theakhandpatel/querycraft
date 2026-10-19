@@ -2973,6 +2973,19 @@ The full flow walkthrough, the findings, and the fixes are written up in
 - Still to do: full gates, rebuild, refresh the lesson/exercise screenshots,
   commit, push, tag `v0.9.0`.
 
+## Open-items program complete (2026-10-19)
+
+Every item in the main list of `docs/open-items.md` is done in the working
+tree, each with its evidence line and green `make test` plus `make verify`:
+the course-edit and store splits (15-i to 15-v), the decoder and warning
+burn-downs (16, 16a), the shared per-package PostgreSQL fixture (16b: one
+cluster per package binary, one database per test, a SIGKILL watchdog on the
+postmaster, `internal/ai` 62 s to 5 s and `internal/store` 30 s to 5 s), the
+apidocs set (17 and the `result_contract` wire fix 17a), the `/runs` screen
+(18), the gate flakes and leaked postmaster (12a), and the session cookie with
+its CSRF rule (19, ADR 0009). Only the "Last (not the current concern)" list
+(L1 to L5) and the program's uncommitted work remain; nothing is committed.
+
 ## v0.9.0 shipped (2026-10-18)
 
 Commit `4b843d873` on `main`, tag `v0.9.0`, pushed to origin. The release
@@ -2981,3 +2994,104 @@ work, the backend comment pass, and the docs refresh. Gates on the released
 tree: `make test` (23 audits) and `make verify` (build, suite, smoke on real
 PostgreSQL). Remaining open items are listed in `docs/features.md` section 10
 and `docs/reviews/2026-10-18/user-session.md`.
+
+## React Doctor re-run (2026-10-19)
+
+`npm run doctor` went from 83 findings (5 errors, 78 warnings) to 42 (2 errors,
+40 warnings). Both remaining errors are the same false positive. Every remaining
+finding has a verdict below. The command stays informational and out of
+`make test`, so a new finding is read rather than gated.
+
+| Category | Before | After |
+| --- | --- | --- |
+| Performance | 12 warnings | 4 warnings |
+| Bugs | 5 errors, 36 warnings | 2 errors, 12 warnings |
+| Accessibility | 10 warnings | 7 warnings |
+| Maintainability | 20 warnings | 17 warnings |
+| Total | 83 | 42 |
+
+### The five errors
+
+| Finding | Verdict | What changed |
+| --- | --- | --- |
+| `no-ref-current-in-render`, `useGenerationRun.ts` | true | The write moved into `useLayoutEffect`. A layout effect commits before the passive effect that reads the ref, so the timing the run depends on is unchanged, and a discarded render can no longer move it. |
+| `no-ref-current-in-render`, `store.tsx` | true | Same repair: `authRef` is written in a layout effect. |
+| `no-ref-current-in-render`, `useAuth.ts` | true | Same repair: `sessionRef` is written in a layout effect. |
+| `effect-needs-cleanup`, `store.tsx` (the capability retry) | true | The retry timer had no owner. It is now held in a local `retry` and cleared in the cleanup, beside the existing `alive` flag. |
+| `effect-needs-cleanup`, `useGenerationRun.ts` | false positive, still reported | The cleanup already aborts the controller and clears `navTimer` (lines 902 to 909). The rule did not follow the ref. |
+
+`effect-needs-cleanup` on the `store.tsx` capability probe is still reported,
+now as one of the two remaining errors. The retry timer is cleared in the
+cleanup; the rule does not follow the local variable into the `.then`. It is a
+false positive with the fix in place.
+
+`no-set-state-after-await-in-effect` on the same `useGenerationRun` line is also
+a false positive: every setter after an `await` sits behind `signal.aborted`,
+and the effect's cleanup aborts that signal.
+
+### Real fixes
+
+- Three label findings: the empty `<label aria-hidden="true" />` grid spacers in
+  `AppearanceScreen.tsx` and `ManageScreen.tsx` are now `<span aria-hidden>`.
+  They were never associated controls, so axe reported them and no tab stop
+  moved.
+- `js-set-map-lookups` (6): `Set` lookups in `compare.ts`, `summarizePlan` and
+  `gradePlan` (`planContract.ts`), and in `PlanView`.
+- `js-index-maps` (2): `lib/search.ts` builds one `courseById` map before the
+  notes and saved-query loops.
+- `no-side-effect-in-state-updater-function`: `useChecklist.mark` returns a
+  mapped array instead of mutating a copy.
+- `no-reset-all-state-on-prop-change`: `PromptDialog` no longer resets `value`
+  from a prop. The provider mounts the form per request, so the initial state is
+  already that request's default; the effect now only focuses the input.
+- `exhaustive-deps` (5): `LessonScreen` names `moduleId`; `store.tsx` adds
+  `sessionRef`; both `useCatalog` hooks list their setters; `useTheme` applies
+  the account theme through a functional update, so it neither needs `theme`
+  nor clobbers an in-flight choice.
+- `only-export-components` (2): `SCREEN_CRUMBS` and `SCREEN_NAV` moved to
+  `state/screens.ts`.
+- `duplicate-jsx-subtree`: the shared heading block is `ui/PageHead.tsx`, used by
+  Home and Library.
+- `server-sequential-independent-await`: the version and table-list reads in
+  `readPlanEnvironment` now start together. PGlite serialises them on its own
+  mutex, so this saves a round trip without adding concurrency to the engine.
+- `no-array-index-as-key`: 16 lists now key on a stable id (`ts`, `seq`, `name`,
+  `code`, `title`, `stage.name`). The 9 that remain are fixed-length constant
+  lists or append-only transcripts whose position is the identity; each carries
+  a comment saying so.
+
+### Kept, with the reason
+
+- `no-static-element-interactions` (2, modal backdrops): the backdrop click is a
+  pointer convenience; Close, Escape and the focus trap are the keyboard path. A
+  `role` would name it a control it is not.
+- `prefer-html-dialog` (5): the drawers and the prompt use the tested capture-phase
+  focus trap and `inert` contract in `ui/useDrawerFocus.ts`. Migrating to
+  `<dialog>` is its own item, not a drive-by in this pass.
+- `no-high-complexity-react-function` (13) and `no-giant-component` (4):
+  measured sizes are `SqlCell.tsx` 579 lines, `ChallengeLabScreen.tsx` 617,
+  `ManageScreen.tsx` 405, `store.tsx` 1296. A split is tracked, not done here.
+- `no-json-parse-stringify-clone` (`browser.ts:87`): the JSON clone exists to
+  strip proxies and class instances before IndexedDB. `structuredClone` throws
+  `DataCloneError` on those, which is the opposite of the stated intent. Same
+  verdict as the earlier `execution.ts` finding.
+- `no-pass-data-to-parent` / `no-pass-live-state-to-parent`
+  (`useHashRouter.ts:170`): the effect applies the URL to state, which is the
+  router's job. There is no parent to lift state into; the fragment is the
+  source of truth.
+- `async-await-in-loop` (3): the reference-query loop and the adversarial-fixture
+  loop report in definition order and run on one engine queue; Mermaid renders
+  into one shared document. Each now carries a comment saying so. The rule stays
+  visible because the order is a product decision, not an oversight.
+- `no-array-index-as-key` (9): fixed-length constant lists (the pipeline steps,
+  the weekly bars, the table columns, the chapter objectives and outline) and
+  append-only transcripts (the generation log, the tutor conversation, the hint
+  list) where the position is the identity. Each carries a comment.
+- The `label-has-associated-control` findings are gone: the three empty
+  `<label aria-hidden>` grid spacers became spans.
+
+### Gates
+
+`npm run typecheck` clean, `npm run lint` 0 warnings and 0 errors, `make
+audit-shell`, `make audit-themes` (18 themes, 252 pairs) and `make audit-a11y`
+(6 routes, 0 violations) OK, `make test` exit 0, `make verify` exit 0.

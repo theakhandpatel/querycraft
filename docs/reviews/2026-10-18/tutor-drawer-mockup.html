@@ -1,0 +1,475 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Ask Tutor drawer · Querycraft mockup</title>
+<style>
+/* Tokens copied from web/src/styles/querycraft.css (Ink & Pine, light). */
+:root{
+  color-scheme:light;
+  --bg:#f4f5f7; --surface:#ffffff; --surface-2:#f7f8fa; --surface-3:#eef0f3;
+  --line:#e3e6eb; --line-strong:#cbd1da;
+  --text:#14161a; --text-2:#494f5a; --text-3:#626873;
+  --accent:#0c6f5c; --accent-ink:#0c6f5c; --accent-solid:#0b6b59;
+  --on-accent:#fff;
+  --accent-soft:rgba(12,111,92,.09); --accent-line:rgba(12,111,92,.26);
+  --green:#1a7f4f; --green-soft:rgba(26,127,79,.11); --green-ink:#15663f;
+  --amber:#8a5a10; --amber-soft:rgba(138,90,16,.12); --amber-ink:#6f4909;
+  --red:#b3352f; --red-soft:rgba(179,53,47,.10); --red-ink:#8f2a25;
+  --code-bg:#fbfcfd; --code-text:#20303f; --code-line:#e6e9ee;
+  --shadow:0 1px 2px rgba(20,22,26,.05),0 10px 30px -18px rgba(20,22,26,.28);
+  --shadow-lg:0 24px 60px -30px rgba(20,22,26,.42);
+  --sans:"Geist",ui-sans-serif,system-ui,-apple-system,"Segoe UI",Roboto,sans-serif;
+  --display:"Space Grotesk","Geist",ui-sans-serif,system-ui,sans-serif;
+  --mono:"Geist Mono",ui-monospace,SFMono-Regular,Menlo,"Cascadia Code",monospace;
+  --r-xs:6px; --r-sm:8px; --r-md:10px; --r-lg:12px; --pill:999px;
+  --ease:cubic-bezier(.2,.7,.3,1); --dur:180ms;
+  --desk:#e7e9ec; --desk-ink:#5b6270;
+}
+*{box-sizing:border-box}
+html,body{margin:0}
+body{background:var(--desk);color:var(--text);font-family:var(--sans);font-size:14px;line-height:1.6;-webkit-font-smoothing:antialiased;text-rendering:optimizeLegibility}
+p{margin:0}
+button{font:inherit;color:inherit;cursor:pointer}
+h1,h2{margin:0;font-family:var(--display);font-weight:600;letter-spacing:-.02em}
+
+/* ---------- the desk the frames sit on ---------- */
+.desk{padding:40px;display:flex;flex-direction:column;gap:22px}
+.deskhead h1{font-size:22px}
+.deskhead p{color:var(--desk-ink);font-size:13px;margin-top:5px}
+.frames{display:flex;gap:52px;align-items:flex-start;flex-wrap:wrap;margin-top:18px}
+.frameblock{display:flex;flex-direction:column;gap:10px}
+.framelabel{font-family:var(--mono);font-size:11px;letter-spacing:.08em;text-transform:uppercase;color:var(--desk-ink)}
+.frame{position:relative;overflow:hidden;background:var(--bg);border:1px solid var(--line-strong);border-radius:var(--r-lg);box-shadow:var(--shadow-lg)}
+.frame.desktop{width:1280px;height:1320px}
+.frame.mobile{width:390px;height:844px}
+.frame.desktop .lessoncol{margin-left:208px}
+.frame.mobile .lessoncol{margin-left:0;padding:20px 16px 0}
+
+/* ---------- shell top bar ---------- */
+.topbar{height:48px;display:flex;align-items:center;gap:12px;padding:0 14px;background:var(--surface);border-bottom:1px solid var(--line)}
+.brand{display:flex;align-items:center;gap:9px}
+.brandmark{width:26px;height:26px;display:grid;place-items:center;border-radius:var(--r-sm);background:var(--accent-soft);color:var(--accent-ink)}
+.brandname{font-family:var(--display);font-weight:600;font-size:15px;letter-spacing:-.01em}
+.topgroup{display:flex;align-items:center;gap:2px;border:1px solid var(--line);border-radius:var(--r-sm);background:var(--surface-2);padding:2px 6px}
+.toplink{display:inline-flex;align-items:center;gap:7px;padding:5px 8px;font-size:13px;color:var(--text-2);white-space:nowrap}
+.navbadge{font-family:var(--mono);font-size:10px;color:var(--text-3);background:var(--surface-3);border-radius:var(--pill);padding:1px 6px}
+.topcontext{display:flex;align-items:baseline;gap:10px;padding:5px 12px;border:1px solid var(--line);border-radius:var(--r-sm);background:var(--surface-2)}
+.ctxcourse{font-family:var(--display);font-size:13px;font-weight:600}
+.ctxpos{font-family:var(--mono);font-size:11px;color:var(--text-3)}
+.searchfield{margin-left:auto;display:flex;align-items:center;gap:7px;flex:0 1 300px;border:1px solid var(--line);background:var(--surface-2);border-radius:var(--r-sm);padding:6px 9px;color:var(--text-3);font-size:13px}
+.searchfield span{white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+.avatar{width:28px;height:28px;flex:none;display:grid;place-items:center;border-radius:var(--r-sm);background:var(--surface-3);font-weight:600;font-size:12px}
+.frame.mobile .brandname,.frame.mobile .topgroup,.frame.mobile .topcontext{display:none}
+.frame.mobile .searchfield{margin-left:auto;flex:0 1 auto;width:34px;justify-content:center}
+.frame.mobile .searchfield span{display:none}
+.hamburger{display:none;width:28px;height:28px;place-items:center;border-radius:var(--r-sm);color:var(--text-2)}
+.frame.mobile .hamburger{display:grid}
+
+/* ---------- lesson content ---------- */
+.lessoncol{max-width:720px;padding:26px 0 80px}
+.kicker{font-family:var(--mono);font-size:10px;letter-spacing:.1em;text-transform:uppercase;color:var(--text-3)}
+.h1row{display:flex;align-items:center;gap:10px;margin-top:6px}
+.h1row h1{font-size:26px}
+.subline{color:var(--text-2);font-size:13.5px;margin-top:6px}
+.sec-head{display:flex;align-items:baseline;gap:10px;margin:32px 0 10px;padding-top:18px;border-top:1px solid var(--line)}
+.sec-kicker{font-family:var(--mono);font-size:10px;letter-spacing:.1em;color:var(--text-3)}
+.sec-head h2{font-size:18px}
+.lessoncol p.body{color:var(--text-2);font-size:14px;line-height:1.75;margin-top:12px;max-width:66ch}
+.lessoncol code{font-family:var(--mono);font-size:12.5px;background:var(--surface-3);border-radius:4px;padding:1px 5px}
+.bottomlesson{display:flex;align-items:center;justify-content:space-between;gap:12px;flex-wrap:wrap;margin-top:26px;padding-top:18px;border-top:1px solid var(--line)}
+.bottomlesson .btn.primary{padding:8px 14px}
+.dialect{display:inline-flex;align-items:center;gap:5px;padding:3px 9px;border-radius:var(--pill);background:var(--accent-soft);border:1px solid var(--accent-line);color:var(--accent-ink);font-size:11.5px;font-weight:600;white-space:nowrap}
+.ic{width:15px;height:15px;flex:none;fill:none;stroke:currentColor;stroke-width:1.6;stroke-linecap:round;stroke-linejoin:round}
+.ic.sm{width:13px;height:13px}
+.ic.acc{color:var(--accent-ink)}
+.muted{color:var(--text-3);font-size:13px}
+
+/* ---------- SQL cell ---------- */
+.cell{border:1px solid var(--accent-line);border-radius:var(--r-lg);background:var(--surface);overflow:hidden;margin-top:16px}
+.celltop{display:flex;align-items:center;justify-content:space-between;gap:10px;padding:9px 14px;border-bottom:1px solid var(--line);font-family:var(--mono);font-size:11px;color:var(--text-3)}
+.kindtag{display:inline-flex;align-items:center;gap:6px;color:var(--text-2)}
+.cellprompt{padding:12px 14px 0;color:var(--text-2);font-size:13px;line-height:1.6}
+.cellbody{padding:0}
+.editorwrap{position:relative;background:var(--code-bg);margin-top:10px}
+.gutter{position:absolute;left:0;top:0;bottom:0;width:38px;border-right:1px solid var(--code-line);background:var(--surface-2);font-family:var(--mono);font-size:12px;line-height:22.75px;color:var(--text-3);padding:12px 8px 12px 0;text-align:right;white-space:pre;user-select:none;overflow:hidden}
+.editor{margin:0;padding:12px 14px 12px 52px;font-family:var(--mono);font-size:13px;line-height:1.75;color:var(--code-text);white-space:pre;tab-size:4}
+.runrow{display:flex;align-items:center;gap:8px;flex-wrap:wrap;padding:10px 14px;border-top:1px solid var(--line)}
+.btn{display:inline-flex;align-items:center;justify-content:center;gap:6px;border:0;border-radius:var(--r-sm);padding:6px 11px;font-size:12px;font-weight:500;background:var(--surface-3);color:var(--text);white-space:nowrap}
+.btn.primary{background:var(--accent-solid);color:var(--on-accent);font-weight:600}
+.btn.ghost{background:transparent;color:var(--text-2)}
+.kb{margin-left:auto;font-family:var(--mono);font-size:11px;color:var(--text-3);display:inline-flex;align-items:center;gap:3px}
+.kbd{font-family:var(--mono);font-size:10px;border:1px solid var(--line-strong);border-bottom-width:2px;border-radius:4px;padding:1px 5px;background:var(--surface);color:var(--text-2)}
+.cellresult{padding:0 14px 14px}
+.tablewrap{overflow:hidden;border:1px solid var(--line);border-radius:var(--r-md);margin-top:12px;background:var(--surface)}
+table{border-collapse:collapse;width:100%;font-size:13px}
+th{text-align:left;font-family:var(--mono);font-size:11px;text-transform:uppercase;letter-spacing:.05em;color:var(--text-3);font-weight:500;padding:9px 14px;background:var(--surface-2);border-bottom:1px solid var(--line)}
+td{padding:8px 14px;font-family:var(--mono);font-size:12.5px;color:var(--text-2)}
+td.null{color:var(--text-3);font-style:italic}
+.resultfoot{display:flex;flex-wrap:wrap;align-items:baseline;justify-content:space-between;gap:4px 12px;margin-top:8px;font-family:var(--mono);font-size:11px;color:var(--text-3)}
+
+/* ---------- scrim + drawer ---------- */
+.scrim{position:absolute;inset:0;z-index:3;background:rgba(20,22,26,.42)}
+.drawer{position:absolute;top:0;right:0;bottom:0;z-index:4;width:440px;display:flex;flex-direction:column;background:var(--bg);border-left:1px solid var(--line);box-shadow:var(--shadow-lg)}
+.drawerhead{display:flex;align-items:flex-start;justify-content:space-between;gap:12px;padding:16px 18px;border-bottom:1px solid var(--line);background:var(--surface)}
+.drawerhead h2{font-size:16px;margin-top:4px;letter-spacing:-.02em}
+.eyebrow{font-family:var(--mono);font-size:11px;letter-spacing:.1em;text-transform:uppercase;color:var(--accent-ink);font-weight:500}
+.badgerow{display:flex;align-items:center;gap:8px;margin-top:9px;flex-wrap:wrap}
+.pill{display:inline-flex;align-items:center;gap:7px;padding:4px 10px;border-radius:var(--pill);background:var(--surface-3);font-size:12px;color:var(--text-2);font-weight:500;white-space:nowrap}
+.xbtn{width:30px;height:30px;flex:none;display:grid;place-items:center;border:0;border-radius:var(--r-sm);background:transparent;color:var(--text-2)}
+.drawerbody{flex:1;min-height:0;overflow-y:auto;overscroll-behavior:contain;padding:16px 18px 14px;display:flex;flex-direction:column;gap:16px}
+.drawerbody::-webkit-scrollbar{width:11px;height:11px}
+.drawerbody::-webkit-scrollbar-thumb{background:var(--line-strong);border:3px solid transparent;background-clip:content-box;border-radius:99px}
+.drawerbody::-webkit-scrollbar-track{background:transparent}
+.drawerfoot{margin-top:auto;padding:14px 18px;border-top:1px solid var(--line);background:var(--surface)}
+
+/* context summary */
+.ctxcard{background:var(--surface);border:1px solid var(--line);border-radius:var(--r-md);padding:12px 14px}
+.ctxhead{display:flex;align-items:center;gap:7px;font-family:var(--mono);font-size:10.5px;letter-spacing:.08em;text-transform:uppercase;color:var(--accent-ink);font-weight:500}
+.ctxline{font-size:12.5px;line-height:1.6;color:var(--text-2);margin-top:8px}
+.ctxline b{color:var(--text);font-weight:600}
+details.whatsees{margin-top:10px;border-top:1px solid var(--line);padding-top:9px}
+details.whatsees summary{list-style:none;display:flex;align-items:center;justify-content:space-between;gap:8px;cursor:pointer;font-family:var(--mono);font-size:10.5px;letter-spacing:.06em;text-transform:uppercase;color:var(--text-3)}
+details.whatsees summary::-webkit-details-marker{display:none}
+details.whatsees[open] .chev{transform:rotate(180deg)}
+.chev{width:14px;height:14px;transition:transform var(--dur) var(--ease)}
+.ctxlist{list-style:none;margin:8px 0 0;padding:0;display:flex;flex-direction:column}
+.ctxlist li{display:flex;gap:10px;padding:5px 0;border-top:1px solid var(--line);font-size:12px;line-height:1.5}
+.ctxlist li:first-child{border-top:0}
+.ctxk{flex:0 0 78px;font-family:var(--mono);font-size:10.5px;letter-spacing:.04em;text-transform:uppercase;color:var(--text-3);padding-top:1px}
+.ctxv{color:var(--text-2);min-width:0}
+
+/* tables strip */
+.striphead{display:flex;align-items:baseline;justify-content:space-between;gap:10px}
+.linkbtn{border:0;background:transparent;color:var(--accent-ink);font-size:12px;font-weight:500;padding:0}
+.stripchips{display:flex;flex-wrap:wrap;gap:6px;margin-top:9px}
+.chip{font-family:var(--mono);font-size:11.5px;color:var(--text-2);background:var(--surface);border:1px solid var(--line);border-radius:var(--r-sm);padding:5px 10px}
+.chip:hover{background:var(--surface-2);color:var(--text)}
+
+/* latest query */
+.sqlblock .eyebrow{color:var(--text-3)}
+.sqlblock pre{margin:8px 0 0;background:var(--code-bg);border:1px solid var(--code-line);border-radius:var(--r-xs);padding:12px;font-family:var(--mono);font-size:12.5px;line-height:1.7;color:var(--code-text);white-space:pre-wrap;overflow-wrap:anywhere}
+.sqlfoot{font-size:12px;color:var(--text-3);margin-top:7px}
+
+/* turns */
+.turns{display:flex;flex-direction:column;gap:16px}
+.role{display:flex;align-items:center;gap:6px;font-family:var(--mono);font-size:10.5px;letter-spacing:.08em;text-transform:uppercase;color:var(--text-3);margin-bottom:6px}
+.role.tutor{color:var(--accent-ink)}
+.bubble{border-radius:var(--r-md);padding:10px 13px;font-size:13.5px;line-height:1.65}
+.bubble.learner{background:var(--surface-2);color:var(--text-2)}
+.bubble.tutor{background:var(--surface);border:1px solid var(--line);color:var(--text)}
+.bubble.tutor p+p{margin-top:9px}
+.bubble.tutor code{font-family:var(--mono);font-size:12px;background:var(--surface-3);border-radius:4px;padding:1px 5px}
+.bubble.tutor pre{margin:9px 0;background:var(--code-bg);border:1px solid var(--code-line);border-radius:var(--r-xs);padding:10px 12px;font-family:var(--mono);font-size:12px;line-height:1.7;color:var(--code-text);white-space:pre;overflow-x:auto}
+.turnnote{font-size:12px;color:var(--text-3);margin-top:7px;line-height:1.5}
+
+/* chips + composer */
+.chips{display:flex;flex-wrap:wrap;gap:6px;margin-bottom:10px}
+.sug{font-size:11.5px;color:var(--text-2);background:var(--surface-2);border:1px solid var(--line);border-radius:var(--pill);padding:5px 10px}
+.sug:hover{background:var(--surface-3);color:var(--text)}
+.composer{display:flex;align-items:flex-end;gap:8px}
+.composer textarea{flex:1;min-width:0;resize:none;background:var(--surface-3);border:1px solid transparent;border-radius:var(--r-sm);padding:9px 11px;font-family:var(--sans);font-size:13px;line-height:1.5;color:var(--text);min-height:54px}
+.composer textarea::placeholder{color:var(--text-3)}
+.sendbtn{border:0;border-radius:var(--r-sm);padding:8px 13px;font-size:13px;font-weight:600;background:var(--accent-solid);color:var(--on-accent)}
+.footrow{display:flex;align-items:center;justify-content:space-between;gap:10px;margin-top:9px;flex-wrap:wrap}
+.kbdhint{font-family:var(--mono);font-size:10.5px;color:var(--text-3);display:inline-flex;align-items:center;gap:4px}
+.notsaved{font-size:11.5px;color:var(--text-3);display:inline-flex;align-items:center;gap:5px}
+
+/* mobile: the drawer becomes a bottom sheet at <=760px */
+.frame.mobile .drawer{top:8%;left:0;right:0;bottom:0;width:auto;border-left:0;border-top:1px solid var(--line);border-radius:var(--r-lg) var(--r-lg) 0 0}
+.frame.mobile .drawerhead{padding:14px 16px}
+.frame.mobile .drawerbody{padding:14px 16px 6px;gap:14px}
+.frame.mobile .drawerfoot{padding:12px 16px;border-radius:0 0 var(--r-lg) var(--r-lg)}
+.frame.mobile .ctxlist{display:none}
+.frame.mobile .sqlblock pre{font-size:12px}
+</style>
+</head>
+<body>
+<div class="desk">
+  <div class="deskhead">
+    <h1>Ask Tutor drawer</h1>
+    <p>Answering state. Desktop at 1280 with the lesson behind it, and the same drawer as a bottom sheet at 390.</p>
+  </div>
+
+  <div class="frames">
+
+    <!-- ============ DESKTOP ============ -->
+    <div class="frameblock">
+      <div class="framelabel">Desktop · 1280 px · answering</div>
+      <div class="frame desktop">
+
+        <header class="topbar">
+          <div class="brand">
+            <span class="brandmark"><svg class="ic sm" viewBox="0 0 24 24"><path d="M4 17l5-5-5-5"/><path d="M12 19h8"/></svg></span>
+            <span class="brandname">querycraft</span>
+          </div>
+          <nav class="topgroup">
+            <span class="toplink">Home</span>
+            <span class="toplink">Library</span>
+            <span class="toplink">Workbook <span class="navbadge">11%</span></span>
+            <span class="toplink">Progress</span>
+            <span class="toplink">Challenge lab</span>
+          </nav>
+          <div class="topcontext"><span class="ctxcourse">SQL Analytics</span><span class="ctxpos">Ch. 1 of 9 · 11%</span></div>
+          <div class="searchfield"><svg class="ic" viewBox="0 0 24 24"><circle cx="11" cy="11" r="7"/><path d="M20 20l-3.4-3.4"/></svg><span>Search chapters, exercises, notes…</span></div>
+          <span class="avatar">S</span>
+        </header>
+
+        <div class="lessoncol">
+          <div class="kicker">Chapter 1 · Orientation</div>
+          <div class="h1row">
+            <h1>Reading a table</h1>
+            <span class="dialect"><svg class="ic sm" viewBox="0 0 24 24"><path d="M12 3l9 5-9 5-9-5 9-5z"/><path d="M3 13l9 5 9-5"/></svg>PostgreSQL</span>
+          </div>
+          <p class="subline">SELECT, FROM, ORDER BY against the commerce dataset.</p>
+
+          <div class="sec-head"><span class="sec-kicker">Section 5</span><h2>Reading a table</h2></div>
+          <p class="body">A <code>SELECT</code> names the columns you want back, <code>FROM</code> names the table they come from, and <code>ORDER BY</code> sorts the rows before you read them. Run a query, then read the grid under it: the columns come back in the order you named them.</p>
+          <p class="body">A <code>WHERE</code> clause keeps only the rows that match. How a match works depends on the column's type, and <code>products.category</code> holds text.</p>
+
+          <div class="sec-head"><span class="sec-kicker">Section 8</span><h2>Exercise 1.1</h2></div>
+          <div class="cell">
+            <div class="celltop">
+              <span class="kindtag"><svg class="ic sm acc" viewBox="0 0 24 24"><circle cx="12" cy="12" r="9"/><circle cx="12" cy="12" r="5"/><circle cx="12" cy="12" r="1.5"/></svg>Exercise 1.1</span>
+              <span>contract · 3 columns</span>
+            </div>
+            <p class="cellprompt">Return the name, category and price of every product in the Electronics category, cheapest first.</p>
+            <div class="editorwrap">
+              <div class="gutter">1
+2
+3
+4
+5
+6</div>
+              <pre class="editor">SELECT name, category, price
+FROM products
+WHERE category = 'electronics'
+ORDER BY price;</pre>
+            </div>
+            <div class="runrow">
+              <button class="btn primary"><svg class="ic sm" viewBox="0 0 24 24"><path d="M8 5l11 7-11 7z"/></svg>Run</button>
+              <button class="btn"><svg class="ic sm" viewBox="0 0 24 24"><path d="M4 12.5l5 5L20 6.5"/></svg>Check answer</button>
+              <button class="btn ghost">Hint</button>
+              <button class="btn ghost">Show solution</button>
+              <button class="btn ghost"><svg class="ic sm acc" viewBox="0 0 24 24"><path d="M12 3l1.6 4.4L18 9l-4.4 1.6L12 15l-1.6-4.4L6 9l4.4-1.6z"/><path d="M18 15l.8 2.2L21 18l-2.2.8L18 21l-.8-2.2L15 18l2.2-.8z"/></svg>Ask tutor</button>
+              <button class="btn ghost">Keep query</button>
+              <button class="btn ghost"><svg class="ic sm" viewBox="0 0 24 24"><path d="M3 12a9 9 0 0 1 15-6.7L21 8"/><path d="M21 3v5h-5"/><path d="M21 12a9 9 0 0 1-15 6.7L3 16"/><path d="M3 21v-5h5"/></svg>Reset</button>
+              <span class="kb"><span class="kbd">Ctrl</span>+<span class="kbd">Enter</span></span>
+            </div>
+            <div class="cellresult">
+              <div class="tablewrap">
+                <table>
+                  <thead><tr><th>name</th><th>category</th><th>price</th></tr></thead>
+                  <tbody><tr><td class="null">(no rows)</td><td class="null">(no rows)</td><td class="null">(no rows)</td></tr></tbody>
+                </table>
+              </div>
+              <div class="resultfoot"><span>0 rows</span><span>3 ms · PostgreSQL</span></div>
+            </div>
+          </div>
+
+          <div class="bottomlesson">
+            <button class="btn ghost"><svg class="ic sm" viewBox="0 0 24 24"><path d="M19 12H5M11 18l-6-6 6-6"/></svg>Previous</button>
+            <span class="muted">Not completed yet</span>
+            <button class="btn primary">Next chapter<svg class="ic sm" viewBox="0 0 24 24"><path d="M5 12h14M13 6l6 6-6 6"/></svg></button>
+          </div>
+        </div>
+
+        <div class="scrim"></div>
+
+        <aside class="drawer" role="dialog" aria-modal="true" aria-label="Ask tutor">
+          <div class="drawerhead">
+            <div>
+              <div class="eyebrow">Ask tutor</div>
+              <h2>Exercise 1.1 · Electronics by price</h2>
+              <div class="badgerow">
+                <span class="pill"><svg class="ic sm" viewBox="0 0 24 24"><ellipse cx="12" cy="6" rx="8" ry="3"/><path d="M4 6v6c0 1.66 3.58 3 8 3s8-1.34 8-3V6"/><path d="M4 12v6c0 1.66 3.58 3 8 3s8-1.34 8-3v-6"/></svg>commerce · 4 tables</span>
+                <span class="dialect">PostgreSQL</span>
+              </div>
+            </div>
+            <button class="xbtn" aria-label="Close"><svg class="ic" viewBox="0 0 24 24"><path d="M6 6l12 12M18 6L6 18"/></svg></button>
+          </div>
+
+          <div class="drawerbody">
+            <div class="ctxcard">
+              <div class="ctxhead"><svg class="ic sm" viewBox="0 0 24 24"><path d="M12 3l1.6 4.4L18 9l-4.4 1.6L12 15l-1.6-4.4L6 9l4.4-1.6z"/><path d="M18 15l.8 2.2L21 18l-2.2.8L18 21l-.8-2.2L15 18l2.2-.8z"/></svg>The tutor can see</div>
+              <p class="ctxline">This exercise, the <b>commerce</b> tables (4), your last run, and the expected result.</p>
+              <details class="whatsees" open>
+                <summary><span>What the tutor sees</span><svg class="ic chev" viewBox="0 0 24 24"><path d="M6 9l6 6 6-6"/></svg></summary>
+                <ul class="ctxlist">
+                  <li><span class="ctxk">Exercise</span><span class="ctxv">ex.1.1 · Electronics by price</span></li>
+                  <li><span class="ctxk">Dataset</span><span class="ctxv">commerce on PostgreSQL</span></li>
+                  <li><span class="ctxk">Tables</span><span class="ctxv">customers, products, orders, order_items</span></li>
+                  <li><span class="ctxk">Your query</span><span class="ctxv">ran · 0 rows returned</span></li>
+                  <li><span class="ctxk">Expected</span><span class="ctxv">3 columns, 5 rows</span></li>
+                </ul>
+              </details>
+            </div>
+
+            <div>
+              <div class="striphead"><span class="eyebrow">Tables in this dataset</span><button class="linkbtn">Open tables</button></div>
+              <div class="stripchips">
+                <button class="chip">customers</button>
+                <button class="chip">products</button>
+                <button class="chip">orders</button>
+                <button class="chip">order_items</button>
+              </div>
+            </div>
+
+            <div class="sqlblock">
+              <div class="eyebrow">Your latest query</div>
+              <pre>SELECT name, category, price
+FROM products
+WHERE category = 'electronics'
+ORDER BY price;</pre>
+              <div class="sqlfoot">Ran · 0 rows returned</div>
+            </div>
+
+            <div class="turns">
+              <div class="turn">
+                <div class="role">You</div>
+                <div class="bubble learner">Why is my result wrong? I ran it and got nothing back.</div>
+              </div>
+              <div class="turn">
+                <div class="role tutor"><svg class="ic sm" viewBox="0 0 24 24"><path d="M12 3l1.6 4.4L18 9l-4.4 1.6L12 15l-1.6-4.4L6 9l4.4-1.6z"/><path d="M18 15l.8 2.2L21 18l-2.2.8L18 21l-.8-2.2L15 18l2.2-.8z"/></svg>Tutor</div>
+                <div class="bubble tutor">
+                  <p>Your query is not broken. It matched no rows. PostgreSQL compares text with <code>=</code> case-sensitively, and <code>category</code> stores <code>'Electronics'</code> with a capital E. The string <code>'electronics'</code> is a different value, so the <code>WHERE</code> clause keeps nothing.</p>
+                  <p>Read the stored values for yourself:</p>
+                  <pre>SELECT DISTINCT category
+FROM products;</pre>
+                  <p>Those five rows are what your clause has to match. Once the value matches, the <code>ORDER BY price</code> you already wrote sorts cheapest first.</p>
+                </div>
+                <div class="turnnote">Guidance, not the answer, a gentle nudge. Ask a follow-up for more.</div>
+              </div>
+            </div>
+          </div>
+
+          <div class="drawerfoot">
+            <div class="chips">
+              <button class="sug">Why is my result wrong?</button>
+              <button class="sug">Which tables should I use?</button>
+              <button class="sug">Walk me through the approach</button>
+              <button class="sug">What does this error mean?</button>
+            </div>
+            <div class="composer">
+              <textarea rows="2" aria-label="Ask about this exercise" placeholder="Ask about this exercise…"></textarea>
+              <button class="sendbtn">Send</button>
+            </div>
+            <div class="footrow">
+              <span class="kbdhint"><span class="kbd">Enter</span> to send · <span class="kbd">Shift</span>+<span class="kbd">Enter</span> for a new line</span>
+              <span class="notsaved"><svg class="ic sm" viewBox="0 0 24 24"><circle cx="12" cy="12" r="9"/><path d="M12 11v5M12 8h.01"/></svg>This chat is not saved.</span>
+            </div>
+          </div>
+        </aside>
+      </div>
+    </div>
+
+    <!-- ============ MOBILE ============ -->
+    <div class="frameblock">
+      <div class="framelabel">Mobile · 390 px · bottom sheet</div>
+      <div class="frame mobile">
+
+        <header class="topbar">
+          <span class="hamburger"><svg class="ic" viewBox="0 0 24 24"><path d="M4 7h16M4 12h16M4 17h16"/></svg></span>
+          <div class="brand">
+            <span class="brandmark"><svg class="ic sm" viewBox="0 0 24 24"><path d="M4 17l5-5-5-5"/><path d="M12 19h8"/></svg></span>
+          </div>
+          <div class="searchfield"><svg class="ic" viewBox="0 0 24 24"><circle cx="11" cy="11" r="7"/><path d="M20 20l-3.4-3.4"/></svg></div>
+          <span class="avatar">S</span>
+        </header>
+
+        <div class="lessoncol">
+          <div class="kicker">Chapter 1 · Orientation</div>
+          <div class="h1row">
+            <h1>Reading a table</h1>
+            <span class="dialect"><svg class="ic sm" viewBox="0 0 24 24"><path d="M12 3l9 5-9 5-9-5 9-5z"/><path d="M3 13l9 5 9-5"/></svg>PostgreSQL</span>
+          </div>
+          <div class="cell">
+            <div class="celltop">
+              <span class="kindtag"><svg class="ic sm acc" viewBox="0 0 24 24"><circle cx="12" cy="12" r="9"/><circle cx="12" cy="12" r="5"/><circle cx="12" cy="12" r="1.5"/></svg>Exercise 1.1</span>
+            </div>
+          </div>
+        </div>
+
+        <div class="scrim"></div>
+
+        <aside class="drawer" role="dialog" aria-modal="true" aria-label="Ask tutor">
+          <div class="drawerhead">
+            <div>
+              <div class="eyebrow">Ask tutor</div>
+              <h2>Exercise 1.1 · Electronics by price</h2>
+              <div class="badgerow">
+                <span class="pill">commerce · 4 tables</span>
+                <span class="dialect">PostgreSQL</span>
+              </div>
+            </div>
+            <button class="xbtn" aria-label="Close"><svg class="ic" viewBox="0 0 24 24"><path d="M6 6l12 12M18 6L6 18"/></svg></button>
+          </div>
+
+          <div class="drawerbody">
+            <div class="ctxcard">
+              <div class="ctxhead"><svg class="ic sm" viewBox="0 0 24 24"><path d="M12 3l1.6 4.4L18 9l-4.4 1.6L12 15l-1.6-4.4L6 9l4.4-1.6z"/><path d="M18 15l.8 2.2L21 18l-2.2.8L18 21l-.8-2.2L15 18l2.2-.8z"/></svg>The tutor can see</div>
+              <p class="ctxline">This exercise, the <b>commerce</b> tables (4), your last run, and the expected result.</p>
+            </div>
+
+            <div>
+              <div class="striphead"><span class="eyebrow">Tables</span><button class="linkbtn">Open tables</button></div>
+              <div class="stripchips">
+                <button class="chip">customers</button>
+                <button class="chip">products</button>
+                <button class="chip">orders</button>
+                <button class="chip">order_items</button>
+              </div>
+            </div>
+
+            <div class="sqlblock">
+              <div class="eyebrow">Your latest query</div>
+              <pre>SELECT name, category, price
+FROM products
+WHERE category = 'electronics'
+ORDER BY price;</pre>
+              <div class="sqlfoot">Ran · 0 rows returned</div>
+            </div>
+
+            <div class="turns">
+              <div class="turn">
+                <div class="role">You</div>
+                <div class="bubble learner">Why is my result wrong?</div>
+              </div>
+              <div class="turn">
+                <div class="role tutor"><svg class="ic sm" viewBox="0 0 24 24"><path d="M12 3l1.6 4.4L18 9l-4.4 1.6L12 15l-1.6-4.4L6 9l4.4-1.6z"/><path d="M18 15l.8 2.2L21 18l-2.2.8L18 21l-.8-2.2L15 18l2.2-.8z"/></svg>Tutor</div>
+                <div class="bubble tutor">
+                  <p>Your query matched no rows. PostgreSQL compares text case-sensitively, and <code>category</code> stores <code>'Electronics'</code>. The value <code>'electronics'</code> is different, so the <code>WHERE</code> clause keeps nothing.</p>
+                  <pre>SELECT DISTINCT category
+FROM products;</pre>
+                  <p>Those rows are what your clause has to match.</p>
+                </div>
+                <div class="turnnote">Guidance, not the answer, a gentle nudge.</div>
+              </div>
+            </div>
+          </div>
+
+          <div class="drawerfoot">
+            <div class="chips">
+              <button class="sug">Why is my result wrong?</button>
+              <button class="sug">Which tables should I use?</button>
+              <button class="sug">Walk me through the approach</button>
+              <button class="sug">What does this error mean?</button>
+            </div>
+            <div class="composer">
+              <textarea rows="2" aria-label="Ask about this exercise" placeholder="Ask about this exercise…"></textarea>
+              <button class="sendbtn">Send</button>
+            </div>
+            <div class="footrow">
+              <span class="kbdhint"><span class="kbd">Enter</span> to send</span>
+              <span class="notsaved">This chat is not saved.</span>
+            </div>
+          </div>
+        </aside>
+      </div>
+    </div>
+
+  </div>
+</div>
+</body>
+</html>

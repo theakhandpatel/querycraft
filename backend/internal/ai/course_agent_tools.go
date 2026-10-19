@@ -352,7 +352,7 @@ func (p *pipeline) courseAgentTools(build *courseBuild, ex engine.Executor) []ag
 		{
 			Name:        "run_sql",
 			Description: "Run a read-only SQL query against the scratch environment (the commerce dataset). Use this to test your exercises before saving the chapter: run the reference solution, check the columns and rows are what the prompt asks for, then save.",
-			Parameters:  jsonSchemaToPi(json.RawMessage(`{"type":"object","properties":{"sql":{"type":"string","description":"The SQL to run"}},"required":["sql"]}`)),
+			Parameters:  jsonSchemaToPi(json.RawMessage(runSQLSchema)),
 			Execute: func(ctx context.Context, toolCallID string, params map[string]any, _ agent.ToolUpdateFunc) (agent.AgentToolResult, error) {
 				sql, _ := params["sql"].(string)
 				if strings.TrimSpace(sql) == "" {

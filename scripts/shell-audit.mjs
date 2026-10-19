@@ -163,17 +163,20 @@ const labelsHidden = !!labelRule && decls(labelRule.body).display === 'none';
 check('the icon collapse below 1120px hides .toplink-label', labelsHidden, midBlocks.length ? 'no @media(max-width:1120px) block hides .toplink-label' : 'no @media(max-width:1120px) block found');
 
 /* 4. With text hidden, the name has to come from somewhere: the bar links and
-   the drawer buttons all carry it in the element. */
+   the drawer buttons all carry it in the element. The name is the label, plus
+   the badge's visible text when the Workbook link shows its percentage, so the
+   binding is `aria-label={name}` and `name` must fall back to `label`. */
 if (topnavHidden || labelsHidden) {
+  const namedFromLabel = /aria-label=\{name\}/.test(shell) && /title=\{label\}/.test(shell) && /const name = badge == null \? label/.test(shell);
   check(
     'TopNavLink carries the name it hides (aria-label + title)',
-    /aria-label=\{label\}/.test(shell) && /title=\{label\}/.test(shell),
-    'Shell.tsx TopNavLink no longer passes aria-label={label} / title={label}'
+    namedFromLabel,
+    'Shell.tsx TopNavLink no longer derives aria-label={name} from label (or dropped title={label})'
   );
   check(
     'NavButton carries the name it hides (aria-label + title)',
-    /aria-label=\{label\}/.test(shell) && /title=\{label\}/.test(shell),
-    'Shell.tsx NavButton no longer passes aria-label={label} / title={label}'
+    namedFromLabel,
+    'Shell.tsx NavButton no longer derives aria-label={name} from label (or dropped title={label})'
   );
   check(
     'the recent-chapter buttons carry a name too',

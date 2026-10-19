@@ -17,7 +17,6 @@ package dialect
 import (
 	"encoding/json"
 	"fmt"
-	"strings"
 )
 
 // The closed QueryResult error codes, in contract order, copied from
@@ -41,21 +40,6 @@ const (
 	CodePersistenceFailed = "PERSISTENCE_FAILED"
 	CodeEvaluationError   = "EVALUATION_ERROR"
 )
-
-// ErrorCodes returns the closed error-code set in contract order.
-func ErrorCodes() []string {
-	return []string{
-		CodeEmptyQuery,
-		CodeSyntaxError,
-		CodeRuntimeError,
-		CodeTimeout,
-		CodeResultLimitExceeded,
-		CodeEnvironmentUnavailable,
-		CodeDialectMismatch,
-		CodePersistenceFailed,
-		CodeEvaluationError,
-	}
-}
 
 // ClassRule is the profile's encoding rule for one storage class or special
 // case: the JSON kind it becomes, the rule in one line, and the reason.
@@ -168,49 +152,4 @@ func Decode(data []byte) (Profile, error) {
 		return Profile{}, fmt.Errorf("dialect: decode profile: %w", err)
 	}
 	return p, nil
-}
-
-// Names returns the dialect names this package ships a profile for, in
-// contract order.
-func Names() []string { return []string{"sqlite"} }
-
-// ByName returns the profile for a dialect name. The returned Profile shares
-// its maps with the embedded profile and must be treated as read-only.
-func ByName(name string) (Profile, bool) {
-	switch name {
-	case "sqlite":
-		return sqliteProfile, true
-	default:
-		return Profile{}, false
-	}
-}
-
-// AffinityClasses returns SQLite's five affinity classes in the order the
-// engine's algorithm lists them.
-func AffinityClasses() []string {
-	return []string{"INTEGER", "TEXT", "BLOB", "REAL", "NUMERIC"}
-}
-
-// Affinity returns the affinity class SQLite applies to a declared type.
-//
-// The tests run in the engine's own order (datatype3.html section 3.1): "INT",
-// then "CHAR"/"CLOB"/"TEXT", then "BLOB" or no declared type, then
-// "REAL"/"FLOA"/"DOUB", and NUMERIC for everything else. It is a package
-// function rather than a method because the algorithm needs no profile: the
-// rules belong to the engine, and TestAffinityRulesMatchTheProfile asserts the
-// profile describes exactly these.
-func Affinity(declaredType string) string {
-	t := strings.ToUpper(strings.TrimSpace(declaredType))
-	switch {
-	case strings.Contains(t, "INT"):
-		return "INTEGER"
-	case strings.Contains(t, "CHAR"), strings.Contains(t, "CLOB"), strings.Contains(t, "TEXT"):
-		return "TEXT"
-	case t == "", strings.Contains(t, "BLOB"):
-		return "BLOB"
-	case strings.Contains(t, "REAL"), strings.Contains(t, "FLOA"), strings.Contains(t, "DOUB"):
-		return "REAL"
-	default:
-		return "NUMERIC"
-	}
 }

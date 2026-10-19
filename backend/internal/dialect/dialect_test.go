@@ -8,7 +8,6 @@ import (
 	"reflect"
 	"sort"
 	"testing"
-	"time"
 )
 
 // contractProfilePath is the source of truth this package mirrors. go:embed
@@ -29,45 +28,16 @@ func TestEmbeddedProfileMatchesContract(t *testing.T) {
 	}
 }
 
-func TestNamesAndByName(t *testing.T) {
-	if got, want := Names(), []string{"sqlite"}; !reflect.DeepEqual(got, want) {
-		t.Fatalf("Names() = %v, want %v", got, want)
-	}
-	p, ok := ByName("sqlite")
-	if !ok {
-		t.Fatal(`ByName("sqlite") reported no profile`)
-	}
-	if p.Dialect != "sqlite" {
-		t.Fatalf(`ByName("sqlite").Dialect = %q`, p.Dialect)
-	}
-	// This milestone ships one engine-error profile. PostgreSQL's arrives in a
-	// later step, and until then an unknown name must say so rather than return
-	// an empty profile that silently classifies everything as runtime errors.
-	if _, ok := ByName("postgresql"); ok {
-		t.Error(`ByName("postgresql") returned a profile, but none is shipped yet`)
-	}
-	if _, ok := ByName(""); ok {
-		t.Error(`ByName("") returned a profile`)
-	}
-}
-
 func TestDecodeRejectsGarbage(t *testing.T) {
 	if _, err := Decode([]byte("{")); err == nil {
 		t.Fatal("Decode accepted invalid JSON")
 	}
 }
 
-func TestErrorCodesAreClosed(t *testing.T) {
-	want := []string{
-		CodeEmptyQuery, CodeSyntaxError, CodeRuntimeError, CodeTimeout,
-		CodeResultLimitExceeded, CodeEnvironmentUnavailable,
-		CodeDialectMismatch,
-		CodePersistenceFailed, CodeEvaluationError,
-	}
-	if got := ErrorCodes(); !reflect.DeepEqual(got, want) {
-		t.Fatalf("ErrorCodes() = %v, want %v", got, want)
-	}
-}
+// affinityClasses is the canonical order the profile's affinity_rules must
+// follow. It moved here from the deleted dialect.AffinityClasses, so the test
+// still holds the expectation the production export used to carry.
+var affinityClasses = []string{"INTEGER", "TEXT", "BLOB", "REAL", "NUMERIC"}
 
 func TestProfileShape(t *testing.T) {
 	p := SQLite()
@@ -135,7 +105,7 @@ func TestProfileShape(t *testing.T) {
 	}
 
 	// The affinity algorithm is the engine's, in the engine's order.
-	classes := AffinityClasses()
+	classes := affinityClasses
 	if len(p.Types.AffinityRules) != len(classes) {
 		t.Fatalf("types.affinity_rules has %d rules, want %d (one per class)", len(p.Types.AffinityRules), len(classes))
 	}
@@ -204,7 +174,11 @@ func TestValueEncodingRulesAreDocumented(t *testing.T) {
 func TestErrorClassificationShape(t *testing.T) {
 	p := SQLite()
 	closed := map[string]bool{}
-	for _, c := range ErrorCodes() {
+	for _, c := range []string{
+		CodeEmptyQuery, CodeSyntaxError, CodeRuntimeError, CodeTimeout,
+		CodeResultLimitExceeded, CodeEnvironmentUnavailable, CodeDialectMismatch,
+		CodePersistenceFailed, CodeEvaluationError,
+	} {
 		closed[c] = true
 	}
 	kinds := map[string]bool{}
@@ -451,73 +425,27 @@ func TestClassifyErrorNeverEmitsExecutorCodes(t *testing.T) {
 	}
 }
 
-type affinityCase struct {
-	declared string
-	want     string
-}
-
-var affinityCases = []affinityCase{
-	// one case per class, plus the variants the dataset relies on
-	{"INTEGER", "INTEGER"},
-	{"INT", "INTEGER"},
-	{"BIGINT", "INTEGER"},
-	{"TEXT", "TEXT"},
-	{"VARCHAR(20)", "TEXT"},
-	{"CHARACTER(2)", "TEXT"},
-	{"CLOB", "TEXT"},
-	{"BLOB", "BLOB"},
-	{"", "BLOB"},
-	{"REAL", "REAL"},
-	{"FLOAT", "REAL"},
-	{"DOUBLE PRECISION", "REAL"},
-	{"NUMERIC", "NUMERIC"},
-	{"DECIMAL(10,2)", "NUMERIC"},
-	{"DATE", "NUMERIC"},
-	{"TIMESTAMP", "NUMERIC"},
-	{"BOOLEAN", "NUMERIC"},
-}
-
-func TestAffinity(t *testing.T) {
-	covered := map[string]bool{}
-	for _, c := range affinityCases {
-		got := Affinity(c.declared)
-		if got != c.want {
-			t.Errorf("Affinity(%q) = %q, want %q", c.declared, got, c.want)
-		}
-		covered[c.want] = true
-	}
-	for _, class := range AffinityClasses() {
-		if !covered[class] {
-			t.Errorf("no case exercises the %s affinity", class)
-		}
-	}
-	// The declared type is matched case-insensitively and after trimming, as
-	// SQLite does.
-	if got := Affinity("  integer "); got != "INTEGER" {
-		t.Errorf(`Affinity("  integer ") = %q, want INTEGER`, got)
-	}
-	if got := Affinity("varchar(20)"); got != "TEXT" {
-		t.Errorf(`Affinity("varchar(20)") = %q, want TEXT`, got)
-	}
-}
-
 // TestAffinityRulesMatchTheProfile executes the profile's own claim: the
-// declared types the dataset uses map to the class it says they do.
+// declared types the dataset uses name a class the profile's rules cover.
 func TestAffinityRulesMatchTheProfile(t *testing.T) {
 	p := SQLite()
 	got := make([]string, 0, len(p.Types.AffinityRules))
 	for _, rule := range p.Types.AffinityRules {
 		got = append(got, rule.Affinity)
 	}
-	if want := AffinityClasses(); !reflect.DeepEqual(got, want) {
+	if want := affinityClasses; !reflect.DeepEqual(got, want) {
 		t.Fatalf("profile affinity rules %v, want %v", got, want)
 	}
 	if len(p.Types.Declared) == 0 {
 		t.Fatal("types.declared is empty")
 	}
+	inClasses := map[string]bool{}
+	for _, class := range affinityClasses {
+		inClasses[class] = true
+	}
 	for declared, want := range p.Types.Declared {
-		if class := Affinity(declared); class != want {
-			t.Errorf("Affinity(%q) = %q but the profile declares %q", declared, class, want)
+		if !inClasses[want] {
+			t.Errorf("the profile declares %q as %q, which is not one of the five affinity classes", declared, want)
 		}
 	}
 }
@@ -531,11 +459,9 @@ func TestEncodeValue(t *testing.T) {
 		want     any
 	}{
 		{"integer", int64(59), "INTEGER", int64(59)},
-		{"integer zero", int(0), "INTEGER", int64(0)},
 		{"integer at the JSON boundary", int64(9007199254740991), "INTEGER", int64(9007199254740991)},
 		{"integer past the JSON boundary", int64(9007199254740992), "INTEGER", "9007199254740992"},
 		{"negative integer past the boundary", int64(-9007199254740992), "INTEGER", "-9007199254740992"},
-		{"unsigned integer past the boundary", uint64(math.MaxUint64), "INTEGER", "18446744073709551615"},
 		{"real", float64(42.5), "REAL", float64(42.5)},
 		{"integral real stays a number", float64(59), "REAL", float64(59)},
 		{"nan", math.NaN(), "REAL", nil},
@@ -548,9 +474,6 @@ func TestEncodeValue(t *testing.T) {
 		{"blob", []byte{0xde, 0xad, 0xbe, 0xef}, "BLOB", `\xdeadbeef`},
 		{"empty blob", []byte{}, "BLOB", `\x`},
 		{"null", nil, "TEXT", nil},
-		{"true materialised by the driver", true, "NUMERIC", int64(1)},
-		{"false materialised by the driver", false, "NUMERIC", int64(0)},
-		{"date driver materialised as a time.Time", time.Date(2025, 11, 2, 0, 0, 0, 0, time.UTC), "NUMERIC", "2025-11-02T00:00:00Z"},
 	}
 	for _, c := range cases {
 		t.Run(c.name, func(t *testing.T) {
@@ -566,8 +489,8 @@ func TestEncodeValue(t *testing.T) {
 // value is reported. The storage class does.
 func TestEncodeValueIgnoresAffinity(t *testing.T) {
 	p := SQLite()
-	values := []any{nil, true, int64(59), float64(42.5), "2025-11-02", []byte{0x01, 0x02}}
-	affinities := append([]string{""}, AffinityClasses()...)
+	values := []any{nil, int64(59), float64(42.5), "2025-11-02", []byte{0x01, 0x02}}
+	affinities := append([]string{""}, affinityClasses...)
 	affinities = append(affinities, "GARBAGE")
 	base := make([]any, len(values))
 	for i, v := range values {

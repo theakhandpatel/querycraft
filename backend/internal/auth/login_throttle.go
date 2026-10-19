@@ -1,8 +1,7 @@
-package httpapi
+package auth
 
 import (
 	"net"
-	"net/http"
 	"strings"
 	"sync"
 	"time"
@@ -35,8 +34,8 @@ import (
  * normalized email; the value is a count and a window start.
  */
 
-// The shipped defaults. They are what New applies when a Config leaves the
-// login fields unset, and the values cmd/api reads for QC_LOGIN_*.
+// The shipped defaults. They are what NewThrottle applies when a Config leaves
+// the login fields unset, and the values cmd/api reads for QC_LOGIN_*.
 const (
 	// DefaultLoginMaxFailures is how many failed sign-ins one (address, email)
 	// pair may accumulate inside the window before the next attempt is refused.
@@ -56,12 +55,12 @@ type loginFailure struct {
 	windowStart time.Time
 }
 
-// loginThrottle is a fixed-window failure counter keyed by client address and
-// normalized email. The zero value is unusable; call newLoginThrottle.
+// Throttle is a fixed-window failure counter keyed by client address and
+// normalized email. The zero value is unusable; call NewThrottle.
 //
 // It is safe for concurrent use: every read and write of the map happens under
 // the mutex, so two parallel sign-ins cannot race the same counter.
-type loginThrottle struct {
+type Throttle struct {
 	maxFailures int
 	window      time.Duration
 	maxKeys     int
@@ -74,10 +73,10 @@ type loginThrottle struct {
 	entries map[string]*loginFailure
 }
 
-// newLoginThrottle builds a throttle. Non-positive arguments fall back to the
+// NewThrottle builds a throttle. Non-positive arguments fall back to the
 // shipped defaults, so a caller that passes nothing gets the documented
 // behaviour rather than an unlimited or unbounded one.
-func newLoginThrottle(maxFailures, windowMS, maxKeys int) *loginThrottle {
+func NewThrottle(maxFailures, windowMS, maxKeys int) *Throttle {
 	if maxFailures <= 0 {
 		maxFailures = DefaultLoginMaxFailures
 	}
@@ -87,7 +86,7 @@ func newLoginThrottle(maxFailures, windowMS, maxKeys int) *loginThrottle {
 	if maxKeys <= 0 {
 		maxKeys = DefaultLoginMaxTracked
 	}
-	return &loginThrottle{
+	return &Throttle{
 		maxFailures: maxFailures,
 		window:      time.Duration(windowMS) * time.Millisecond,
 		maxKeys:     maxKeys,
@@ -96,29 +95,29 @@ func newLoginThrottle(maxFailures, windowMS, maxKeys int) *loginThrottle {
 	}
 }
 
-// loginKey names one budget: the caller's address and the account it named,
+// LoginKey names one budget: the caller's address and the account it named,
 // lowercased and trimmed so casing cannot mint a second budget. NUL is the
 // separator because an email cannot contain it.
-func loginKey(ip, email string) string {
+func LoginKey(ip, email string) string {
 	return ip + "\x00" + email
 }
 
-// clientIP is the caller's address as the kernel reports it, without the port.
-// It reads RemoteAddr only: X-Forwarded-For is caller-supplied and would let an
-// attacker choose a fresh budget per request.
-func clientIP(r *http.Request) string {
-	host, _, err := net.SplitHostPort(r.RemoteAddr)
+// ClientIP is the caller's address as the kernel reports it, without the port.
+// It reads the socket address only: X-Forwarded-For is caller-supplied and
+// would let an attacker choose a fresh budget per request.
+func ClientIP(remoteAddr string) string {
+	host, _, err := net.SplitHostPort(remoteAddr)
 	if err != nil {
-		return strings.TrimSpace(r.RemoteAddr)
+		return strings.TrimSpace(remoteAddr)
 	}
 	return host
 }
 
-// allow reports whether an attempt may proceed, and when it may not, how many
+// Allow reports whether an attempt may proceed, and when it may not, how many
 // whole seconds until the window ends. It does not count the attempt: a caller
 // that hammers the endpoint while blocked does not extend its own window, and
 // neither does it delay the unlucky learner's recovery.
-func (t *loginThrottle) allow(key string) (bool, int) {
+func (t *Throttle) Allow(key string) (bool, int) {
 	t.mu.Lock()
 	defer t.mu.Unlock()
 	now := t.now()
@@ -146,9 +145,9 @@ func (t *loginThrottle) allow(key string) (bool, int) {
 	return false, retryAfterSeconds(t.window - elapsed)
 }
 
-// fail records one failed attempt for the pair. It bounds the table before it
+// Fail records one failed attempt for the pair. It bounds the table before it
 // grows: a new key makes room first.
-func (t *loginThrottle) fail(key string) {
+func (t *Throttle) Fail(key string) {
 	t.mu.Lock()
 	defer t.mu.Unlock()
 	now := t.now()
@@ -161,23 +160,23 @@ func (t *loginThrottle) fail(key string) {
 	e.count++
 }
 
-// reset forgets a pair's failures. A sign-in that worked is the proof the
+// Reset forgets a pair's failures. A sign-in that worked is the proof the
 // caller is not an attacker, so the record goes.
-func (t *loginThrottle) reset(key string) {
+func (t *Throttle) Reset(key string) {
 	t.mu.Lock()
 	defer t.mu.Unlock()
 	delete(t.entries, key)
 }
 
-// size reports how many pairs are tracked, for tests and diagnostics.
-func (t *loginThrottle) size() int {
+// Size reports how many pairs are tracked, for tests and diagnostics.
+func (t *Throttle) Size() int {
 	t.mu.Lock()
 	defer t.mu.Unlock()
 	return len(t.entries)
 }
 
 // dropExpiredLocked removes every record whose window has ended.
-func (t *loginThrottle) dropExpiredLocked(now time.Time) {
+func (t *Throttle) dropExpiredLocked(now time.Time) {
 	for key, e := range t.entries {
 		if now.Sub(e.windowStart) >= t.window {
 			delete(t.entries, key)
@@ -191,7 +190,7 @@ func (t *loginThrottle) dropExpiredLocked(now time.Time) {
 // exceed maxKeys. That is last-write wins: the newest source is tracked, and an old
 // counter may be lost. It is the honest bound, because the alternative to a
 // bound is a map an attacker grows until the process dies.
-func (t *loginThrottle) makeRoomLocked(now time.Time) {
+func (t *Throttle) makeRoomLocked(now time.Time) {
 	if len(t.entries) < t.maxKeys {
 		return
 	}

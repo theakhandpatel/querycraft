@@ -12,6 +12,10 @@ import (
 	"github.com/querycraft/sqlquery/backend/internal/pgtest"
 )
 
+// TestMain gives the package one shared PostgreSQL cluster; every test that
+// asks pgtest.Shared for a server gets its own database on it.
+func TestMain(m *testing.M) { pgtest.Main(m) }
+
 // TestValueEncodingIsPostgresText proves the gateway returns PostgreSQL's own
 // text for the types where a decoded Go value cannot carry the engine's answer:
 // `numeric` loses its scale through a float, and a naive `timestamp` picks up an
@@ -27,7 +31,7 @@ import (
 // It runs against a real server because the property is about what the server
 // prints; a fake cannot have an opinion about the text form.
 func TestValueEncodingIsPostgresText(t *testing.T) {
-	srv := pgtest.Start(t)
+	srv := pgtest.Shared(t)
 	ctx, cancel := context.WithTimeout(context.Background(), 2*time.Minute)
 	defer cancel()
 

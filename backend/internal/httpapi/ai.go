@@ -3,9 +3,11 @@ package httpapi
 import (
 	"context"
 	"errors"
+	"fmt"
 	"net/http"
 	"strings"
 	"time"
+	"unicode/utf8"
 
 	"github.com/querycraft/sqlquery/backend/internal/ai"
 	"github.com/querycraft/sqlquery/backend/internal/ai/jobs"
@@ -680,6 +682,176 @@ func (s *Server) handleBuildCourse(w http.ResponseWriter, r *http.Request) {
 	writeOutcome(w, statusForOutcome(out), out)
 }
 
+/* ---------- editing a stored course ---------- */
+
+// courseEditRequest is the PUT /courses/{id} body. Every field is optional; a
+// body that provides none, or provides values identical to the stored plan, is
+// refused because it changes nothing.
+type courseEditRequest struct {
+	Title    *string             `json:"title"`
+	Subtitle *string             `json:"subtitle"`
+	Chapters []courseEditChapter `json:"chapters"`
+}
+
+// courseEditChapter revises one chapter the stored plan already has. id is
+// required; title and summary are optional.
+type courseEditChapter struct {
+	ID      string  `json:"id"`
+	Title   *string `json:"title"`
+	Summary *string `json:"summary"`
+}
+
+// courseEditLimits is the text bound an edit is validated against: the same
+// Limits the pipeline applies to a request's own text fields, merged with the
+// defaults so a gateway with no configured limits still bounds an edit. One
+// number, because a title the pipeline would refuse must not become storable
+// through an edit.
+func (s *Server) courseEditLimits() ai.Limits {
+	cfg, ok := s.currentAI()
+	if !ok {
+		return ai.DefaultLimits()
+	}
+	return cfg.Limits.Merge(ai.DefaultLimits())
+}
+
+// applyCourseEdits validates an edit body against a stored plan and applies it
+// in place. It returns a message for a refused edit, or "" when the plan
+// changed. The whole body is validated before anything is written, so a body
+// with one bad chapter id leaves the plan untouched.
+//
+// Three rules: a provided text is non-empty and within the limit; every chapter
+// id names a chapter the plan already has, because an edit revises a plan and
+// never extends it; and at least one field differs, so a write that would store
+// the same bytes is refused rather than reporting success for nothing.
+func applyCourseEdits(plan *schema.CoursePlan, body courseEditRequest, limits ai.Limits) string {
+	checkText := func(field, value string) string {
+		if strings.TrimSpace(value) == "" {
+			return fmt.Sprintf("%s: must be non-empty.", field)
+		}
+		if n := utf8.RuneCountInString(value); n > limits.MaxPromptChars {
+			return fmt.Sprintf("%s: %d characters exceeds the limit of %d.", field, n, limits.MaxPromptChars)
+		}
+		return ""
+	}
+
+	if body.Title != nil {
+		if msg := checkText("title", *body.Title); msg != "" {
+			return msg
+		}
+	}
+	if body.Subtitle != nil {
+		if msg := checkText("subtitle", *body.Subtitle); msg != "" {
+			return msg
+		}
+	}
+
+	type resolvedEdit struct {
+		at      int
+		title   *string
+		summary *string
+	}
+	resolved := make([]resolvedEdit, 0, len(body.Chapters))
+	for _, ch := range body.Chapters {
+		if strings.TrimSpace(ch.ID) == "" {
+			return "chapters: every chapter edit must name an id."
+		}
+		at := -1
+		for i := range plan.Chapters {
+			if plan.Chapters[i].ID == ch.ID {
+				at = i
+				break
+			}
+		}
+		if at < 0 {
+			return fmt.Sprintf("chapters: unknown chapter id %q.", ch.ID)
+		}
+		if ch.Title != nil {
+			if msg := checkText(fmt.Sprintf("chapters[%s].title", ch.ID), *ch.Title); msg != "" {
+				return msg
+			}
+		}
+		if ch.Summary != nil {
+			if msg := checkText(fmt.Sprintf("chapters[%s].summary", ch.ID), *ch.Summary); msg != "" {
+				return msg
+			}
+		}
+		resolved = append(resolved, resolvedEdit{at: at, title: ch.Title, summary: ch.Summary})
+	}
+
+	changed := false
+	if body.Title != nil {
+		if next := strings.TrimSpace(*body.Title); next != plan.Title {
+			plan.Title = next
+			changed = true
+		}
+	}
+	if body.Subtitle != nil {
+		if next := strings.TrimSpace(*body.Subtitle); next != plan.Subtitle {
+			plan.Subtitle = next
+			changed = true
+		}
+	}
+	for _, edit := range resolved {
+		ch := &plan.Chapters[edit.at]
+		if edit.title != nil {
+			if next := strings.TrimSpace(*edit.title); next != ch.Title {
+				ch.Title = next
+				changed = true
+			}
+		}
+		if edit.summary != nil {
+			if next := strings.TrimSpace(*edit.summary); next != ch.Summary {
+				ch.Summary = next
+				changed = true
+			}
+		}
+	}
+	if !changed {
+		return "The request does not change the stored course: provide a title, a subtitle, or a chapter edit that differs."
+	}
+	return ""
+}
+
+// handlePutCourse implements PUT /courses/{id}: the learner's own edits to a
+// stored course's authored fields. Only the title, the subtitle, and a
+// chapter's title and summary can change, because the exercises, the setup and
+// the provenance were verified by the pipeline and are not the learner's to
+// rewrite. The route is owner-scoped exactly like the read and delete routes:
+// another account's course is 404, never 403, because an id must not be
+// probeable for existence.
+func (s *Server) handlePutCourse(w http.ResponseWriter, r *http.Request) {
+	u, depot, ok := s.requireCourseDepot(w, r)
+	if !ok {
+		return
+	}
+	id := r.PathValue("id")
+	rec, owned, err := ownedCourse(r.Context(), depot, u.ID, id)
+	if err != nil {
+		writeAIError(w, err)
+		return
+	}
+	if !owned {
+		notFound(w, "unknown course: "+id)
+		return
+	}
+	var body courseEditRequest
+	if !readJSON(w, r, &body) {
+		return
+	}
+	if msg := applyCourseEdits(&rec.Plan, body, s.courseEditLimits()); msg != "" {
+		badAIRequest(w, msg)
+		return
+	}
+	// The loaded record is preserved: the edit changes the plan only, so the
+	// status, the outcome, the request and the created_at written back are the
+	// ones the course already had.
+	if err := depot.SaveCourse(r.Context(), rec); err != nil {
+		persistenceFailed(w, err)
+		return
+	}
+	writeJSON(w, http.StatusOK, map[string]any{"ok": true, "course": courseView(rec)})
+}
+
 // submitCourseBuild answers POST /courses/{id}/build?async=1 with the id of the
 // continuation to poll. It mirrors submitGenerationJob: a refusal the registry
 // cannot start is reported in the same envelope the blocking route uses.
@@ -688,24 +860,6 @@ func (s *Server) submitCourseBuild(w http.ResponseWriter, r *http.Request, owner
 }
 
 /* ---------- tutoring, critique, defects ---------- */
-
-// handleTutor implements POST /tutor.
-func (s *Server) handleTutor(w http.ResponseWriter, r *http.Request) {
-	var req ai.TutorRequest
-	if !readJSON(w, r, &req) {
-		return
-	}
-	_, svc, ok := s.requireAI(w, r)
-	if !ok {
-		return
-	}
-	resp, err := svc.Tutor(r.Context(), req)
-	if err != nil {
-		writeAIError(w, err)
-		return
-	}
-	writeJSON(w, http.StatusOK, resp)
-}
 
 // handleCritique implements POST /challenges/{id}/critique.
 func (s *Server) handleCritique(w http.ResponseWriter, r *http.Request) {
@@ -755,23 +909,32 @@ func (s *Server) handlePatch(w http.ResponseWriter, r *http.Request) {
 	if !readJSON(w, r, &dec) {
 		return
 	}
-	dec.PatchID = r.PathValue("patchID")
-	// The route names the challenge the approval is for. The service refuses a
-	// patch that belongs to a different one, so an approval cannot be redirected
-	// by pairing a valid patch id with another challenge's route.
-	dec.ChallengeID = r.PathValue("id")
 	u, svc, ok := s.requireAI(w, r)
 	if !ok {
 		return
 	}
-	// The approver is the authenticated account, never a name the body chose.
-	dec.ApprovedBy = u.Email
+	// The route names the patch and the challenge, and the session names the
+	// approver. A body that carries any of those is ignored.
+	dec = patchRouteDecision(dec, r, u.Email)
 	res, err := svc.ApplyPatch(r.Context(), dec)
 	if err != nil {
 		writeAIError(w, err)
 		return
 	}
 	writeJSON(w, http.StatusOK, res)
+}
+
+// patchRouteDecision settles the fields the route owns, overwriting anything
+// the body claimed. The patch and challenge come from the path, and the
+// approver is the authenticated account, never a name the body chose.
+func patchRouteDecision(dec ai.PatchDecision, r *http.Request, approver string) ai.PatchDecision {
+	dec.PatchID = r.PathValue("patchID")
+	// The route names the challenge the approval is for. The service refuses a
+	// patch that belongs to a different one, so an approval cannot be redirected
+	// by pairing a valid patch id with another challenge's route.
+	dec.ChallengeID = r.PathValue("id")
+	dec.ApprovedBy = approver
+	return dec
 }
 
 /* ---------- errors and metrics ---------- */
@@ -800,6 +963,8 @@ func writeAIError(w http.ResponseWriter, err error) {
 		status = http.StatusNotFound
 	case ai.CodePatchUnapproved:
 		status = http.StatusConflict
+	case ai.CodeRateLimited:
+		status = http.StatusTooManyRequests
 	default:
 		status = http.StatusInternalServerError
 	}

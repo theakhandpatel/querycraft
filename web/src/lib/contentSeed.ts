@@ -40,19 +40,26 @@ interface StoredContent {
     Every built course needs a row here — a prefix with no entry falls through
     to the default and the chapter's markdown is seeded onto the wrong course,
     which is what happened when the `plans` course shipped without one. */
-const COURSE_BY_PREFIX: Record<string, string> = {
-  m: 'sql-analytics',
-  j: 'joins',
-  q: 'subqueries',
-  f: 'foundations',
-  p: 'plans',
-  s: 'sqlite-essentials',
-  r: 'sqlite-in-production',
-  x: 'postgres-to-sqlite',
-};
+const COURSE_BY_PREFIX = new Map<string, string>([
+  ['m', 'sql-analytics'],
+  ['j', 'joins'],
+  ['q', 'subqueries'],
+  ['f', 'foundations'],
+  ['p', 'plans'],
+  ['s', 'sqlite-essentials'],
+  ['r', 'sqlite-in-production'],
+  ['x', 'postgres-to-sqlite'],
+]);
 
 export function courseForModule(moduleId: string): string {
-  return COURSE_BY_PREFIX[moduleId.slice(0, 1)] || 'sql-analytics';
+  return COURSE_BY_PREFIX.get(moduleId.slice(0, 1)) ?? 'sql-analytics';
+}
+
+/** One section while a document is being split, before its blank lines are
+    trimmed into the stored markdown. */
+interface SectionBuffer {
+  section: string;
+  lines: string[];
 }
 
 /**
@@ -60,8 +67,8 @@ export function courseForModule(moduleId: string): string {
  * `#` title) becomes an "Overview" section so nothing is dropped.
  */
 export function splitSections(markdown: string): ContentSection[] {
-  const sections: { section: string; lines: string[] }[] = [];
-  let current: { section: string; lines: string[] } = { section: 'Overview', lines: [] };
+  const sections: SectionBuffer[] = [];
+  let current: SectionBuffer = { section: 'Overview', lines: [] };
   for (const line of markdown.split(/\r?\n/)) {
     const heading = /^##\s+(.*\S)\s*$/.exec(line);
     if (heading) {
@@ -73,9 +80,10 @@ export function splitSections(markdown: string): ContentSection[] {
     current.lines.push(line);
   }
   sections.push(current);
-  return sections
-    .map((s) => ({ section: s.section, markdown: s.lines.join('\n').trim() }))
-    .filter((s) => s.markdown.length > 0);
+  return sections.flatMap((s): ContentSection[] => {
+    const text = s.lines.join('\n').trim();
+    return text.length > 0 ? [{ section: s.section, markdown: text }] : [];
+  });
 }
 
 /** FNV-1a, hex. Not a security hash — it only has to change when the text does. */

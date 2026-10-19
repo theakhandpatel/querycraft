@@ -17,6 +17,8 @@
  * one file and pin the arithmetic.
  */
 
+import type { Schema } from 'effect';
+
 /** Extra wall clock beyond the advertised budget, so the pipeline's own answer
     always wins the race against the client giving up. */
 const AI_DEADLINE_SLACK_MS = 30_000;
@@ -25,16 +27,25 @@ const AI_DEADLINE_SLACK_MS = 30_000;
     slow-but-working run is never mistaken for an unreachable gateway. */
 export const AI_DEADLINE_FALLBACK_MS = 10 * 60_000;
 
+/** A JSON object, as the capabilities body is before a schema reads it. */
+function isJsonObject(value: Schema.Json): value is Schema.JsonObject {
+  return value !== null && typeof value === 'object' && !Array.isArray(value);
+}
+
+/** A usable millisecond budget. */
+function isBudgetMs(value: Schema.Json | undefined): value is number {
+  return typeof value === 'number' && Number.isFinite(value) && value > 0;
+}
+
 /** advertisedRunBudgetMs reads the AI run budget out of a /capabilities body.
     Not every capabilities read asks for it, and an older gateway does not send
     it, so a missing or nonsensical value is `null` and the caller keeps the
     last known budget in place. */
-export function advertisedRunBudgetMs(body: unknown): number | null {
-  if (typeof body !== 'object' || body === null) return null;
-  const ai = (body as { ai?: unknown }).ai;
-  if (typeof ai !== 'object' || ai === null) return null;
-  const ms = (ai as { timeout_ms?: unknown }).timeout_ms;
-  return typeof ms === 'number' && Number.isFinite(ms) && ms > 0 ? ms : null;
+export function advertisedRunBudgetMs(body: Schema.Json): number | null {
+  if (!isJsonObject(body)) return null;
+  const ai = body.ai;
+  if (!isJsonObject(ai)) return null;
+  return isBudgetMs(ai.timeout_ms) ? ai.timeout_ms : null;
 }
 
 /** providerDeadlineMs is the deadline a provider-backed call gets. It is

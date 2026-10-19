@@ -18,6 +18,7 @@ export function isDialect(value: unknown): value is Dialect {
 
 /** Narrow an untrusted value to a dialect, or undefined. Used when reading a
     course out of a bundle, a URL or the database, where the value is data. */
+// oxlint-disable-next-line anti-slop/no-unknown-parameters -- an untrusted value from a bundle, a URL or the database is the boundary this decodes.
 export function asDialect(value: unknown): Dialect | undefined {
   return isDialect(value) ? value : undefined;
 }

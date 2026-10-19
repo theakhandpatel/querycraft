@@ -9,14 +9,16 @@ partial pass reported as a full one is worse than no pass at all.
 way (the SQL editor had no focus ring); one trap defect was found and fixed
 (the Tables drawer could not see its own tables). A later batch turned the
 Progress and Workbook chapter rows into real buttons and gave the prompt dialog a
-focus trap (sections 8 and 9).**
+focus trap (sections 8 and 9). A later pass added the automated runner (section
+10) and fixed the two violations it found: the search field referenced a results
+element that was not rendered, and the Workbook nav button's visible percentage
+was not in its accessible name.**
 
 ## How it was driven
 
-There is **no automated accessibility runner in this repo**, no axe-core, no
-pa11y, no `lighthouse-ci`, and adding one was out of scope for M2. The evidence
-below is a scripted keyboard walkthrough with targeted DOM assertions, run over
-the Chrome DevTools Protocol against the live PGlite adapter:
+The evidence below is a scripted keyboard walkthrough with targeted DOM
+assertions, run over the Chrome DevTools Protocol against the live PGlite
+adapter:
 
 ```sh
 cd web && npm run dev            # http://localhost:5173, in-browser PostgreSQL
@@ -192,16 +194,35 @@ Driven the same way, from “Add a note” on the Workbook:
 React Doctor's `prefer-html-dialog` finding cleared with the trap. Its reason was
 the missing trap, not the absence of a `<dialog>` element.
 
+## 10. Automated checks on every build
+
+`make audit-a11y` builds `web/dist`, serves it on a free port, launches the
+Chrome binary headless through `playwright-core`, and runs axe-core with the
+WCAG 2.x A/AA tags (`wcag2a`, `wcag2aa`, `wcag21a`, `wcag21aa`) on six routes:
+Home, Library, Workbook, Progress, Appearance and the lesson
+`#/course/sql-analytics/m1`. On the lesson it waits for the in-browser database
+to boot and for the seeded chapter markdown to render before it measures.
+
+The run fails on any `critical` or `serious` violation and names the rule, its
+impact and the node. It reports `moderate` and `minor` violations as counts. A
+route that never renders is a failure with the browser console log. The target
+sits in `test-all`, so `make test` covers it. `scripts/a11y-audit.mjs` holds the
+runner and its allowlist. The allowlist is empty: the six routes axe clean, and a
+rule is listed only with a written reason.
+
+The runner does not replace the walkthrough. It checks the accessibility-tree
+inputs a tool can see: roles, names, ARIA states and rendered contrast. The
+keyboard walkthrough above still carries the claim that a full lesson works
+keyboard only.
+
 ## What is *not* verified
 
-- **No automated runner.** Nothing re-checks this on every commit; the walkthrough
-  was driven by hand (well, by script). A regression in any of the above would not
-  fail `make test`.
-- **No screen reader was listened to.** The checks assert roles, names and live
-  regions in the DOM: the accessibility-tree inputs, not the speech an NVDA,
-  JAWS or VoiceOver user actually hears.
-- **Contrast was not measured with a tool.** The palette is unchanged from M1;
-  no ratio is claimed here.
+- **The runner is not a screen reader.** Nothing listens to the app the way an
+  NVDA, JAWS or VoiceOver user does. `make audit-a11y` reads the
+  accessibility-tree inputs, not the speech they produce.
+- **Contrast is measured on the audited screens, not everywhere.** axe checks
+  rendered contrast on the six routes, and `make audit-themes` checks every theme
+  token pair. Neither covers a screen the runner does not visit.
 - **Zoom and reflow were not tested** at 200% or at a 320 px viewport.
 - **Focus is not moved on SPA route changes.** After activating a nav item or a
   chapter, `document.activeElement` falls back to `<body>`. The skip link is the

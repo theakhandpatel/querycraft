@@ -5,17 +5,18 @@ import GenerationLog from '../ui/GenerationLog';
 import { useChecklist } from '../ui/useChecklist';
 import { useStore } from '../../state/store';
 import { COURSES } from '../../data/curriculum';
-import { courseShort, exercisesWithReference } from '../../lib/model';
+import { blockHome, courseShort, exercisesWithReference } from '../../lib/model';
 import { sleep } from '../../lib/sleep';
 import { artifactProvenanceLabel, executionEngineLabel, generationProvenance } from '../../lib/provenance';
 import type { AiArtifact, AiOutcome } from '../../api/aiContract';
+import type { LogLine, LogLineDraft } from '../../lib/generationPoll';
 import type { Block } from '../../types';
 
 const CL_STEPS = [
   ['Validate the request', 'Topics, difficulty, scenario, constraints'],
   ['Run reference vs contract', 'The reference must satisfy its own result contract'],
   ['Adversarial fixtures', 'Deliberately wrong queries must be rejected by the evaluator'],
-  ['Register the challenge', 'Save the artifact with the versions it was checked against'],
+  ['Validate the draft', 'The authored challenge runs on this engine; nothing is registered'],
 ];
 
 /** The authored challenge whose reference query this lab validates against. */
@@ -42,7 +43,6 @@ type Evidence = {
   fixturesTotal: number;
   referenceRows: number;
   ms: number;
-  version: number;
 };
 
 /** What "Try it" got back from the same grader the learner is graded by. */
@@ -54,11 +54,11 @@ type TryOutcome = {
 };
 
 /* The form speaks in learner words; the contract speaks in levels. */
-const DIFFICULTY: Record<string, 'beginner' | 'intermediate' | 'advanced'> = {
-  'Warm-up': 'beginner',
-  Challenging: 'intermediate',
-  Brutal: 'advanced',
-};
+const DIFFICULTY = new Map<string, 'beginner' | 'intermediate' | 'advanced'>([
+  ['Warm-up', 'beginner'],
+  ['Challenging', 'intermediate'],
+  ['Brutal', 'advanced'],
+]);
 
 function commaList(value: string): string[] {
   return value.split(',').map((v) => v.trim()).filter(Boolean);
@@ -75,7 +75,7 @@ export default function ChallengeLabScreen() {
   const [scenario, setScenario] = useState('A subscription business wants to find the top plan per region each month');
   const [constraints, setConstraints] = useState('Answer with one statement. Return no more than 50 rows. Must include a deterministic tie-break.');
   const { states, mark, reset: resetChecklist, idleWord } = useChecklist(CL_STEPS, 'Idle');
-  const [log, setLog] = useState<{ t: string; html: string }[]>([]);
+  const [log, setLog] = useState<LogLine[]>([]);
   const [logOpen, setLogOpen] = useState(true);
   const [result, setResult] = useState<Evidence | null>(null);
   const abortRef = useRef<AbortController | null>(null);
@@ -149,7 +149,7 @@ export default function ChallengeLabScreen() {
 
     const t0 = performance.now();
     const stamp = (): string => `t+${((performance.now() - t0) / 1000).toFixed(1)}s`;
-    const emit = (html: string): void => setLog((l) => [...l, { t: stamp(), html }]);
+    const emit = (draft: LogLineDraft): void => setLog((l) => [...l, { t: stamp(), ...draft }]);
     /* The real work finishes in well under a second, which is too fast to read.
        The pause is legibility only — it is never reported as engine time. */
 
@@ -157,14 +157,14 @@ export default function ChallengeLabScreen() {
       try {
         /* 1. Validate the request — this genuinely can fail. */
         mark(0, 'running');
-        emit('Validating request → topics, difficulty, scenario, constraints');
+        emit({ text: ['Validating request → topics, difficulty, scenario, constraints'] });
         const missing = [
           !topics.trim() ? 'topics' : '',
           !scenario.trim() ? 'scenario' : '',
           !constraints.trim() ? 'constraints' : '',
         ].filter(Boolean);
         if (missing.length) {
-          emit(`<span class="fail">✕</span> request rejected — ${missing.join(', ')} required`);
+          emit({ tone: 'fail', glyph: '✕', text: [`request rejected — ${missing.join(', ')} required`] });
           mark(0, 'idle');
           running.current = false;
           abortRef.current = null;
@@ -172,7 +172,7 @@ export default function ChallengeLabScreen() {
         }
         const block = referenceBlock();
         if (!block) {
-          emit('<span class="fail">✕</span> no authored reference is available in this build');
+          emit({ tone: 'fail', glyph: '✕', text: ['no authored reference is available in this build'] });
           mark(0, 'idle');
           running.current = false;
           abortRef.current = null;
@@ -185,16 +185,16 @@ export default function ChallengeLabScreen() {
 
         /* 2. The reference must pass its own contract on the real engine. */
         mark(1, 'running');
-        emit(`Grading <span class="hi">${block.id}</span> reference on ${executionEngineLabel(s.api)} …`);
+        emit({ text: ['Grading ', { text: `${block.id}`, tone: 'hi' }, ` reference on ${executionEngineLabel(s.api)} …`] });
         const reference = String(block.solution);
         const refEval = await s.api.checkAnswer(reference, { item: block });
         if (signal.aborted) return;
         const referenceRows = refEval.qr.row_count;
         if (refEval.passed) {
-          emit(`<span class="ok">✓</span> reference satisfies its contract · ${referenceRows} rows · ${refEval.duration_ms} ms`);
+          emit({ tone: 'ok', glyph: '✓', text: [`reference satisfies its contract · ${referenceRows} rows · ${refEval.duration_ms} ms`] });
         } else {
           const bad = refEval.checks.filter((c) => !c.ok).map((c) => c.label);
-          emit(`<span class="fail">✕</span> reference failed its own contract${bad.length ? ` — ${bad.join('; ')}` : ''}`);
+          emit({ tone: 'fail', glyph: '✕', text: [`reference failed its own contract${bad.length ? ` — ${bad.join('; ')}` : ''}`] });
         }
         mark(1, 'done');
         if (signal.aborted) return;
@@ -204,30 +204,37 @@ export default function ChallengeLabScreen() {
         /* 3. Wrong queries must not pass. Measure it instead of asserting it. */
         mark(2, 'running');
         const fixtures = adversarialFixtures(reference);
-        emit(`Running ${fixtures.length} adversarial fixtures against the same evaluator …`);
+        emit({ text: [`Running ${fixtures.length} adversarial fixtures against the same evaluator …`] });
         let rejected = 0;
         for (const fixture of fixtures) {
           if (signal.aborted) return;
+          /* Sequential on purpose: the transcript reports each fixture in the
+             order it was defined, and the evaluator runs on one engine queue. */
           const verdict = await s.api.checkAnswer(fixture.sql, { item: block });
           if (signal.aborted) return;
           if (verdict.passed) {
-            emit(`<span class="fail">✕</span> fixture “${fixture.name}” passed — the contract is too loose`);
+            emit({ tone: 'fail', glyph: '✕', text: [`fixture “${fixture.name}” passed — the contract is too loose`] });
           } else {
             rejected += 1;
-            emit(`<span class="ok">✓</span> rejected: ${fixture.name}`);
+            emit({ tone: 'ok', glyph: '✓', text: [`rejected: ${fixture.name}`] });
           }
         }
-        emit(
-          rejected === fixtures.length
-            ? `<span class="ok">✓</span> ${rejected}/${fixtures.length} wrong queries rejected`
-            : `<span class="fail">✕</span> only ${rejected}/${fixtures.length} wrong queries rejected`
-        );
+        emit({
+          tone: rejected === fixtures.length ? 'ok' : 'fail',
+          glyph: rejected === fixtures.length ? '✓' : '✕',
+          text: [
+            rejected === fixtures.length
+              ? `${rejected}/${fixtures.length} wrong queries rejected`
+              : `only ${rejected}/${fixtures.length} wrong queries rejected`,
+          ],
+        });
         mark(2, 'done');
         if (signal.aborted) return;
         await sleep(240, signal);
         if (signal.aborted) return;
 
-        /* 4. Register the artifact through the API. */
+        /* 4. Validate the authored draft through the API. The offline adapters
+           check it locally; nothing is registered. */
         mark(3, 'running');
         const draft = await s.api.draftChallenge({
           title: `Challenge — ${topics.split(',')[0].trim() || 'practice'}`,
@@ -236,12 +243,12 @@ export default function ChallengeLabScreen() {
         });
         if (signal.aborted) return;
         if (draft.ok) {
-          emit(`<span class="ok">✓</span> challenge registered · version 1`);
+          emit({ tone: 'ok', glyph: '✓', text: ['authored challenge validated on this engine · not registered'] });
         } else {
-          emit(`<span class="fail">✕</span> the API did not accept the challenge`);
+          emit({ tone: 'fail', glyph: '✕', text: ['the API did not accept the challenge'] });
         }
         mark(3, 'done');
-        emit('<span class="caret"></span>');
+        emit({ caret: true, text: [] });
 
         setResult({
           referencePassed: refEval.passed,
@@ -249,13 +256,12 @@ export default function ChallengeLabScreen() {
           fixturesTotal: fixtures.length,
           referenceRows,
           ms: Math.round(performance.now() - t0),
-          version: draft.ok ? 1 : 0,
         });
         running.current = false;
         abortRef.current = null;
       } catch {
         if (signal.aborted) return;
-        emit('<span class="fail">✕</span> the run could not finish — see the engine badge above');
+        emit({ tone: 'fail', glyph: '✕', text: ['the run could not finish — see the engine badge above'] });
         running.current = false;
         abortRef.current = null;
       }
@@ -278,7 +284,7 @@ export default function ChallengeLabScreen() {
         topics: commaList(topics),
         scenario: scenario.trim() || undefined,
         constraints: sentenceList(constraints),
-        difficulty: DIFFICULTY[difficulty] ?? 'intermediate',
+        difficulty: DIFFICULTY.get(difficulty) ?? 'intermediate',
       });
       setAiOutcome(outcome);
     } catch (e) {
@@ -327,6 +333,18 @@ export default function ChallengeLabScreen() {
     }
   }
 
+  /* Open the chapter that holds the authored reference this run just validated.
+     An id this build cannot place is an honest miss: say so instead of opening
+     the next chapter of whatever course is selected. */
+  function practiseNow(): void {
+    const home = blockHome(referenceBlock()?.id);
+    if (!home) {
+      s.toast('The reference for this challenge is not in a chapter this build ships.');
+      return;
+    }
+    s.openLessonIn(home.courseId, home.moduleIndex);
+  }
+
   const verified = result ? result.referencePassed && result.fixturesRejected === result.fixturesTotal : false;
   const artifact = aiOutcome?.artifact ?? null;
   const ai = s.aiAvailability;
@@ -340,7 +358,7 @@ export default function ChallengeLabScreen() {
           <h1>Generate practice that passes the same bar</h1>
           <p>Describe what you want to drill. The challenge is checked the only way that means anything: its reference query and a set of deliberately wrong queries are graded by the same evaluator you are.</p>
         </div>
-        <span className="pill" style={{ background: 'var(--accent-soft)', color: 'var(--accent)' }}>AI is optional · core works without it</span>
+        <span className="pill accent">AI is optional · core works without it</span>
       </div>
 
       <div className="grid2">
@@ -379,16 +397,16 @@ export default function ChallengeLabScreen() {
           <div className="pipeline">
             {aiOutcome
               ? aiOutcome.stages.length > 0
-                ? aiOutcome.stages.map((stage, i) => (
+                ? aiOutcome.stages.map((stage) => (
                     <div
                       className={`pipe ${stage.state === 'done' ? 'done' : stage.state === 'failed' ? 'failed' : 'idle'}`}
-                      key={`${stage.name}-${i}`}
+                      key={stage.name}
                     >
                       <div className="check">{stage.state === 'done' ? '✓' : stage.state === 'failed' ? '✕' : '–'}</div>
                       <div><strong>{stage.name}</strong><small>{stage.detail ?? ''}</small></div>
                       <span className="state">
                         {stage.state}
-                        {typeof stage.ms === 'number' ? ` · ${stage.ms} ms` : ''}
+                        {stage.ms !== undefined ? ` · ${stage.ms} ms` : ''}
                       </span>
                     </div>
                   ))
@@ -403,6 +421,7 @@ export default function ChallengeLabScreen() {
                     </div>
                   )
               : CL_STEPS.map(([title, small], i) => (
+                  /* CL_STEPS is a fixed-length constant list; the index is the step. */
                   <div className={`pipe ${states[i]}`} key={i}>
                     <div className="check">{states[i] === 'done' ? '✓' : i + 1}</div>
                     <div><strong>{title}</strong><small>{small}</small></div>
@@ -420,19 +439,19 @@ export default function ChallengeLabScreen() {
               ))}
               {aiOutcome.evidence && (
                 <>
-                  {typeof aiOutcome.evidence.reference_rows === 'number' && (
+                  {aiOutcome.evidence.reference_rows !== undefined && (
                     <div className="reportrow"><span>Reference rows</span><span>{aiOutcome.evidence.reference_rows}</span></div>
                   )}
-                  {typeof aiOutcome.evidence.cross_check_rows === 'number' && (
+                  {aiOutcome.evidence.cross_check_rows !== undefined && (
                     <div className="reportrow"><span>Cross-check rows</span><span>{aiOutcome.evidence.cross_check_rows}</span></div>
                   )}
-                  {typeof aiOutcome.evidence.fixtures_total === 'number' && (
+                  {aiOutcome.evidence.fixtures_total !== undefined && (
                     <div className="reportrow">
                       <span>Adversarial fixtures</span>
                       <span>{aiOutcome.evidence.fixtures_rejected ?? 0}/{aiOutcome.evidence.fixtures_total} rejected</span>
                     </div>
                   )}
-                  {typeof aiOutcome.evidence.repairs === 'number' && (
+                  {aiOutcome.evidence.repairs !== undefined && (
                     <div className="reportrow"><span>Repairs</span><span>{aiOutcome.evidence.repairs}</span></div>
                   )}
                   {aiOutcome.evidence.scratch_database && (
@@ -475,7 +494,7 @@ export default function ChallengeLabScreen() {
           <div className="card">
             <div className="sectiontitle">
               <h2>{artifact.title}</h2>
-              <span className="pill" style={{ background: 'var(--green-soft)', color: 'var(--green)' }}>
+              <span className="pill pass">
                 {artifact.difficulty} · v{artifact.version}
               </span>
             </div>
@@ -555,9 +574,7 @@ export default function ChallengeLabScreen() {
           <div className="card">
             <div className="sectiontitle">
               <h2>{verified ? 'Challenge validated' : 'Challenge needs attention'}</h2>
-              <span className="pill" style={verified
-                ? { background: 'var(--green-soft)', color: 'var(--green)' }
-                : { background: 'var(--red-soft)', color: 'var(--red)' }}>
+              <span className={`pill ${verified ? 'pass' : 'fail'}`}>
                 {verified ? 'Verified on the engine' : 'Not verified'}
               </span>
             </div>
@@ -584,7 +601,6 @@ export default function ChallengeLabScreen() {
                 <div className="reportrow"><span>Wall time</span><span>{result.ms} ms</span></div>
                 <div className="reportrow"><span>Execution engine</span><span className="mono" style={{ fontSize: 11 }}>{executionEngineLabel(s.api)}</span></div>
                 <div className="reportrow"><span>Evidence source</span><span className="mono" style={{ fontSize: 11 }}>{generationProvenance(s.api)}</span></div>
-                <div className="reportrow"><span>Artifact version</span><span className="mono" style={{ fontSize: 11 }}>challenge_version {result.version}</span></div>
               </div>
             </div>
             <div className="callout mt-14">
@@ -593,7 +609,7 @@ export default function ChallengeLabScreen() {
               the fixtures did not. The challenge text itself is authored, not model-generated, in this build.
             </div>
             <div className="actions mt-14">
-              <button className="primary" onClick={s.resumeCourse}><Icon name="play" />Practise this now</button>
+              <button className="primary" onClick={practiseNow}><Icon name="play" />Practise this now</button>
               <button className="ghost" onClick={reset}>Discard</button>
             </div>
           </div>

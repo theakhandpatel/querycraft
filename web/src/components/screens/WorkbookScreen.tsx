@@ -119,8 +119,8 @@ export default function WorkbookScreen() {
             {notes.length === 0 ? (
               <div className="empty">No notes in this course yet. Add one while reading a chapter.</div>
             ) : (
-              notes.map((n, i) => (
-                <div className="reportrow" key={i}>
+              notes.map((n) => (
+                <div className="reportrow" key={`${n.kind}-${n.ts}`}>
                   <span><Icon name={n.kind === 'bookmark' ? 'bookmark' : 'note'} style={{ verticalAlign: -2 }} /> {n.text}</span>
                   <span className="muted">
                     Chapter {n.lesson}
@@ -141,8 +141,8 @@ export default function WorkbookScreen() {
           {saved.length === 0 ? (
             <div className="empty">No saved queries in this course yet. Keep a query or a reference solution and it appears here.</div>
           ) : (
-            saved.map((q, i) => (
-              <React.Fragment key={i}>
+            saved.map((q) => (
+              <React.Fragment key={q.ts ?? `${q.course}-${q.lesson}-${q.name}`}>
                 <div className="reportrow">
                   <span className="mono" style={{ fontSize: 12 }}>{q.name}</span>
                   <span className="muted">

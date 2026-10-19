@@ -1,9 +1,94 @@
+import { Schema } from 'effect';
 import { allModules, exerciseIdsOfModule } from './model';
 import type { Progress, ProgressEvent } from '../types';
 
 /** Shape version of the stored snapshot. Older snapshots are discarded whole,
     never half-read: a stale field is worse than a fresh start. */
 export const PROGRESS_VERSION = 5;
+
+/* The persisted snapshot's shape, decoded rather than asserted. The schema is
+   the runtime truth for a blob that a learner's browser, an older build or a
+   hand edit can all have written. `timeMs` is optional because the v4 -> v5
+   upgrade is what adds it. */
+const EventKindSchema = Schema.Literals(['passed', 'failed', 'accepted', 'error', 'solution', 'hint', 'bookmark']);
+
+const ProgressEventSchema = Schema.Struct({
+  ts: Schema.Number,
+  id: Schema.String,
+  attemptId: Schema.optional(Schema.String),
+  kind: EventKindSchema,
+  title: Schema.String,
+  course: Schema.String,
+  lesson: Schema.NullOr(Schema.Number),
+  datasetVersion: Schema.optional(Schema.Number),
+  exerciseVersion: Schema.optional(Schema.Number),
+});
+
+const NoteItemSchema = Schema.Struct({
+  course: Schema.String,
+  lesson: Schema.Number,
+  kind: Schema.Literals(['note', 'bookmark']),
+  ts: Schema.Number,
+  text: Schema.String,
+  section: Schema.optional(Schema.Number),
+});
+
+const ResultContractSchema = Schema.Struct({
+  columns: Schema.mutable(Schema.Array(Schema.String)),
+  column_order: Schema.optional(Schema.Literals(['exact', 'ignored'])),
+  row_order: Schema.optional(Schema.Literals(['exact', 'ignored'])),
+  duplicates: Schema.optional(Schema.Literals(['preserved', 'ignored'])),
+  numeric_tolerance: Schema.optional(Schema.Number),
+});
+
+const SavedItemSchema = Schema.Struct({
+  course: Schema.String,
+  lesson: Schema.Number,
+  name: Schema.String,
+  sql: Schema.optional(Schema.String),
+  exercise: Schema.optional(Schema.String),
+  contract: Schema.optional(ResultContractSchema),
+  datasetVersion: Schema.optional(Schema.Number),
+  exerciseVersion: Schema.optional(Schema.Number),
+  ts: Schema.optional(Schema.Number),
+});
+
+const FlagsSchema = Schema.Record(Schema.String, Schema.Boolean);
+const TimeSchema = Schema.Record(Schema.String, Schema.Number);
+
+const progressFields = {
+  version: Schema.Number,
+  seeded: Schema.Boolean,
+  events: Schema.mutable(Schema.Array(ProgressEventSchema)),
+  passed: FlagsSchema,
+  accepted: FlagsSchema,
+  firstTry: FlagsSchema,
+  done: FlagsSchema,
+  manuallyDone: Schema.optional(FlagsSchema),
+  notes: Schema.mutable(Schema.Array(NoteItemSchema)),
+  saved: Schema.mutable(Schema.Array(SavedItemSchema)),
+  attempts: Schema.Number,
+  attemptsByDay: Schema.mutable(Schema.Array(Schema.Number)),
+};
+
+/* Current snapshots carry a measured-time map; a v4 snapshot predates it. */
+const ProgressSchema = Schema.Struct({ ...progressFields, timeMs: TimeSchema });
+const ProgressV4Schema = Schema.Struct({ ...progressFields, timeMs: Schema.optional(TimeSchema) });
+
+/* Sample data is recognised by its own flag alone, so a legacy snapshot with a
+   different layout is still dropped rather than adopted as real work. */
+const SeededSchema = Schema.Struct({ seeded: Schema.optional(Schema.Boolean) });
+
+/** A JSON number at runtime, or absent. Untrusted fields are narrowed through
+    this rather than trusted by their declaration. */
+function isNumber(value: number | null | undefined): value is number {
+  return typeof value === 'number';
+}
+
+/** A JSON string at runtime, or absent. */
+function isString(value: string | null | undefined): value is string {
+  return typeof value === 'string';
+}
 
 /** Design §7.3: the content versions an attempt was made against. */
 interface ContentVersions {
@@ -15,7 +100,7 @@ interface ContentVersions {
     prompt, contract or reference solution changes, so the stamp is only
     meaningful when the author bumps it. */
 export function stampFor(block: { version?: number } | null | undefined, datasetVersion: number): ContentVersions {
-  const exerciseVersion = typeof block?.version === 'number' && block.version > 0 ? block.version : 1;
+  const exerciseVersion = block?.version !== undefined && block.version > 0 ? block.version : 1;
   return { datasetVersion, exerciseVersion };
 }
 
@@ -24,7 +109,7 @@ export function stampFor(block: { version?: number } | null | undefined, dataset
     unique per attempt; this is it. */
 export function newAttemptId(): string {
   const c = typeof crypto === 'undefined' ? undefined : crypto;
-  if (c && typeof c.randomUUID === 'function') return 'att_' + c.randomUUID();
+  if (c && 'randomUUID' in c) return 'att_' + c.randomUUID();
   return 'att_' + Date.now().toString(36) + Math.random().toString(36).slice(2, 10);
 }
 
@@ -33,7 +118,7 @@ export function newAttemptId(): string {
     Attempts from before version stamps existed report false: nothing is known,
     and guessing would be worse than staying quiet. */
 export function isEarlierVersion(evt: ProgressEvent, current: ContentVersions): boolean {
-  if (typeof evt.datasetVersion !== 'number' || typeof evt.exerciseVersion !== 'number') return false;
+  if (!isNumber(evt.datasetVersion) || !isNumber(evt.exerciseVersion)) return false;
   return evt.datasetVersion !== current.datasetVersion || evt.exerciseVersion !== current.exerciseVersion;
 }
 
@@ -46,7 +131,7 @@ export function isEarlierVersion(evt: ProgressEvent, current: ContentVersions): 
  * unique per attempt.
  */
 export function attemptKey(evt: ProgressEvent): string {
-  const explicit = typeof evt.attemptId === 'string' ? evt.attemptId.trim() : '';
+  const explicit = isString(evt.attemptId) ? evt.attemptId.trim() : '';
   if (explicit) return explicit;
   return `${evt.course}:${evt.id}:${evt.ts}`;
 }
@@ -108,12 +193,12 @@ export function formatDuration(ms: number): string {
  * passes. v4 -> v5 added `timeMs`, so it is upgraded instead of dropped.
  * Returns null when the snapshot is too old or not a snapshot at all.
  */
+// oxlint-disable-next-line anti-slop/no-unknown-parameters -- persisted progress JSON is untrusted; this is its decode boundary.
 export function migrateProgress(raw: unknown): Progress | null {
-  if (!raw || typeof raw !== 'object') return null;
-  const p = raw as Progress;
-  if (p.version === PROGRESS_VERSION) return p;
-  if (p.version === 4) {
-    return { ...p, version: PROGRESS_VERSION, timeMs: (p as Partial<Progress>).timeMs || {} };
+  if (!Schema.is(ProgressV4Schema)(raw)) return null;
+  if (raw.version === PROGRESS_VERSION) return Schema.is(ProgressSchema)(raw) ? raw : null;
+  if (raw.version === 4) {
+    return { ...raw, version: PROGRESS_VERSION, timeMs: raw.timeMs ?? {} };
   }
   return null;
 }
@@ -123,8 +208,9 @@ export function migrateProgress(raw: unknown): Progress | null {
  * learner. Sample snapshots are never adopted: they used to be seeded on first
  * run, which made a real gateway look like a canned mock.
  */
+// oxlint-disable-next-line anti-slop/no-unknown-parameters -- persisted progress JSON is untrusted; this reads its sample-data flag.
 export function isSampleProgress(p: unknown): boolean {
-  return !!p && typeof p === 'object' && (p as Progress).seeded === true;
+  return Schema.is(SeededSchema)(p) && p.seeded === true;
 }
 
 export function attemptsByDay(events: ProgressEvent[]): number[] {

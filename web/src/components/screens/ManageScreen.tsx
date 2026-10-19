@@ -3,7 +3,7 @@ import Icon from '../ui/Icon';
 import { useStore } from '../../state/store';
 import { COURSES } from '../../data/curriculum';
 import type { DiagnosticsReport } from '../../types';
-import type { AdminAIConfig, AdminAIModelEntry, AiCourseRecord } from '../../api/aiContract';
+import type { AdminAIConfig, AdminAIModelEntry, AiCourseRecord, AiRunSummary } from '../../api/aiContract';
 
 /*
  * The manage surface: the administrator's inventory and the gateway's own
@@ -17,16 +17,16 @@ import type { AdminAIConfig, AdminAIModelEntry, AiCourseRecord } from '../../api
  * fabricated client-side; the routes refuse a learner with 403.
  */
 
-const STATUS_LABELS: Record<string, string> = {
-  active: 'active',
-  building: 'building',
-  awaiting_approval: 'awaiting approval',
-  rejected: 'rejected',
-  failed: 'failed',
-};
+const STATUS_LABELS = new Map<string, string>([
+  ['active', 'active'],
+  ['building', 'building'],
+  ['awaiting_approval', 'awaiting approval'],
+  ['rejected', 'rejected'],
+  ['failed', 'failed'],
+]);
 
 function statusLabel(status: string): string {
-  return STATUS_LABELS[status] ?? status;
+  return STATUS_LABELS.get(status) ?? status;
 }
 
 export default function ManageScreen() {
@@ -41,6 +41,8 @@ export default function ManageScreen() {
   const [records, setRecords] = useState<AiCourseRecord[] | null>(null);
   const [loadError, setLoadError] = useState<string | null>(null);
   const [busyId, setBusyId] = useState<string | null>(null);
+  const [runs, setRuns] = useState<AiRunSummary[] | null>(null);
+  const [runsError, setRunsError] = useState<string | null>(null);
 
   const [ai, setAi] = useState<AdminAIConfig | null>(null);
   const [aiForm, setAiForm] = useState<{ provider: 'off' | 'fake' | 'openai-compatible' | 'pi-ai'; base_url: string; model: string; key: string; timeout_ms: string }>({
@@ -79,6 +81,10 @@ export default function ManageScreen() {
     void s.api.adminAIModels()
       .then((list) => { if (alive) setCatalog(list.length > 0 ? list : null); })
       .catch(() => { if (alive) setCatalog(null); });
+    setRunsError(null);
+    void s.api.listRuns()
+      .then((list) => { if (alive) setRuns(list); })
+      .catch((e) => { if (alive) setRunsError(e instanceof Error && e.message ? e.message : 'The run list could not be read.'); });
     return () => { alive = false; };
   }, [onGateway, isAdmin, s.api, applyAi]);
 
@@ -271,7 +277,9 @@ export default function ManageScreen() {
                   </span>
                 </div>
                 <div className="airow">
-                  <label aria-hidden="true" />
+                  {/* A grid spacer, not a label: it holds the label column so the
+                      button lines up with the fields above. */}
+                  <span aria-hidden="true" />
                   <button className="primary" type="submit" disabled={aiBusy}>
                     {aiBusy ? 'Applying…' : 'Save and apply'}
                   </button>
@@ -337,6 +345,42 @@ export default function ManageScreen() {
             <p className="muted">
               The detail routes stay owner-scoped: a course that is not yours is
               404 there, so an id still cannot be probed for existence.
+            </p>
+          </section>
+
+          <section className="card pad" aria-label="Generation runs">
+            <div className="sectiontitle">
+              <h2>Generation runs</h2>
+              <button className="small ghost" onClick={() => s.showScreen('runs')}>
+                <Icon name="list" />All runs
+              </button>
+            </div>
+            {runsError && <p className="authhint">{runsError}</p>}
+            {!runsError && runs === null && <p className="muted">Reading the run list…</p>}
+            {!runsError && runs !== null && runs.length === 0 && (
+              <p className="muted">No generation runs recorded yet.</p>
+            )}
+            {!runsError && runs !== null && runs.length > 0 && (
+              <div className="inventory">
+                {runs.slice(0, 5).map((run) => (
+                  <div className="inventoryrow" key={run.id}>
+                    <div className="inventorymain">
+                      <strong>{run.kind} run · {run.id}</strong>
+                      <span className="muted">
+                        {statusLabel(run.status)} · {run.entry_count} {run.entry_count === 1 ? 'entry' : 'entries'} · {new Date(run.started_at).toLocaleDateString()}
+                        {run.truncated ? ' · truncated' : ''}
+                      </span>
+                    </div>
+                    <div className="inventoryactions">
+                      <button className="small ghost" onClick={() => s.showScreen('runs')}>Open</button>
+                    </div>
+                  </div>
+                ))}
+              </div>
+            )}
+            <p className="muted">
+              The gateway records a transcript per generation run and scopes the
+              list to your session; another account's run never appears here.
             </p>
           </section>
         </>

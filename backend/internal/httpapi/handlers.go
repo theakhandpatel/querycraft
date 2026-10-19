@@ -132,11 +132,11 @@ func (s *Server) handleQuery(w http.ResponseWriter, r *http.Request) {
 	// The concurrency budget is spent out of the same deadline the query gets,
 	// so a gateway at capacity fails fast with QUERY_TIMEOUT instead of either
 	// queueing forever or letting a request wait longer than its own timeout.
-	ctx, cancel := context.WithTimeout(r.Context(), limits.Timeout())
-	defer cancel()
-	release, admitted := s.enter(ctx)
+	admission, cancelAdmission := context.WithTimeout(r.Context(), limits.Timeout())
+	defer cancelAdmission()
+	release, admitted := s.enter(admission)
 	if !admitted {
-		res := s.busyResult(ctx, start)
+		res := s.busyResult(admission, start)
 		s.recordStatement(res)
 		noteStatement(w, res)
 		writeJSON(w, http.StatusBadRequest, res)
@@ -147,7 +147,12 @@ func (s *Server) handleQuery(w http.ResponseWriter, r *http.Request) {
 	// ADR 0003: a signed-in learner's statement runs in their own writable
 	// environment; an anonymous caller stays on the shared, read-only dataset.
 	// The dialect routes to the executor that speaks it (M6 step 4).
-	exec, refusal := s.statementExecutorFor(ctx, r, requestedDialect(req.Dialect), resolveDataset(req.Dataset, req.Exercise))
+	//
+	// Choosing the executor may provision the environment for the first time
+	// (a database copy). That runs on the manager's own provisioning deadline,
+	// not this statement's, so the statement below gets its full deadline from
+	// the moment it is about to run rather than from the start of the copy.
+	exec, refusal := s.statementExecutorFor(r.Context(), r, requestedDialect(req.Dialect), resolveDataset(req.Dataset, req.Exercise))
 	if refusal != nil {
 		refusal.DurationMS = engine.RoundMS(time.Since(start))
 		s.recordStatement(*refusal)
@@ -156,6 +161,8 @@ func (s *Server) handleQuery(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
+	ctx, cancel := context.WithTimeout(r.Context(), limits.Timeout())
+	defer cancel()
 	res := engine.Execute(ctx, exec, req.SQL, limits)
 	s.recordStatement(res)
 	status := http.StatusOK
@@ -173,14 +180,14 @@ func (s *Server) handleEvaluate(w http.ResponseWriter, r *http.Request) {
 	}
 	start := time.Now()
 	req.Limits = s.limits(req.Limits)
-	ctx, cancel := context.WithTimeout(r.Context(), req.Limits.Timeout())
-	defer cancel()
+	admission, cancelAdmission := context.WithTimeout(r.Context(), req.Limits.Timeout())
+	defer cancelAdmission()
 	// Grading shares the statement budget with /query: it runs the learner's
 	// SQL (and, for an exercise with no expected result, its reference query)
 	// on the same connection pool.
-	release, admitted := s.enter(ctx)
+	release, admitted := s.enter(admission)
 	if !admitted {
-		qr := s.busyResult(ctx, start)
+		qr := s.busyResult(admission, start)
 		s.recordStatement(qr)
 		noteStatement(w, qr)
 		writeJSON(w, http.StatusOK, eval.Response{
@@ -197,7 +204,11 @@ func (s *Server) handleEvaluate(w http.ResponseWriter, r *http.Request) {
 	// result, its reference query) on the same executor the identity and the
 	// dialect route to, so a signed-in learner is graded against their own
 	// workspace and a SQLite chapter is graded by SQLite.
-	exec, refusal := s.statementExecutorFor(ctx, r, requestedDialect(req.Dialect), resolveDataset(req.Dataset, req.Exercise))
+	//
+	// Choosing the executor may provision the workspace for the first time,
+	// which the environment manager bounds on its own provisioning deadline.
+	// The graded statement then gets its full deadline from here.
+	exec, refusal := s.statementExecutorFor(r.Context(), r, requestedDialect(req.Dialect), resolveDataset(req.Dataset, req.Exercise))
 	if refusal != nil {
 		refusal.DurationMS = engine.RoundMS(time.Since(start))
 		s.recordStatement(*refusal)
@@ -211,6 +222,8 @@ func (s *Server) handleEvaluate(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
+	ctx, cancel := context.WithTimeout(r.Context(), req.Limits.Timeout())
+	defer cancel()
 	resp := eval.Evaluate(ctx, exec, req.Request)
 	s.recordStatement(resp.QR)
 	noteStatement(w, resp.QR)

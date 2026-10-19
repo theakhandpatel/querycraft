@@ -34,7 +34,7 @@ SMOKE_PG_DIR  ?= $(BACKEND_DIR)/.data/smoke
 # cache but keep the smoke cluster's data and runtime dirs isolated.
 PG_BINARIES_DIR ?= $(BACKEND_DIR)/.data/pg/binaries
 
-.PHONY: help install web typecheck check-cgo embed backend build test test-all gotest verify verify-mock serve run dev docs dataset audit-lessons audit-content audit-storage audit-search audit-courses audit-progress audit-export audit-import audit-fixtures audit-themes audit-metrics audit-metrics-live audit-adversarial audit-adversarial-live audit-load audit-parity audit-ai audit-ai-adapters audit-course-store audit-ai-live audit-perf audit-perf-content audit-perf-seam audit-perf-fixtures audit-dataset-map audit-shell audit-sqlite-errors audit-boot audit-course-gen db-reset clean disk
+.PHONY: help install web typecheck check-cgo embed backend build test test-all gotest verify verify-mock serve run dev docs dataset audit-lessons audit-content audit-storage audit-search audit-courses audit-progress audit-export audit-import audit-fixtures audit-evaluate-wire audit-themes audit-metrics audit-metrics-live audit-adversarial audit-adversarial-live audit-load audit-parity audit-ai audit-ai-adapters audit-course-store audit-ai-live audit-perf audit-perf-content audit-perf-seam audit-perf-fixtures audit-dataset-map audit-shell audit-a11y audit-sqlite-errors audit-boot audit-course-gen db-reset clean disk
 
 help: ## List the available targets with a one-line description.
 	@echo "Querycraft — make targets"
@@ -90,7 +90,7 @@ TEST_JOBS ?= 8
 # test-all is the real suite, one target per check, so `make test` can fan it
 # out while a single check can still be run by name (make gotest,
 # make audit-parity).
-test-all: typecheck lint check-cgo gotest audit-lessons audit-content audit-courses audit-storage audit-search audit-progress audit-export audit-import audit-fixtures audit-themes audit-metrics audit-adversarial audit-parity audit-dataset-map audit-sqlite-errors audit-perf audit-perf-fixtures audit-perf-content audit-perf-seam audit-ai-adapters audit-course-store audit-course-gen audit-shell audit-boot
+test-all: typecheck lint check-cgo gotest audit-lessons audit-content audit-courses audit-storage audit-search audit-progress audit-export audit-import audit-fixtures audit-evaluate-wire audit-themes audit-metrics audit-adversarial audit-parity audit-dataset-map audit-sqlite-errors audit-perf audit-perf-fixtures audit-perf-content audit-perf-seam audit-ai-adapters audit-course-store audit-course-gen audit-shell audit-a11y audit-boot
 
 gotest: ## (test-all) The Go test suite, as one schedulable job.
 	cd $(BACKEND_DIR) && $(GO) test ./...
@@ -113,36 +113,46 @@ check-cgo: ## Prove the single binary stays cgo-free (CGO_ENABLED=0 build + a cg
 verify: build test ## build + test + smoke-test the binary on an isolated embedded PostgreSQL.
 	@set -eu; \
 	cfg=$$(mktemp); \
-	root=$$(mktemp); log=$$(mktemp); \
+	root=$$(mktemp); log=$$(mktemp); jar=$$(mktemp); \
 	rm -rf "$(SMOKE_PG_DIR)"; \
-	port="$(SMOKE_PG_PORT)"; \
-	if [ -z "$$port" ]; then \
-		for candidate in $$(seq 54340 54440); do \
-			if ! ss -ltnH "sport = :$$candidate" 2>/dev/null | grep -q .; then port=$$candidate; break; fi; \
-		done; \
-	fi; \
-	if [ -z "$$port" ]; then echo "verify: no free port for the smoke database" >&2; exit 1; fi; \
-	addr="$(SMOKE_ADDR)"; \
-	if [ -z "$$addr" ]; then \
-		for candidate in $$(seq 18080 18180); do \
-			if ! ss -ltnH "sport = :$$candidate" 2>/dev/null | grep -q .; then addr=127.0.0.1:$$candidate; break; fi; \
-		done; \
-	fi; \
-	if [ -z "$$addr" ]; then echo "verify: no free HTTP port for the smoke server" >&2; exit 1; fi; \
-	printf '{"addr":"%s","pg_port":%s,"pg_data":"%s","pg_runtime":"%s","pg_binaries":"%s"}\n' \
-		"$$addr" "$$port" "$(SMOKE_PG_DIR)/pg/data" "$(SMOKE_PG_DIR)/pg/runtime" "$(PG_BINARIES_DIR)" >"$$cfg"; \
-	$(BIN) --config "$$cfg" >"$$log" 2>&1 & \
-	pid=$$!; \
-	cleanup() { kill "$$pid" 2>/dev/null || true; wait "$$pid" 2>/dev/null || true; rm -f "$$root" "$$log" "$$cfg"; rm -rf "$(SMOKE_PG_DIR)"; }; \
+	pid=''; \
+	cleanup() { if [ -n "$$pid" ]; then kill "$$pid" 2>/dev/null || true; wait "$$pid" 2>/dev/null || true; fi; rm -f "$$root" "$$log" "$$cfg" "$$jar"; rm -rf "$(SMOKE_PG_DIR)"; }; \
 	trap cleanup EXIT INT TERM; \
-	echo "verify: starting $(BIN) on $$addr with embedded PostgreSQL on :$$port (pid $$pid)"; \
-	up=0; \
-	for _ in $$(seq 1 100); do \
-		if curl -fsS "http://$$addr/health" >/dev/null 2>&1; then up=1; break; fi; \
-		if ! kill -0 "$$pid" 2>/dev/null; then echo "verify: server exited before becoming ready" >&2; cat "$$log" >&2; exit 1; fi; \
-		sleep 0.25; \
+	addr_override="$(SMOKE_ADDR)"; \
+	port_candidates="$(SMOKE_PG_PORT)"; \
+	if [ -z "$$port_candidates" ]; then port_candidates=$$(seq 54340 54440); fi; \
+	started=0; \
+	for port in $$port_candidates; do \
+		pid=''; \
+		if [ -n "$$addr_override" ]; then addr="$$addr_override"; else \
+			addr=''; \
+			for candidate in $$(seq 18080 18180); do \
+				if ! ss -ltnH "sport = :$$candidate" 2>/dev/null | grep -q .; then addr=127.0.0.1:$$candidate; break; fi; \
+			done; \
+			if [ -z "$$addr" ]; then echo "verify: no free HTTP port for the smoke server" >&2; exit 1; fi; \
+		fi; \
+		rm -rf "$(SMOKE_PG_DIR)"; \
+		printf '{"addr":"%s","pg_port":%s,"pg_data":"%s","pg_runtime":"%s","pg_binaries":"%s"}\n' \
+			"$$addr" "$$port" "$(SMOKE_PG_DIR)/pg/data" "$(SMOKE_PG_DIR)/pg/runtime" "$(PG_BINARIES_DIR)" >"$$cfg"; \
+		: >"$$log"; \
+		$(BIN) --config "$$cfg" >"$$log" 2>&1 & \
+		pid=$$!; \
+		echo "verify: starting $(BIN) on $$addr with embedded PostgreSQL on :$$port (pid $$pid)"; \
+		up=0; \
+		for _ in $$(seq 1 100); do \
+			if curl -fsS "http://$$addr/health" >/dev/null 2>&1; then up=1; break; fi; \
+			if ! kill -0 "$$pid" 2>/dev/null; then break; fi; \
+			sleep 0.25; \
+		done; \
+		if [ "$$up" = 1 ]; then started=1; break; fi; \
+		if grep -qiE 'address already in use|could not bind|in use' "$$log"; then \
+			echo "verify: :$$port was taken by another process; trying the next candidate" >&2; \
+			kill "$$pid" 2>/dev/null || true; wait "$$pid" 2>/dev/null || true; pid=''; \
+			continue; \
+		fi; \
+		echo "verify: server did not become ready or exited early" >&2; cat "$$log" >&2; exit 1; \
 	done; \
-	if [ "$$up" != 1 ]; then echo "verify: /health did not become ready" >&2; cat "$$log" >&2; exit 1; fi; \
+	if [ "$$started" != 1 ]; then echo "verify: no candidate port for the smoke database became ready" >&2; exit 1; fi; \
 	health=$$(curl -fsS "http://$$addr/health"); \
 	echo "verify: /health -> $$health"; \
 	case "$$health" in *'"version":"PostgreSQL'*) ;; \
@@ -169,38 +179,41 @@ verify: build test ## build + test + smoke-test the binary on an isolated embedd
 	fi; \
 	tok=$$(printf '%s' "$$(cat "$$root")" | sed -n 's/.*"token":"\([^"]*\)".*/\1/p'); \
 	if [ -z "$$tok" ]; then echo "verify: /auth/login returned no token" >&2; cat "$$root" >&2; exit 1; fi; \
-	signup=$$(curl -sS -o "$$root" -w '%{http_code}' -X POST -H 'content-type: application/json' \
+	bearer=$$(curl -sS -o "$$root" -w '%{http_code}' -H "Authorization: Bearer $$tok" \
+		"http://$$addr/auth/me"); \
+	echo "verify: bearer GET /auth/me -> HTTP $$bearer"; \
+	if [ "$$bearer" != "200" ] || ! grep -q '"role":"admin"' "$$root"; then \
+		echo "verify: a bearer token must still authorize (API-client contract)" >&2; cat "$$root" >&2; cat "$$log" >&2; exit 1; \
+	fi; \
+	signup=$$(curl -sS -c "$$jar" -o "$$root" -w '%{http_code}' -X POST -H 'content-type: application/json' \
 		-d '{"email":"smoke@querycraft.local","name":"Smoke","password":"smoke-passphrase"}' \
 		"http://$$addr/auth/signup"); \
-	echo "verify: learner signup -> HTTP $$signup"; \
+	echo "verify: learner signup -> HTTP $$signup (cookie jar)"; \
 	if [ "$$signup" != "201" ]; then \
 		echo "verify: /auth/signup expected 201, got $$signup" >&2; cat "$$root" >&2; cat "$$log" >&2; exit 1; \
 	fi; \
-	learner=$$(printf '%s' "$$(cat "$$root")" | sed -n 's/.*"token":"\([^"]*\)".*/\1/p'); \
-	if [ -z "$$learner" ]; then echo "verify: /auth/signup returned no token" >&2; cat "$$root" >&2; exit 1; fi; \
-	put=$$(curl -sS -o /dev/null -w '%{http_code}' -X PUT -H 'content-type: application/json' \
-		-H "Authorization: Bearer $$learner" \
+	put=$$(curl -sS -b "$$jar" -o /dev/null -w '%{http_code}' -X PUT -H 'content-type: application/json' \
 		-d '{"version":5,"passed":{"smoke.1":true}}' \
 		"http://$$addr/progress/smoke"); \
-	get=$$(curl -sS -o "$$root" -w '%{http_code}' -H "Authorization: Bearer $$learner" \
+	get=$$(curl -sS -b "$$jar" -o "$$root" -w '%{http_code}' \
 		"http://$$addr/progress/smoke"); \
-	echo "verify: scoped progress PUT/GET -> $$put/$$get"; \
+	echo "verify: cookie-scoped progress PUT/GET -> $$put/$$get"; \
 	if [ "$$put" != "200" ] || [ "$$get" != "200" ] || ! grep -q '"smoke.1":true' "$$root"; then \
-		echo "verify: progress did not round-trip for the signed-in learner" >&2; cat "$$root" >&2; cat "$$log" >&2; exit 1; \
+		echo "verify: progress did not round-trip for the cookie session" >&2; cat "$$root" >&2; cat "$$log" >&2; exit 1; \
 	fi; \
 	leak=$$(curl -sS -H "Authorization: Bearer $$tok" "http://$$addr/progress/smoke"); \
 	if printf '%s' "$$leak" | grep -q '"smoke.1":true'; then \
 		echo "verify: progress leaked across owners (admin saw the learner's snapshot)" >&2; cat "$$log" >&2; exit 1; \
 	fi; \
-	out=$$(curl -sS -o /dev/null -w '%{http_code}' -X POST -H "Authorization: Bearer $$learner" \
+	out=$$(curl -sS -b "$$jar" -c "$$jar" -o /dev/null -w '%{http_code}' -X POST \
 		"http://$$addr/auth/logout"); \
-	echo "verify: logout -> HTTP $$out"; \
+	echo "verify: cookie logout -> HTTP $$out"; \
 	if [ "$$out" != "200" ]; then echo "verify: logout failed" >&2; exit 1; fi; \
-	after=$$(curl -sS -o /dev/null -w '%{http_code}' -H "Authorization: Bearer $$learner" \
+	after=$$(curl -sS -b "$$jar" -o /dev/null -w '%{http_code}' \
 		"http://$$addr/progress/smoke"); \
-	echo "verify: revoked token -> HTTP $$after"; \
+	echo "verify: cookie after logout -> HTTP $$after"; \
 	if [ "$$after" != "401" ]; then \
-		echo "verify: a logged-out token still worked" >&2; cat "$$log" >&2; exit 1; \
+		echo "verify: the session cookie still authorized after logout" >&2; cat "$$log" >&2; exit 1; \
 	fi; \
 	code=$$(curl -sS -o "$$root" -w '%{http_code}' "http://$$addr/"); \
 	echo "verify: GET / -> HTTP $$code"; \
@@ -346,6 +359,9 @@ audit-fixtures: ## Check the language-neutral result-contract fixtures against t
 		--outfile=/tmp/fixtures.cjs src/api/compare.ts >/dev/null
 	node scripts/fixtures-audit.mjs
 
+audit-evaluate-wire: ## Check the HTTP grading wire: the web sends `result_contract` and `reference_solution`, and the Go Exercise field is tagged `result_contract` (item 17a).
+	node scripts/evaluate-wire-audit.mjs
+
 audit-themes: ## Every shipped theme clears 4.5:1 on its key text pairs.
 	node scripts/theme-contrast.mjs
 
@@ -375,7 +391,7 @@ audit-ai-adapters: ## Check the frontend AI seam (both adapters, no gateway need
 	@set -e; trap 'rm -f /tmp/qc-ai.cjs /tmp/qc-deadline.cjs' EXIT INT TERM; cd $(WEB_DIR) && npm run audit-ai
 
 audit-course-store: ## Check the M8 stored-course seam: a stored record parses whole (or is dropped), a building course is readable, a failed read refuses instead of reporting none, and the record's measured rows are the rows the lesson page shows.
-	@set -e; trap 'rm -f /tmp/qc-ai-course-store.cjs /tmp/qc-draft.cjs /tmp/qc-runresume.cjs' EXIT INT TERM; cd $(WEB_DIR) && npm run audit-course-store
+	@set -e; trap 'rm -f /tmp/qc-ai-course-store.cjs /tmp/qc-draft.cjs /tmp/qc-runresume.cjs /tmp/qc-course-warmup.cjs' EXIT INT TERM; cd $(WEB_DIR) && npm run audit-course-store
 
 audit-ai: ## Run the M4 exit gate against a freshly booted gateway with the deterministic provider (design 11, 14).
 	QC_GO=$(GO) QC_BACKEND=$(BACKEND_DIR) node scripts/ai-audit.mjs
@@ -385,6 +401,10 @@ audit-ai-live: ## Drive the M4 pipeline with a real OpenAI-compatible model (set
 
 audit-shell: ## Check the app shell's two layout rules: the clipping container is a containing block, and the 64px rail still names its controls (see the UI pass in progress.md).
 	node scripts/shell-audit.mjs
+
+audit-a11y: ## Run axe-core (WCAG 2.x A/AA) over the built SPA's real routes; fail on critical or serious violations (docs/accessibility.md).
+	cd $(WEB_DIR) && npm run build
+	node scripts/a11y-audit.mjs
 
 audit-boot: ## Drive the in-browser engine's boot with a worker that never answers: it must give up, take the page engine, say so, and run the dataset -- and its election id must be per dataset and per page load (see the UI pass in progress.md).
 	node scripts/boot-audit.mjs

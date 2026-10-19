@@ -9,7 +9,7 @@
   "security": [],
   "tags": [
     {"name": "system", "description": "Liveness, advertised capabilities, metrics and diagnostics."},
-    {"name": "auth", "description": "Local accounts and bearer-token sessions."},
+    {"name": "auth", "description": "Local accounts and session cookies. A bearer token is also issued for API clients."},
     {"name": "query", "description": "SQL execution and answer evaluation."},
     {"name": "environment", "description": "The learner's writable workspace and its reset."},
     {"name": "datasets", "description": "Dataset introspection."},
@@ -20,7 +20,7 @@
   "paths": {
     "/health": {
       "get": {
-        "operationId": "getHealth",
+        "operationId": "get_health",
         "tags": ["system"],
         "summary": "Liveness probe that also reports the engine version.",
         "responses": {
@@ -33,7 +33,7 @@
     },
     "/capabilities": {
       "get": {
-        "operationId": "getCapabilities",
+        "operationId": "get_capabilities",
         "tags": ["system"],
         "summary": "Advertised execution limits and isolation mode.",
         "responses": {
@@ -46,7 +46,7 @@
     },
     "/metrics": {
       "get": {
-        "operationId": "getMetrics",
+        "operationId": "get_metrics",
         "tags": ["system"],
         "summary": "Prometheus text exposition of request, statement and pool metrics.",
         "description": "Unlabelled series arrive without braces. Labels are a bounded set (route patterns, method, status class, error code), so scraping never grows unbounded series. The pool and readiness gauges are sampled at scrape time.",
@@ -60,8 +60,8 @@
     },
     "/diagnostics": {
       "get": {
-        "operationId": "getDiagnostics",
-        "security": [{"bearerAuth": []}],
+        "operationId": "get_diagnostics",
+        "security": [{"bearerAuth": []}, {"cookieAuth": []}],
         "tags": ["system"],
         "summary": "Measured readiness, versions, pool state and sandbox facts.",
         "description": "Never includes a DSN, password or hash. The learner subsection is read over the restricted connection, so it reports the privileges learner SQL actually holds. Requires a session.",
@@ -79,7 +79,7 @@
     },
     "/query": {
       "post": {
-        "operationId": "postQuery",
+        "operationId": "post_query",
         "tags": ["query"],
         "summary": "Execute a SQL statement in a read-only transaction and return its rows.",
         "requestBody": {
@@ -100,7 +100,7 @@
     },
     "/explain": {
       "post": {
-        "operationId": "postExplain",
+        "operationId": "post_explain",
         "tags": ["query"],
         "summary": "Capture an EXPLAIN plan, optionally executing the statement with ANALYZE.",
         "description": "The response is the PlanBundle described by contracts/plan.schema.json: 'summary' and 'environment' carry the deterministic, gradeable facts (node types, relations, indexes, the planner's own row estimates, engine version, row counts and planner settings) and 'plan' is the engine's own JSON plan, reported verbatim and never graded. 'timing_precision' names what the numbers beside it are worth. A graded assertion never reads a timing. EXPLAIN ANALYZE executes the statement, so it requires a signed-in learner's writable environment and is refused with ENVIRONMENT_UNAVAILABLE for an anonymous caller rather than silently downgraded to a plain EXPLAIN; with no database the route reports ENVIRONMENT_UNAVAILABLE and never invents a plan.",
@@ -122,7 +122,7 @@
     },
     "/answers/evaluate": {
       "post": {
-        "operationId": "postAnswersEvaluate",
+        "operationId": "post_evaluate",
         "tags": ["query"],
         "summary": "Run the learner's SQL and grade it against an exercise contract.",
         "requestBody": {
@@ -143,7 +143,7 @@
     },
     "/environment": {
       "get": {
-        "operationId": "getEnvironment",
+        "operationId": "get_environment",
         "tags": ["environment"],
         "summary": "Describe the caller's writable learner workspace.",
         "description": "A signed-in learner gets their own database, copied from the sealed template and created on first use. An anonymous caller has no workspace and is told so honestly (exists=false, writable=false) rather than being shown the shared dataset as if it were theirs. A gateway with no database answers 503 ENVIRONMENT_UNAVAILABLE.",
@@ -161,8 +161,8 @@
     },
     "/environment/reset": {
       "post": {
-        "operationId": "postEnvironmentReset",
-        "security": [{"bearerAuth": []}],
+        "operationId": "post_reset_environment",
+        "security": [{"bearerAuth": []}, {"cookieAuth": []}],
         "tags": ["environment"],
         "summary": "Restore the sealed dataset, discarding the learner's own changes.",
         "description": "Drops the caller's environment database and copies the sealed template again. Destructive to the caller's own workspace only. Requires a signed-in account; an anonymous caller is refused with AUTH_REQUIRED. When the course parameter names a stored course, that course's own setup statements are applied to the restored workspace in order, so the learner's database is the one the course's exercises were verified against; setup_statements reports how many were applied. A course is resolved owner-scoped, and a course id that is not the caller's is refused with 404 NOT_FOUND so it cannot be probed for existence.",
@@ -213,9 +213,60 @@
         }
       }
     },
+    "/environment/prepare": {
+      "post": {
+        "operationId": "post_prepare_environment",
+        "security": [{"bearerAuth": []}, {"cookieAuth": []}],
+        "tags": ["environment"],
+        "summary": "Apply a stored course's own setup to the learner's workspace.",
+        "description": "Ensures the caller's workspace exists and applies the named stored course's setup statements to it, so the learner's database is the one the course's exercises were verified against. A course is resolved owner-scoped, and a course id that is not the caller's is refused with 404 NOT_FOUND so it cannot be probed for existence. The route is idempotent: a stored course's setup statements are not idempotent themselves, so the gateway records that the setup was applied beside the workspace and a second call for the same course and workspace is a cheap no-op reporting setup_statements 0. A reset clears the record, so the course is prepared again. With no database the route answers 503 ENVIRONMENT_UNAVAILABLE and the course still opens.",
+        "parameters": [
+          {
+            "name": "course",
+            "in": "query",
+            "required": true,
+            "schema": {"type": "string"},
+            "description": "The stored course whose setup should be applied. Resolved owner-scoped; an id that is not the caller's, or does not exist, is refused with 404 NOT_FOUND and applies nothing."
+          },
+          {
+            "name": "dialect",
+            "in": "query",
+            "required": false,
+            "schema": {"type": "string", "enum": ["postgresql", "sqlite"]},
+            "description": "Which engine's workspace to prepare. Absent means postgresql, so a client that has never heard of the field prepares the challenge workspace. \"sqlite\" prepares the learner's SQLite file; only a signed-in account has one. A dialect this gateway does not serve is refused with DIALECT_MISMATCH."
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "The workspace was prepared; setup_statements is how many of the course's setup statements were applied by this call (0 when a previous call already applied them).",
+            "content": {"application/json": {"schema": {"$ref": "#/components/schemas/EnvironmentPrepareResponse"}}}
+          },
+          "400": {
+            "description": "No course was named, or the request named a dialect this gateway cannot prepare. The body is the route's own ErrorEnvelope ({ok:false,error}).",
+            "content": {"application/json": {"schema": {"$ref": "#/components/schemas/ErrorEnvelope"}}}
+          },
+          "401": {
+            "description": "No valid session (AUTH_REQUIRED).",
+            "content": {"application/json": {"schema": {"$ref": "#/components/schemas/ErrorEnvelope"}}}
+          },
+          "404": {
+            "description": "The request named a course that does not exist or is not the caller's; nothing was prepared.",
+            "content": {"application/json": {"schema": {"$ref": "#/components/schemas/ErrorEnvelope"}}}
+          },
+          "500": {
+            "description": "A setup statement failed; the workspace was not prepared and the mark was left unset, so a retry runs the setup again.",
+            "content": {"application/json": {"schema": {"$ref": "#/components/schemas/ErrorEnvelope"}}}
+          },
+          "503": {
+            "description": "No workspace can be provided; the body is the ErrorEnvelope with code ENVIRONMENT_UNAVAILABLE.",
+            "content": {"application/json": {"schema": {"$ref": "#/components/schemas/ErrorEnvelope"}}}
+          }
+        }
+      }
+    },
     "/datasets/{id}/tables": {
       "get": {
-        "operationId": "getDatasetTables",
+        "operationId": "get_tables",
         "tags": ["datasets"],
         "summary": "List a dataset's tables, columns and preview rows.",
         "parameters": [
@@ -248,10 +299,10 @@
     },
     "/progress/{course}": {
       "get": {
-        "operationId": "getProgress",
+        "operationId": "get_progress",
         "tags": ["progress"],
         "summary": "Load the signed-in account's progress snapshot for a course.",
-        "security": [{"bearerAuth": []}],
+        "security": [{"bearerAuth": []}, {"cookieAuth": []}],
         "parameters": [
           {
             "name": "course",
@@ -277,9 +328,9 @@
         }
       },
       "put": {
-        "operationId": "putProgress",
+        "operationId": "put_progress",
         "tags": ["progress"],
-        "security": [{"bearerAuth": []}],
+        "security": [{"bearerAuth": []}, {"cookieAuth": []}],
         "summary": "Replace the stored progress snapshot for a course with arbitrary JSON.",
         "parameters": [
           {
@@ -317,9 +368,9 @@
     },
     "/events": {
       "post": {
-        "operationId": "postEvent",
+        "operationId": "post_event",
         "tags": ["events"],
-        "security": [{"bearerAuth": []}],
+        "security": [{"bearerAuth": []}, {"cookieAuth": []}],
         "summary": "Record a client telemetry event.",
         "requestBody": {
           "required": true,
@@ -347,8 +398,8 @@
     },
     "/courses/generate": {
       "post": {
-        "operationId": "postCourseGenerate",
-        "security": [{"bearerAuth": []}],
+        "operationId": "post_generate_course",
+        "security": [{"bearerAuth": []}, {"cookieAuth": []}],
         "tags": ["generation"],
         "summary": "Generate a course, one chapter at a time, through the chapter agent.",
         "description": "The model is an untrusted content generator; the gateway is the policy. The run asks for a small outline first, stores it as a 'building' course, and then holds one conversation in which the model hands in one chapter per save_chapter tool call. Each chapter is validated with the same gates a challenge is and run in the course's own scratch environment before it is appended to the stored plan, so GET /courses/{id} answers with the chapters that already verified while the rest are still being written. 'stages' reports what the pipeline did, and a course job's live progress is 'chapters_planned' / 'chapters_verified' / 'current_chapter'. 'status' is 'active' only for a course whose every stored exercise verified; a chapter the model cannot repair is dropped and reported; a run in which nothing verified is 'rejected' and stores nothing. Set 'require_approval' to have the run stop after the outline: the response status is then 'awaiting_approval', the stored 'building' course is the index to approve, and POST /courses/{id}/build continues it into the chapter phase. The pause is opt-in: without the flag the run is one request, outline into chapters. Requires a session. Answers 503 when AI is off or the gateway is at its concurrency limit, 400 for an invalid request. A generation takes minutes, so a client that cannot wait sends Prefer: respond-async (or async=1) and polls GET /generation/{id} instead of holding the request open; that path answers 202 with the job id.",
@@ -387,8 +438,8 @@
     },
     "/courses": {
       "get": {
-        "operationId": "listCourses",
-        "security": [{"bearerAuth": []}],
+        "operationId": "get_courses",
+        "security": [{"bearerAuth": []}, {"cookieAuth": []}],
         "tags": ["generation"],
         "summary": "List the caller's stored generated courses, newest first.",
         "description": "Only the session's own courses are returned; the depot is scoped on write, so the filter lives in the handler. With AI off the answer is 503 and 'courses' is an empty array, never an invented row.",
@@ -410,8 +461,8 @@
     },
     "/admin/courses": {
       "get": {
-        "operationId": "adminListCourses",
-        "security": [{"bearerAuth": []}],
+        "operationId": "get_admin_courses",
+        "security": [{"bearerAuth": []}, {"cookieAuth": []}],
         "tags": ["generation"],
         "summary": "List every stored course, every owner (administrators).",
         "description": "The course inventory the manage surface renders: every stored record with its owner id and status, including 'building', 'awaiting_approval' and 'interrupted' courses no learner can see. A signed-in learner is refused with 403 ADMIN_REQUIRED; the role lives on the stored account and public signups never receive it. With AI off the answer is 503 and 'courses' is an empty array, never an invented row. Detail routes stay owner-scoped: a course that is not the caller's is still 404 there, so an id cannot be probed for existence.",
@@ -437,8 +488,8 @@
     },
     "/preferences": {
       "get": {
-        "operationId": "getPreferences",
-        "security": [{"bearerAuth": []}],
+        "operationId": "get_preferences",
+        "security": [{"bearerAuth": []}, {"cookieAuth": []}],
         "tags": ["system"],
         "summary": "The caller's client preferences (theme, custom themes).",
         "description": "One JSON document per account under the 'ui' key. It is what makes a theme follow the account across devices; a device that has never saved preferences gets ok with null preferences, never an invented default. The body is client-owned JSON: the gateway stores and returns it, it does not interpret it.",
@@ -454,8 +505,8 @@
         }
       },
       "put": {
-        "operationId": "putPreferences",
-        "security": [{"bearerAuth": []}],
+        "operationId": "put_preferences",
+        "security": [{"bearerAuth": []}, {"cookieAuth": []}],
         "tags": ["system"],
         "summary": "Save the caller's client preferences.",
         "description": "Replaces the account's 'ui' document wholesale. Owner-scoped: the account comes from the session, never the body. The document is client-owned JSON (theme id, custom theme token sets); the gateway stores it and does not interpret it. Bounded by the same body limit as every write.",
@@ -481,8 +532,8 @@
     },
     "/admin/ai": {
       "get": {
-        "operationId": "getAdminAI",
-        "security": [{"bearerAuth": []}],
+        "operationId": "get_admin_ai",
+        "security": [{"bearerAuth": []}, {"cookieAuth": []}],
         "tags": ["generation"],
         "summary": "The live AI configuration and where it came from (administrators).",
         "description": "Reports provider, model, base_url, timeout and key_set (the key itself never travels back in a body). Source is 'database' when an administrator saved a configuration through PUT /admin/ai and the boot path applied it, or 'boot' when the config file's provider is live and nothing has been saved here. A signed-in learner is refused with 403 ADMIN_REQUIRED.",
@@ -502,8 +553,8 @@
         }
       },
       "put": {
-        "operationId": "putAdminAI",
-        "security": [{"bearerAuth": []}],
+        "operationId": "put_admin_ai",
+        "security": [{"bearerAuth": []}, {"cookieAuth": []}],
         "tags": ["generation"],
         "summary": "Save and apply an AI configuration while the gateway runs (administrators).",
         "description": "Persists the configuration under the store's 'ai' key (it survives a restart: the boot path applies it over the config file's provider) and swaps the running configuration. Provider is one of 'off', 'fake', 'openai-compatible', 'pi-ai'; the openai-compatible provider requires base_url and model. 'pi-ai' runs every completion through pi's unified multi-provider API (Anthropic, OpenAI completions and responses, Gemini): a model ref such as anthropic/claude-sonnet-4-5 resolves against the embedded model catalog, or set base_url and model to target any custom OpenAI-compatible server. An empty key keeps the stored one, so a round-trip through the manage surface never demands the key again. The run budget follows the boot derivation from the saved call timeout. Requests and jobs submitted after the save build their services from the new configuration; a run already in flight keeps the provider it started with. Nothing here touches the config file: the file is the boot document, the store is the runtime one. A signed-in learner is refused with 403 ADMIN_REQUIRED.",
@@ -533,8 +584,8 @@
     },
     "/admin/ai/models": {
       "get": {
-        "operationId": "adminAIModels",
-        "security": [{"bearerAuth": []}],
+        "operationId": "get_admin_ai_models",
+        "security": [{"bearerAuth": []}, {"cookieAuth": []}],
         "tags": ["generation"],
         "summary": "The embedded model catalog (administrators).",
         "description": "Every chat model the pi catalog knows, as provider + model id + display name — the list the manage surface's provider picker offers. From the same generated catalog the pi-ai provider resolves model refs against, sourced from models.dev. A signed-in learner is refused with 403 ADMIN_REQUIRED.",
@@ -556,8 +607,8 @@
     },
     "/courses/{id}": {
       "get": {
-        "operationId": "getCourse",
-        "security": [{"bearerAuth": []}],
+        "operationId": "get_course",
+        "security": [{"bearerAuth": []}, {"cookieAuth": []}],
         "tags": ["generation"],
         "summary": "Read one stored course with the evidence that admitted it.",
         "description": "A course that belongs to another learner is reported as 404, never 403, so its existence cannot be confirmed.",
@@ -581,9 +632,43 @@
           }
         }
       },
+      "put": {
+        "operationId": "put_course",
+        "security": [{"bearerAuth": []}, {"cookieAuth": []}],
+        "tags": ["generation"],
+        "summary": "Edit a stored course's title, subtitle and chapter headings.",
+        "description": "Only the authored fields may change: the course title and subtitle, and a chapter's title and summary. The exercises, the setup plan and the pipeline's provenance were verified by generation and are not editable here. Every chapter id must name a chapter the stored plan already has, and at least one field must differ from it. A course that belongs to another learner is reported as 404, never 403, so its existence cannot be confirmed.",
+        "parameters": [{"name": "id", "in": "path", "required": true, "schema": {"type": "string"}}],
+        "requestBody": {
+          "required": true,
+          "content": {"application/json": {"schema": {"$ref": "#/components/schemas/CourseEditRequest"}}}
+        },
+        "responses": {
+          "401": {
+            "description": "No session (AUTH_REQUIRED).",
+            "content": {"application/json": {"schema": {"$ref": "#/components/schemas/ErrorEnvelope"}}}
+          },
+          "200": {
+            "description": "The edit was stored; the body is the updated record.",
+            "content": {"application/json": {"schema": {"$ref": "#/components/schemas/AICourseResponse"}}}
+          },
+          "400": {
+            "description": "A malformed body is the ErrorEnvelope (AI_INVALID_REQUEST). A body that names an unknown chapter, exceeds a field limit, or changes nothing is also refused with AI_INVALID_REQUEST and a message naming the field.",
+            "content": {"application/json": {"schema": {"$ref": "#/components/schemas/ErrorEnvelope"}}}
+          },
+          "404": {
+            "description": "No such course, or it belongs to another learner.",
+            "content": {"application/json": {"schema": {"$ref": "#/components/schemas/ErrorEnvelope"}}}
+          },
+          "503": {
+            "description": "AI is off.",
+            "content": {"application/json": {"schema": {"$ref": "#/components/schemas/ErrorEnvelope"}}}
+          }
+        }
+      },
       "delete": {
-        "operationId": "deleteCourse",
-        "security": [{"bearerAuth": []}],
+        "operationId": "delete_course",
+        "security": [{"bearerAuth": []}, {"cookieAuth": []}],
         "tags": ["generation"],
         "summary": "Forget a generated course.",
         "description": "Removes the generated plan only. Learner attempts and progress are the learner's data and are not touched. A course that belongs to another learner is reported as 404, never 403.",
@@ -610,8 +695,8 @@
     },
     "/courses/{id}/build": {
       "post": {
-        "operationId": "postCourseBuild",
-        "security": [{"bearerAuth": []}],
+        "operationId": "post_build_course",
+        "security": [{"bearerAuth": []}, {"cookieAuth": []}],
         "tags": ["generation"],
         "summary": "Approve a paused course and build its chapters.",
         "description": "Continues a course that stopped at 'awaiting_approval', or one an interrupted build left behind: the stored outline is reloaded, the chapter conversation is rebuilt from the request stored beside it, and the chapter phase runs to completion, activating the course exactly as a default run would. A chapter that already verified is not re-written. The route is owner-scoped: a course that belongs to another learner is reported as 404, never 403. A course that is not still being built is refused with 409, because re-running a finished course is not what this route is for. A continuation takes minutes, so it accepts the same Prefer: respond-async (or async=1) ask as /courses/generate and answers 202 with the job id; the blocking envelope is the default.",
@@ -653,8 +738,8 @@
     },
     "/generation/{id}": {
       "get": {
-        "operationId": "getGenerationJob",
-        "security": [{"bearerAuth": []}],
+        "operationId": "get_generation_job",
+        "security": [{"bearerAuth": []}, {"cookieAuth": []}],
         "tags": ["generation"],
         "summary": "Poll a generation that was submitted with Prefer: respond-async.",
         "description": "The body is the job's own view: a live copy of the pipeline's stages while the run is going, and the pipeline's final report once it is over. A course job also carries its chapter progress ('chapters_planned', 'chapters_verified', 'current_chapter') and 'chapters', the per-chapter report in course order. A job that belongs to another learner is reported as 404, never 403, so an id cannot be probed for existence. The stored record, not the job, is the durable thing: a course job names its course_id as soon as the outline is stored — that course reads as 'building' from GET /courses/{id} and carries the chapters that already verified — and a challenge job names its challenge_id once the challenge was stored. A refused run names neither, because it stored nothing.",
@@ -681,8 +766,8 @@
     },
     "/challenges/generate": {
       "post": {
-        "operationId": "postChallengeGenerate",
-        "security": [{"bearerAuth": []}],
+        "operationId": "post_generate_challenge",
+        "security": [{"bearerAuth": []}, {"cookieAuth": []}],
         "tags": ["generation"],
         "summary": "Generate one challenge through the 11.1 pipeline.",
         "description": "Same contract and same statuses as /courses/generate.",
@@ -721,8 +806,8 @@
     },
     "/challenges": {
       "get": {
-        "operationId": "listChallenges",
-        "security": [{"bearerAuth": []}],
+        "operationId": "get_challenges",
+        "security": [{"bearerAuth": []}, {"cookieAuth": []}],
         "tags": ["generation"],
         "summary": "List stored generated challenges, newest first.",
         "responses": {
@@ -739,8 +824,8 @@
     },
     "/challenges/{id}": {
       "get": {
-        "operationId": "getChallenge",
-        "security": [{"bearerAuth": []}],
+        "operationId": "get_challenge",
+        "security": [{"bearerAuth": []}, {"cookieAuth": []}],
         "tags": ["generation"],
         "summary": "Read one stored challenge with the evidence that admitted it.",
         "parameters": [{"name": "id", "in": "path", "required": true, "schema": {"type": "string"}}],
@@ -762,8 +847,8 @@
     },
     "/challenges/{id}/reset": {
       "post": {
-        "operationId": "resetChallenge",
-        "security": [{"bearerAuth": []}],
+        "operationId": "post_reset_challenge",
+        "security": [{"bearerAuth": []}, {"cookieAuth": []}],
         "tags": ["generation"],
         "summary": "Forget a generated challenge.",
         "description": "Removes the generated definition only. Learner attempts are the learner's data and are not touched.",
@@ -786,8 +871,8 @@
     },
     "/challenges/{id}/critique": {
       "post": {
-        "operationId": "postCritique",
-        "security": [{"bearerAuth": []}],
+        "operationId": "post_critique",
+        "security": [{"bearerAuth": []}, {"cookieAuth": []}],
         "tags": ["generation"],
         "summary": "Review the learner's own query on demand.",
         "description": "The critique never contains the reference solution.",
@@ -814,8 +899,8 @@
     },
     "/challenges/{id}/report": {
       "post": {
-        "operationId": "reportDefect",
-        "security": [{"bearerAuth": []}],
+        "operationId": "post_report_defect",
+        "security": [{"bearerAuth": []}, {"cookieAuth": []}],
         "tags": ["generation"],
         "summary": "Report a defect in a challenge.",
         "description": "The claimed defect is reproduced by execution before any patch is proposed, and 'applied' stays false until the learner approves the patch.",
@@ -838,8 +923,8 @@
     },
     "/challenges/{id}/patches/{patchID}": {
       "post": {
-        "operationId": "decidePatch",
-        "security": [{"bearerAuth": []}],
+        "operationId": "post_apply_patch",
+        "security": [{"bearerAuth": []}, {"cookieAuth": []}],
         "tags": ["generation"],
         "summary": "Approve or reject a proposed patch.",
         "description": "The approver is taken from the session, never from the body. An unapproved patch is refused with 409.",
@@ -869,11 +954,11 @@
     },
     "/tutor": {
       "post": {
-        "operationId": "postTutor",
-        "security": [{"bearerAuth": []}],
+        "operationId": "post_tutor",
+        "security": [{"bearerAuth": []}, {"cookieAuth": []}],
         "tags": ["generation"],
-        "summary": "Ask for a hint about the learner's own query.",
-        "description": "Tutoring sees the learner's SQL, its real error or result summary, the objective and the hint level. It never sees the reference solution.",
+        "summary": "Ask the tutor about the learner's own query, as a conversation or a one-shot hint.",
+        "description": "The tutor sees the learner's SQL, the gateway's own run of it, the dataset schema, the result contract and, after an attempt, the expected result. It never sees the reference query: the gateway keeps that only to discard a reply that contains it. The client sends facts; the gateway assembles the context and reports a summary of what it saw in `context`. A zero-turn request behaves like the one-shot inline hint.",
         "requestBody": {
           "required": true,
           "content": {"application/json": {"schema": {"$ref": "#/components/schemas/AITutorRequest"}}}
@@ -884,8 +969,16 @@
             "content": {"application/json": {"schema": {"$ref": "#/components/schemas/ErrorEnvelope"}}}
           },
           "200": {
-            "description": "A hint.",
+            "description": "A tutor turn, with a summary of the context it saw.",
             "content": {"application/json": {"schema": {"$ref": "#/components/schemas/AITutorResponse"}}}
+          },
+          "400": {
+            "description": "The request names no exercise, exceeds the turn or context bounds, or carries an unknown turn role (AI_INVALID_REQUEST).",
+            "content": {"application/json": {"schema": {"$ref": "#/components/schemas/ErrorEnvelope"}}}
+          },
+          "429": {
+            "description": "The account spent its tutor budget (AI_RATE_LIMITED).",
+            "content": {"application/json": {"schema": {"$ref": "#/components/schemas/ErrorEnvelope"}}}
           },
           "503": {
             "description": "AI is off.",
@@ -896,11 +989,11 @@
     },
     "/runs": {
       "get": {
-        "operationId": "listRuns",
+        "operationId": "get_runs",
         "tags": ["generation"],
         "summary": "List the caller's generation runs, newest first.",
         "description": "Each generation run leaves a transcript: every provider message, tool call and tool result, in order, attributed to the run, the kind (challenge or course), the owner and the terminal outcome. The transcript is redacted before it is stored (a credential never reaches it) and bounded (a runaway run cannot bloat the database), so a stored run is a prefix of the conversation when the bound was hit — 'truncated' says so. This route returns summaries, newest first, capped at 100; another learner's runs are never listed.",
-        "security": [{"bearerAuth": []}],
+        "security": [{"bearerAuth": []}, {"cookieAuth": []}],
         "responses": {
           "200": {
             "description": "The caller's runs.",
@@ -919,11 +1012,11 @@
     },
     "/runs/{id}": {
       "get": {
-        "operationId": "getRun",
+        "operationId": "get_run",
         "tags": ["generation"],
         "summary": "Read one generation run's transcript.",
         "description": "The whole stored conversation for one run: every message, tool call and tool result in order, with the run's kind, owner, status and error. The owner is the session's account and is not carried in the body. A run belonging to another account is reported 404, never 403, so an id cannot be probed for existence.",
-        "security": [{"bearerAuth": []}],
+        "security": [{"bearerAuth": []}, {"cookieAuth": []}],
         "parameters": [
           {"name": "id", "in": "path", "required": true, "schema": {"type": "string"}, "description": "The run id: a job id from POST /courses/generate?async=1 or POST /challenges/generate?async=1, or the id minted for a blocking run."}
         ],
@@ -949,10 +1042,10 @@
     },
     "/auth/signup": {
       "post": {
-        "operationId": "signup",
+        "operationId": "post_signup",
         "tags": ["auth"],
         "summary": "Create a learner account and start a session.",
-        "description": "Public signups always receive the learner role; admin is not self-service.",
+        "description": "Public signups always receive the learner role; admin is not self-service. Sets the qc_session cookie and returns the same session token in the body for API clients.",
         "requestBody": {
           "required": true,
           "content": {"application/json": {"schema": {"$ref": "#/components/schemas/SignupRequest"}}}
@@ -975,10 +1068,10 @@
     },
     "/auth/login": {
       "post": {
-        "operationId": "login",
+        "operationId": "post_login",
         "tags": ["auth"],
-        "summary": "Exchange credentials for a session token.",
-        "description": "An unknown email and a wrong password return the same 401 so the endpoint cannot enumerate accounts. Repeated failures from one address against one account are refused with 429 AUTH_RATE_LIMITED (bounded per (address, email); a success clears the count).",
+        "summary": "Exchange credentials for a session.",
+        "description": "An unknown email and a wrong password return the same 401 so the endpoint cannot enumerate accounts. Repeated failures from one address against one account are refused with 429 AUTH_RATE_LIMITED (bounded per (address, email); a success clears the count). Sets the qc_session cookie and returns the same session token in the body for API clients.",
         "requestBody": {
           "required": true,
           "content": {"application/json": {"schema": {"$ref": "#/components/schemas/LoginRequest"}}}
@@ -1006,10 +1099,10 @@
     },
     "/auth/logout": {
       "post": {
-        "operationId": "logout",
+        "operationId": "post_logout",
         "tags": ["auth"],
         "summary": "Revoke the caller's session token.",
-        "security": [{"bearerAuth": []}],
+        "security": [{"bearerAuth": []}, {"cookieAuth": []}],
         "responses": {
           "401": {
             "description": "No session (AUTH_REQUIRED).",
@@ -1024,10 +1117,10 @@
     },
     "/auth/me": {
       "get": {
-        "operationId": "me",
+        "operationId": "get_me",
         "tags": ["auth"],
         "summary": "Return the account behind the bearer token.",
-        "security": [{"bearerAuth": []}],
+        "security": [{"bearerAuth": []}, {"cookieAuth": []}],
         "responses": {
           "200": {
             "description": "The signed-in account.",
@@ -1042,7 +1135,7 @@
     },
     "/openapi.json": {
       "get": {
-        "operationId": "getOpenAPI",
+        "operationId": "get_openapi",
         "tags": ["system"],
         "summary": "This OpenAPI document.",
         "responses": {
@@ -1055,7 +1148,7 @@
     },
     "/docs": {
       "get": {
-        "operationId": "getDocs",
+        "operationId": "get_docs",
         "tags": ["system"],
         "summary": "Swagger UI that renders this OpenAPI document.",
         "responses": {
@@ -1072,7 +1165,13 @@
       "bearerAuth": {
         "type": "http",
         "scheme": "bearer",
-        "description": "Opaque session token from /auth/login or /auth/signup, sent in the Authorization header as a Bearer token."
+        "description": "Opaque session token from /auth/login or /auth/signup, sent in the Authorization header as a Bearer token. It wins over the cookie when both are present."
+      },
+      "cookieAuth": {
+        "type": "apiKey",
+        "in": "cookie",
+        "name": "qc_session",
+        "description": "Session cookie set by /auth/login and /auth/signup (HttpOnly; SameSite=Lax; Path=/; Secure over TLS) and cleared by /auth/logout. A cookie-authenticated mutating request is also required to look same-origin through its Origin or Sec-Fetch-Site header, or it is refused with 403 CSRF_REFUSED."
       }
     },
     "schemas": {
@@ -1195,7 +1294,7 @@
       },
       "Exercise": {
         "type": "object",
-        "description": "The subset of ExerciseSpec the evaluator needs. The result contract is accepted as either result_contract or the client's contract alias.",
+        "description": "The exercise facts POST /answers/evaluate grades with. The evaluator reads exactly three grading inputs: result_contract, reference_solution, and an optional pre-computed result. It does not read expected_result, expected_rows, checks, contract or solution; a body carrying them is graded as if they were absent. The authored id, version, lesson_id, type, prompt, setup, hints and difficulty travel but are not grading inputs. perf is read only to route an exercise with no dataset to the perf fixture.",
         "properties": {
           "id": {"type": "string"},
           "version": {"type": "integer"},
@@ -1211,16 +1310,12 @@
               "dialect": {"type": "string", "enum": ["postgresql", "sqlite"], "description": "The dialect this exercise's contract was written for."}
             }
           },
-          "result_contract": {"$ref": "#/components/schemas/ResultContract"},
-          "contract": {"$ref": "#/components/schemas/ResultContract", "description": "Alias for result_contract; the web client sends this form."},
-          "reference_solution": {"type": "string"},
-          "solution": {"type": "string"},
+          "result_contract": {"$ref": "#/components/schemas/ResultContract", "description": "The result contract the evaluator reads. This is the only contract spelling it reads."},
+          "reference_solution": {"type": "string", "description": "The query the gateway executes to derive the expected rows when result is absent. This is the only reference spelling it reads."},
+          "result": {"$ref": "#/components/schemas/ExpectedResult", "description": "A pre-computed expected result. When present the gateway compares against it instead of running the reference."},
+          "perf": {"type": "object", "description": "A PerfContract (contracts/perf-contract.schema.json). It is not graded here; its presence with no dataset routes the request to the perf fixture."},
           "hints": {"type": "array", "items": {"type": "string"}},
-          "difficulty": {"type": "string"},
-          "result": {"$ref": "#/components/schemas/ExpectedResult"},
-          "expected_result": {"$ref": "#/components/schemas/ExpectedResult"},
-          "expected_rows": {"type": "array", "items": {"type": "array", "items": {}}},
-          "checks": {"type": "array", "items": {"type": "object"}}
+          "difficulty": {"type": "string"}
         }
       },
       "ResultContract": {
@@ -1303,6 +1398,14 @@
           "duration_ms": {"type": "number", "description": "Measured end-to-end reset time in milliseconds."},
           "setup_statements": {"type": "integer", "description": "How many of the named course's setup statements were applied. 0 when the request named no course; the reset fails instead of reporting a partial application."},
           "environment": {"$ref": "#/components/schemas/Environment"}
+        }
+      },
+      "EnvironmentPrepareResponse": {
+        "type": "object",
+        "required": ["ok", "setup_statements"],
+        "properties": {
+          "ok": {"type": "boolean"},
+          "setup_statements": {"type": "integer", "description": "How many of the course's setup statements this call applied. 0 when a previous call already applied them; the prepare fails instead of reporting a partial application."}
         }
       },
       "HealthResponse": {
@@ -1424,7 +1527,7 @@
           "difficulty": {"enum": ["beginner", "intermediate", "advanced"]},
           "scenario": {"type": "string"},
           "constraints": {"type": "array", "items": {"type": "string"}},
-          "exercise_count": {"type": "integer"},
+          "exercise_count": {"type": "integer", "minimum": 1, "maximum": 40, "description": "How many exercises the run asks for. The service clamps the value to this range; both courses and challenges read the normalized count."},
           "require_approval": {"type": "boolean", "description": "Course only. When true the run stops after the outline is validated and stored: the response status is 'awaiting_approval' and POST /courses/{id}/build continues it. Off (and absent) by default, which is a single request that runs outline into chapters."}
         }
       },
@@ -1726,7 +1829,11 @@
         "type": "object",
         "required": ["provider"],
         "properties": {
-          "provider": {"type": "string", "enum": ["off", "fake", "openai-compatible", "pi-ai"]},
+          "provider": {
+            "type": "string",
+            "enum": ["", "off", "none", "disabled", "fake", "deterministic", "openai", "openai-compatible", "pi-ai"],
+            "description": "The provider to run. Accepted aliases normalize on save: an empty string, none and disabled all mean off; deterministic means fake; openai means openai-compatible. The response reports the canonical provider."
+          },
           "base_url": {"type": "string"},
           "model": {"type": "string"},
           "key": {"type": "string", "description": "Write-only. Empty keeps the stored key."},
@@ -1746,6 +1853,26 @@
         "properties": {
           "ok": {"type": "boolean"},
           "course": {"$ref": "#/components/schemas/AICourseRecord"}
+        }
+      },
+      "CourseEditRequest": {
+        "type": "object",
+        "description": "The authored fields a learner may change on a stored course. Every field is optional, at least one must differ from the stored plan, and each chapter entry names a chapter the plan already has.",
+        "properties": {
+          "title": {"type": "string"},
+          "subtitle": {"type": "string"},
+          "chapters": {
+            "type": "array",
+            "items": {
+              "type": "object",
+              "required": ["id"],
+              "properties": {
+                "id": {"type": "string"},
+                "title": {"type": "string"},
+                "summary": {"type": "string"}
+              }
+            }
+          }
         }
       },
       "AIRecordResponse": {
@@ -1811,16 +1938,49 @@
           "error": {"$ref": "#/components/schemas/AIError"}
         }
       },
+      "AITutorTurn": {
+        "type": "object",
+        "description": "One message in a tutor conversation, oldest first. Role is learner or tutor; text is untrusted and is fenced before the provider sees it.",
+        "required": ["role", "text"],
+        "properties": {
+          "role": {"enum": ["learner", "tutor"]},
+          "text": {"type": "string"}
+        }
+      },
+      "AITutorContext": {
+        "type": "object",
+        "description": "What the tutor saw, summarised for the drawer. Expected rows appear only after the learner has attempted the exercise; learner_result is ran, error, not_run or unavailable.",
+        "required": ["exercise_id", "dataset", "dialect", "tables", "tables_truncated", "expected", "expected_columns", "expected_rows", "learner_result"],
+        "properties": {
+          "exercise_id": {"type": "string"},
+          "dataset": {"type": "string"},
+          "dialect": {"type": "string"},
+          "tables": {"type": "array", "items": {"type": "string"}},
+          "tables_truncated": {"type": "boolean"},
+          "expected": {"enum": ["included", "columns_only", "unavailable"]},
+          "expected_columns": {"type": "integer", "minimum": 0},
+          "expected_rows": {"type": "integer", "minimum": 0},
+          "learner_result": {"enum": ["ran", "error", "not_run", "unavailable"]}
+        }
+      },
       "AITutorRequest": {
         "type": "object",
+        "description": "The facts the client sends. The gateway assembles the context and runs the learner's SQL and the reference itself; a client cannot send rows or the assembled context. A conversation must name one exercise source: exercise, or course_id with exercise_id, or challenge_id. A zero-turn hint may omit all three.",
+        "required": ["sql", "objective"],
         "properties": {
           "challenge_id": {"type": "string"},
+          "course_id": {"type": "string"},
+          "exercise_id": {"type": "string"},
           "sql": {"type": "string"},
           "objective": {"type": "string"},
           "error_code": {"type": "string"},
           "error_message": {"type": "string"},
           "hint_level": {"type": "integer"},
-          "result_summary": {"type": "string"}
+          "result_summary": {"type": "string"},
+          "dataset": {"type": "string"},
+          "dialect": {"enum": ["postgresql", "sqlite"]},
+          "turns": {"type": "array", "items": {"$ref": "#/components/schemas/AITutorTurn"}},
+          "exercise": {"type": "object", "description": "The contracts/exercise.schema.json bundle when the exercise is not a stored record."}
         }
       },
       "AITutorResponse": {
@@ -1829,7 +1989,8 @@
           "message": {"type": "string"},
           "hint_level": {"type": "integer"},
           "reveals_solution": {"type": "boolean"},
-          "provenance": {"$ref": "#/components/schemas/AIProvenance"}
+          "provenance": {"$ref": "#/components/schemas/AIProvenance"},
+          "context": {"$ref": "#/components/schemas/AITutorContext"}
         }
       },
       "AICritiqueRequest": {
@@ -1875,7 +2036,9 @@
       },
       "AIPatchDecision": {
         "type": "object",
-        "properties": {"approved": {"type": "boolean"}, "approved_by": {"type": "string"}}
+        "description": "The learner's approval. The patch id comes from the path and the approver from the session, so neither travels in the body.",
+        "required": ["approved"],
+        "properties": {"approved": {"type": "boolean"}}
       },
       "AIPatchResult": {
         "type": "object",
@@ -2021,8 +2184,8 @@
             "properties": {
               "code": {
                 "type": "string",
-                "description": "Stable gateway error code. The envelope adds NOT_FOUND (unknown dataset) to the QueryResult error set.",
-                "enum": ["EMPTY_QUERY", "QUERY_SYNTAX_ERROR", "QUERY_RUNTIME_ERROR", "QUERY_TIMEOUT", "RESULT_LIMIT_EXCEEDED", "ENVIRONMENT_UNAVAILABLE", "DIALECT_MISMATCH", "PERSISTENCE_FAILED", "EVALUATION_ERROR", "INVALID_REQUEST", "NOT_FOUND", "AUTH_REQUIRED", "AUTH_INVALID_INPUT", "AUTH_INVALID_CREDENTIALS", "AUTH_EMAIL_TAKEN", "AUTH_RATE_LIMITED", "ADMIN_REQUIRED", "PREFERENCES_UNAVAILABLE", "AI_UNAVAILABLE", "AI_INVALID_REQUEST", "AI_INVALID_ARTIFACT", "AI_REFERENCE_FAILED", "AI_CROSS_CHECK_FAILED", "AI_REPAIR_EXHAUSTED", "AI_NOT_FOUND", "AI_PATCH_UNVERIFIED", "AI_PATCH_UNAPPROVED"]
+                "description": "Stable gateway error code. The envelope adds non-query codes (NOT_FOUND, the AUTH_* set, ADMIN_REQUIRED and CSRF_REFUSED) to the QueryResult error set.",
+                "enum": ["EMPTY_QUERY", "QUERY_SYNTAX_ERROR", "QUERY_RUNTIME_ERROR", "QUERY_TIMEOUT", "RESULT_LIMIT_EXCEEDED", "ENVIRONMENT_UNAVAILABLE", "DIALECT_MISMATCH", "PERSISTENCE_FAILED", "EVALUATION_ERROR", "INVALID_REQUEST", "NOT_FOUND", "AUTH_REQUIRED", "AUTH_INVALID_INPUT", "AUTH_INVALID_CREDENTIALS", "AUTH_EMAIL_TAKEN", "AUTH_RATE_LIMITED", "ADMIN_REQUIRED", "CSRF_REFUSED", "PREFERENCES_UNAVAILABLE", "AI_UNAVAILABLE", "AI_INVALID_REQUEST", "AI_INVALID_ARTIFACT", "AI_REFERENCE_FAILED", "AI_CROSS_CHECK_FAILED", "AI_REPAIR_EXHAUSTED", "AI_NOT_FOUND", "AI_PATCH_UNVERIFIED", "AI_PATCH_UNAPPROVED", "AI_RATE_LIMITED"]
               },
               "message": {"type": "string"},
               "detail": {"type": ["string", "null"]}

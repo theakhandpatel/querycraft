@@ -1,4 +1,5 @@
 import Icon from '../ui/Icon';
+import PageHead from '../ui/PageHead';
 import Ring from '../ui/Ring';
 import DialectBadge from '../ui/DialectBadge';
 import { useStore } from '../../state/store';
@@ -28,16 +29,15 @@ export default function HomeScreen() {
 
   return (
     <div className="content">
-      <div className="pagehead">
-        <div>
-          <div className="eyebrow">Home</div>
-          <h1>Keep learning</h1>
-          <p>Continue the course you started, keep your notes, or discover something new.</p>
-        </div>
-        {isAdmin && (
+      <PageHead
+        eyebrow="Home"
+        title="Keep learning"
+        action={isAdmin && (
           <button className="primary" onClick={() => s.showScreen('create')}><Icon name="sparkles" />Create a course</button>
         )}
-      </div>
+      >
+        <p>Continue the course you started, keep your notes, or discover something new.</p>
+      </PageHead>
 
       <div className="continue">
         <div style={{ flex: 1, minWidth: 'min(280px, 100%)' }}>
@@ -99,10 +99,10 @@ export default function HomeScreen() {
             {notes.length === 0 ? (
               <div className="empty">No notes yet. Use “Add a note” while reading a chapter.</div>
             ) : (
-              notes.slice(0, 4).map((n, i) => {
+              notes.slice(0, 4).map((n) => {
                 const cc = COURSES.find((c) => c.id === n.course) || course;
                 return (
-                  <div className="reportrow" key={i}>
+                  <div className="reportrow" key={`${n.kind}-${n.ts}`}>
                     <span><Icon name={n.kind === 'bookmark' ? 'bookmark' : 'note'} style={{ verticalAlign: -2 }} /> {n.text}</span>
                     <span className="muted">{courseShort(cc)} · ch {n.lesson}</span>
                   </div>

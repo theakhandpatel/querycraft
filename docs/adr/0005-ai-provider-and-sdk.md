@@ -130,7 +130,7 @@ about, all read from the repository on 2026-10-15:
 | Measurement | Value |
 | --- | --- |
 | Model surface the app owns | 2 methods (`Descriptor`, `Complete`) + a descriptor; `provider.go` is 51 lines |
-| What the model may see | `ProviderRequest` fields only; the reference solution is structurally absent |
+| What the model may see | `ProviderRequest` fields only; the reference solution is structurally absent for generation, and for the tutor the expected result may appear only after an attempt while the reference query never does (ADR 0008) |
 | Vendor SDK in the build | none, `backend/go.mod` has 4 direct deps, none an AI SDK |
 | Marginal cost of the transport | 0 new modules; `net/http` and `encoding/json` from the standard library |
 | Policy owned by us | 7 `Limits` fields + `ProviderRequest.MaxOutputBytes`, versus a library's retry/backoff defaults |

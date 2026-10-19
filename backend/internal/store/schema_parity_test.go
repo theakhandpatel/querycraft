@@ -145,7 +145,7 @@ func TestEveryDDLKindRendersATypeInBothDialects(t *testing.T) {
 // text of the scripts; this one pins what the engines did with them.
 func TestMetadataSchemaMatchesBothCatalogs(t *testing.T) {
 	ctx := context.Background()
-	srv := pgtest.Start(t)
+	srv := pgtest.Shared(t)
 
 	postgres, err := NewPostgres(ctx, srv.DSN)
 	if err != nil {

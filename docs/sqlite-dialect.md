@@ -11,8 +11,8 @@ The machine-readable half of this document is the dialect profile:
 | --- | --- |
 | `contracts/dialects/sqlite.json` | The language-neutral profile: capabilities, the affinity algorithm, the value-encoding rules, and the ordered message-to-code table. It is the file both languages read, like `contracts/fixtures/` is for the evaluator. |
 | `backend/internal/dialect/sqlite.json` | The Go side's embedded copy. `go:embed` cannot reference a path outside its package directory, so the Go package embeds a byte-identical mirror and `TestEmbeddedProfileMatchesContract` fails the build's tests if the two ever differ. Copy the contract file over the mirror; never edit one alone. |
-| `backend/internal/dialect/dialect.go`, `sqlite.go` | `Profile`/`ByName`, `ClassifyError`, `Affinity`, `EncodeValue`: the reader. |
-| `backend/internal/dialect/dialect_test.go` | The table tests. One case per contract code and one per affinity class, plus the shape checks on the profile itself. |
+| `backend/internal/dialect/dialect.go`, `sqlite.go` | `Profile`/`SQLite()`, `ClassifyError`, `EncodeValue`: the reader. |
+| `backend/internal/dialect/dialect_test.go` | The table tests. One case per contract code, plus the shape checks on the profile itself. |
 | `backend/internal/dataset/mapping.json` | Column-by-column mapping of the commerce dataset between the dialects, with a reason on every row where they diverge. |
 | `scripts/dataset-map-audit.mjs` | The audit of that mapping: `node scripts/dataset-map-audit.mjs` (`make audit-dataset-map`). It recomputes each column's affinity from SQLite's algorithm rather than trusting the manifest, and fails on a missing column, an unmapped column, a type or affinity disagreement, a mismatch without a reason, a row-count drift, or a missing §7.1 edge case. |
 
@@ -115,8 +115,7 @@ the suite), `TestReachableCodesAreTheEngineOnes` (the five reachable codes and
 the three that must never appear), `TestClassifyErrorNeverEmitsExecutorCodes`
 (the corpus cannot produce an executor code), `TestClassifyNilErrorHasNoCode`
 (a nil error has no code at all), `TestErrorClassificationShape` (rule
-shape, ordering, and the catch-all position) and `TestErrorCodesAreClosed`
-(the closed enum), and
+shape, ordering, and the catch-all position), and
 `TestEmbeddedProfileMatchesContract` (the Go mirror is the contract file).
 
 ## Table 2: value encoding
@@ -141,8 +140,6 @@ column therefore arrives as its stored text on both sides.
 | `TEXT` | string | Verbatim. No ISO-8601 parsing, no numeric coercion: a date stays the same text it was stored as, and a numeric-looking string in a TEXT column stays a string. |
 | `BLOB` | string | `\x` + lowercase hex, which is PostgreSQL `bytea`'s text form and the convention `pglite.ts` already uses. |
 | `NULL` | `null` | SQL NULL, never the empty string and never zero. |
-| *(a boolean handed over as a `bool`)* | number | A `BOOLEAN`-declared column stores `1`/`0`; it is reported as an integer and is never coerced to `true`/`false`. Neither adapter produces a boolean: the storage class is `INTEGER`, so this is the encoder's defensive answer for a driver that hands one over. |
-| *(a date handed over as a `time.Time`)* | string | A `DATE`/`TIMESTAMP`-declared column stores ISO-8601 text and is reported **verbatim** by both adapters; the stored text is what a lesson compares. Neither side materialises a `time.Time`/`Date` (see the read-path note above), so the RFC3339 rule is only the encoder's defensive answer for a driver that hands one over: a version that reported a host `Date` instead would reintroduce the timezone shift the adapter-parity audit already found against PGlite. |
 
 **Column labels.** A result column's `type` label is the *declared* type
 verbatim (`sqlite3_column_decltype`: `INTEGER`, `TEXT`, `NUMERIC`, `VARCHAR(20)`)
@@ -151,8 +148,7 @@ and the fallback label `expression` for a column that never had one, such as
 `DATE` while every value in it is `TEXT`. A label is not a type.
 
 **Verified by:** `dialect_test.go`: `TestEncodeValue` (a case per storage class
-and per edge: the 2^53−1 boundary, `uint64` overflow, NaN, ±Infinity, an empty
-BLOB, and the defensive `time.Time`/`bool` fallbacks),
+and per edge: the 2^53−1 boundary, NaN, ±Infinity, and an empty BLOB),
 `TestEncodeValueIgnoresAffinity` (the same value encodes identically under all
 five affinity labels, `""` and a bogus label), `TestValueEncodingRulesAreDocumented`
 (every encoding rule carries its reason, the boundary is 9007199254740991, the
@@ -210,10 +206,9 @@ is this, really", and `STRICT` tables (3.37+) are how you ask for the promise
 back, one table at a time, and this dataset does not, so that the dynamic
 behaviour is visible.
 
-*Verified by:* `dialect_test.go::TestAffinity` (a case per class, plus
-`VARCHAR(20)`, `DECIMAL(10,2)`, `DATE`, `TIMESTAMP`, `BOOLEAN`, the empty
-declaration, and case-insensitivity), `TestAffinityRulesMatchTheProfile` (the
-profile's own `declared` map is executed), and
+*Verified by:* `dialect_test.go::TestAffinityRulesMatchTheProfile` (the
+profile's affinity rules name the five classes in order and its `declared` map
+uses only those classes), and
 `dataset-map-audit.mjs` (`affinity matches the SQLite algorithm` recomputes
 every mapped column's affinity from its declared type).
 
@@ -470,13 +465,12 @@ its dialect up front.
   (gateway, `modernc.org/sqlite`) and step 6 (browser wasm) turn the
   descriptions into assertions; step 8 runs the same statements through both
   adapters.
-- **No value crosses an adapter.** `EncodeValue` is tested against Go values the
-  driver is *expected* to hand back (`int64`, `float64`, `string`, `[]byte`,
-  `time.Time`, `bool`). What a SQLite driver materialises for a DATE column is
-  now settled: neither adapter does; both report the stored text (Table 2 and
-  the read-path note above), and the `time.Time` rule remains only the
-  encoder's defensive answer, so a driver that *did* materialise one could not
-  silently produce a `Date`.
+- **No value crosses an adapter.** `EncodeValue` is tested against the values
+  the shipped driver hands back (`int64`, `float64`, `string`, `[]byte`, `nil`;
+  see the read-path note above). What a SQLite driver materialises for a DATE
+  column is settled: the raw driver returns the stored text, so a
+  `DATE`-declared column arrives as its text and no `time.Time` reaches the
+  encoder.
 - **No feature version is pinned.** `window_functions` (3.25), the aggregate
   `FILTER` (3.30), `RETURNING` (3.35), `STRICT` (3.37), JSON1 (3.38) and
   `RIGHT`/`FULL JOIN` (3.39) are recorded in the profile as available; the

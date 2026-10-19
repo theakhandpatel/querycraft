@@ -272,7 +272,7 @@ Because the learner owns the course, a failed check can mean the learner is wron
 | `accepted_by_user` | The learner overrode a failure. Recorded separately and never counted as `passed`. |
 
 Two actions follow a failure, and they are separate because the intent differs:
-- **Explain my mistake.** A tutor call using the prompt, schema, the learner's query and the structured diff. Optional. It never changes status.
+- **Ask the tutor.** A conversation over the prompt, the dataset schema, the learner's query and the gateway's own run of it. Optional. It never changes status. The tutor may see the expected result after the learner has attempted the exercise, but never the reference query (ADR 0008).
 - **Report a problem with this exercise.** Starts the review flow in 6.5.
 
 **Accept my answer** needs no AI and is always available, so a wrong "failed" cannot block progress.
@@ -449,7 +449,7 @@ Nothing becomes visible to the learner before step 9.
 - AI is off until a provider is configured. Core features work without it.
 - Provider keys are held by the Go service and never sent to or stored in the browser.
 - The first verdict always comes from the deterministic evaluator. AI never computes results or sets pass and fail. Only the learner can override a failure (`accepted_by_user`) or approve a fix.
-- Tutoring uses the learner query, the actual result or error, the objective and the hint level. It does not reveal the reference solution.
+- Tutoring uses the learner query, the gateway's own run of it, the objective, the dataset schema, the result contract and, after an attempt, the expected result. It never receives or states the reference query (ADR 0008); the reference arms the no-solution guard only.
 - Retries, tokens, output size and concurrency are bounded.
 - Tool calls route through normal services: schema inspection, query execution, evaluation, reset, save draft. No shell or filesystem tools.
 - The SDK is chosen after a spike against a provider-neutral interface, not by preference.

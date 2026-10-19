@@ -196,7 +196,7 @@ func TestPostgresRunsSurviveARestart(t *testing.T) {
 }
 
 func TestPostgresRunSaveIsAnUpsert(t *testing.T) {
-	srv := pgtest.Start(t)
+	srv := pgtest.Shared(t)
 	ctx := context.Background()
 	st, err := NewPostgres(ctx, srv.DSN)
 	if err != nil {
@@ -230,7 +230,7 @@ func TestPostgresRunSaveIsAnUpsert(t *testing.T) {
 // written with, and the HTTP layer turns a mismatch into 404. The store itself
 // must not lose or invent the owner.
 func TestPostgresRunsCarryTheirOwner(t *testing.T) {
-	srv := pgtest.Start(t)
+	srv := pgtest.Shared(t)
 	ctx := context.Background()
 	st, err := NewPostgres(ctx, srv.DSN)
 	if err != nil {

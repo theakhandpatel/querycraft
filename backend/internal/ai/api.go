@@ -52,6 +52,9 @@ const (
 	// CodeEnvironmentDown: no database is available to verify against, or a
 	// scratch environment could not be created.
 	CodeEnvironmentDown = "ENVIRONMENT_UNAVAILABLE"
+	// CodeRateLimited: the caller's account spent its tutor budget. It is not
+	// CodeUnavailable: the provider is up, the account asked too often.
+	CodeRateLimited = "AI_RATE_LIMITED"
 )
 
 // NewError builds an envelope error. It is the one constructor for the closed
@@ -63,24 +66,64 @@ func NewError(code, stage, message, detail string) *schema.Error {
 
 /* ---------- tutoring, critique, defects ---------- */
 
+// TutorTurn is one message in a tutor conversation, oldest first. Role is
+// "learner" or "tutor"; Text is untrusted prose.
+type TutorTurn struct {
+	Role string `json:"role"`
+	Text string `json:"text"`
+}
+
 // TutorRequest is the material a hint may use. It deliberately carries no
 // reference solution: the service cannot leak what it is not given.
+//
+// Context and Guards are set by the gateway and never decoded from the body, so
+// a client cannot hand the model an assembled context or a solution to compare
+// against. Context is the rendered, fenced block list the handler built from the
+// exercise, the dataset schema, the learner's own run and the expected result.
+// Guards are the reference queries the reply is checked against.
 type TutorRequest struct {
 	ChallengeID   string `json:"challenge_id,omitempty"`
+	CourseID      string `json:"course_id,omitempty"`
+	ExerciseID    string `json:"exercise_id,omitempty"`
 	SQL           string `json:"sql"`
 	Objective     string `json:"objective"`
 	ErrorCode     string `json:"error_code,omitempty"`
 	ErrorMessage  string `json:"error_message,omitempty"`
 	HintLevel     int    `json:"hint_level,omitempty"`
 	ResultSummary string `json:"result_summary,omitempty"`
+	// Turns is the conversation so far, oldest first, capped at MaxTutorTurns.
+	Turns []TutorTurn `json:"turns,omitempty"`
+
+	// Context is the gateway-rendered context block list. json:"-" keeps it off
+	// the wire: the client sends facts, the gateway derives the context.
+	Context string `json:"-"`
+	// Guards are the reference queries a reply must not contain. json:"-" for
+	// the same reason.
+	Guards []string `json:"-"`
+}
+
+// TutorContextSummary is the one thing the wire response carries about the
+// assembled context, so the drawer renders what the tutor saw instead of
+// guessing it.
+type TutorContextSummary struct {
+	ExerciseID      string   `json:"exercise_id"`
+	Dataset         string   `json:"dataset"`
+	Dialect         string   `json:"dialect"`
+	Tables          []string `json:"tables"`
+	TablesTruncated bool     `json:"tables_truncated"`
+	Expected        string   `json:"expected"`
+	ExpectedColumns int      `json:"expected_columns"`
+	ExpectedRows    int      `json:"expected_rows"`
+	LearnerResult   string   `json:"learner_result"`
 }
 
 // TutorResponse is a hint. RevealsSolution must be false.
 type TutorResponse struct {
-	Message         string            `json:"message"`
-	HintLevel       int               `json:"hint_level"`
-	RevealsSolution bool              `json:"reveals_solution"`
-	Provenance      schema.Provenance `json:"provenance"`
+	Message         string              `json:"message"`
+	HintLevel       int                 `json:"hint_level"`
+	RevealsSolution bool                `json:"reveals_solution"`
+	Provenance      schema.Provenance   `json:"provenance"`
+	Context         TutorContextSummary `json:"context"`
 }
 
 // CritiqueRequest asks for a review of the learner's own query.
@@ -170,18 +213,32 @@ type Runner interface {
 	Scratch(ctx context.Context, name string) (engine.Executor, func(), error)
 }
 
+/* ---------- the per-call timeout ---------- */
+
+// DefaultCallTimeoutMS is the shipped per-call AI timeout, in milliseconds. It
+// is the one home for the number: config.Settings.AITimeoutMS starts from it,
+// and a saved AI setting that names no timeout gets the same one
+// (httpapi/admin_ai.go). It is sized for the largest legitimate answer, not the
+// smallest: a course bundle is four chapters plus every exercise in one reply,
+// and a hosted model needed 58.5 s for one. The pipeline's run budget derives
+// from this value, so the two cannot disagree.
+const DefaultCallTimeoutMS = 120000
+
 /* ---------- limits ---------- */
 
 // Limits bound the cost of a generation run. Every field has a default; a zero
 // value means "use the default", never "unlimited".
 type Limits struct {
-	MaxOutputBytes     int           // largest provider reply or artifact prompt, in bytes
-	MaxSetupStatements int           // most setup statements one bundle may carry
-	MaxRepairs         int           // most repair calls per run
-	MaxHints           int           // most hints a challenge may carry
-	MaxConcurrent      int           // most generation runs in flight at once
-	Timeout            time.Duration // wall clock for one whole run
-	MaxPromptChars     int           // most characters in one request text field
+	MaxOutputBytes       int           // largest provider reply or artifact prompt, in bytes
+	MaxSetupStatements   int           // most setup statements one bundle may carry
+	MaxRepairs           int           // most repair calls per run
+	MaxHints             int           // most hints a challenge may carry
+	MaxConcurrent        int           // most generation runs in flight at once
+	Timeout              time.Duration // wall clock for one whole run
+	MaxPromptChars       int           // most characters in one request text field
+	MaxTutorTurns        int           // most turns in one tutor conversation
+	TutorTimeout         time.Duration // wall clock for one tutor turn
+	MaxTutorContextBytes int           // whole rendered tutor context, in bytes
 }
 
 // DefaultLimits are the bounds unless config says otherwise.
@@ -200,6 +257,12 @@ func DefaultLimits() Limits {
 		// client then reads as a failed request rather than a slow one.
 		Timeout:        120 * time.Second,
 		MaxPromptChars: 4000,
+		// A tutor turn is one provider call over material the gateway already
+		// has, so it gets a shorter budget than a whole generation run. A
+		// learner who waits past 30 s has moved on.
+		MaxTutorTurns:        8,
+		TutorTimeout:         30 * time.Second,
+		MaxTutorContextBytes: 32 << 10,
 	}
 }
 
@@ -225,6 +288,15 @@ func (l Limits) Merge(fallback Limits) Limits {
 	}
 	if l.MaxPromptChars <= 0 {
 		l.MaxPromptChars = fallback.MaxPromptChars
+	}
+	if l.MaxTutorTurns <= 0 {
+		l.MaxTutorTurns = fallback.MaxTutorTurns
+	}
+	if l.TutorTimeout <= 0 {
+		l.TutorTimeout = fallback.TutorTimeout
+	}
+	if l.MaxTutorContextBytes <= 0 {
+		l.MaxTutorContextBytes = fallback.MaxTutorContextBytes
 	}
 	return l
 }

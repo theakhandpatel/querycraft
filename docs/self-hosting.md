@@ -134,5 +134,10 @@ learners. `make verify-mock` runs that mode.
   role that cannot write. A signed-in learner gets a workspace of their own.
 - Login attempts are throttled per address and account. The defaults and the
   bounds live in `backend/internal/httpapi/login_throttle.go`.
-- Session tokens are bearer tokens with a TTL. Logout revokes the token, and a
-  revoked token answers `401`.
+- The SPA holds its session in the `qc_session` cookie: `HttpOnly`,
+  `SameSite=Lax`, `Path=/`, and `Secure` when the request arrived over TLS. A
+  cookie-authenticated mutating request must be same-origin or it is refused
+  with `403 CSRF_REFUSED`. Serve the SPA same-origin; a cross-origin page
+  cannot use the cookie.
+- API clients authenticate with the bearer token that signup and login return.
+  The token has a TTL, logout revokes it, and a revoked token answers `401`.

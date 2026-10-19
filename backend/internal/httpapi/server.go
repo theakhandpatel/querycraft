@@ -35,6 +35,7 @@ import (
 
 	"github.com/querycraft/sqlquery/backend/internal/ai"
 	"github.com/querycraft/sqlquery/backend/internal/ai/jobs"
+	"github.com/querycraft/sqlquery/backend/internal/auth"
 	"github.com/querycraft/sqlquery/backend/internal/engine"
 	"github.com/querycraft/sqlquery/backend/internal/envdb"
 	"github.com/querycraft/sqlquery/backend/internal/metrics"
@@ -52,12 +53,16 @@ type Config struct {
 	MaxConcurrent int
 
 	// LoginMaxFailures, LoginWindowMS and LoginMaxTracked bound failed sign-in
-	// attempts (see login_throttle.go). A non-positive value falls back to the
+	// attempts (see auth.NewThrottle). A non-positive value falls back to the
 	// shipped default, so leaving them unset cannot disable the limit or leave
 	// the table unbounded.
 	LoginMaxFailures int
 	LoginWindowMS    int
 	LoginMaxTracked  int
+
+	// TutorTurnsPerHour bounds one account's tutor turns (see tutor_rate.go).
+	// A non-positive value falls back to the shipped default.
+	TutorTurnsPerHour int
 }
 
 // Server wires an Executor and a Store behind the HTTP surface.
@@ -123,8 +128,12 @@ type Server struct {
 
 	// login bounds failed sign-in attempts per (client address, account). It is
 	// created in New, never nil, so handleLogin needs no nil check. See
-	// login_throttle.go.
-	login *loginThrottle
+	// auth.Throttle.
+	login *auth.Throttle
+
+	// tutorRate bounds tutor turns per account. It is created in New, never
+	// nil, so handleTutor needs no nil check. See tutor_rate.go.
+	tutorRate *tutorRate
 }
 
 // New builds a Server, filling unset config from the engine defaults.
@@ -145,14 +154,15 @@ func New(exec engine.Executor, st store.Store, cfg Config, log *slog.Logger) *Se
 		log = slog.Default()
 	}
 	srv := &Server{
-		exec:     exec,
-		store:    st,
-		cfg:      cfg,
-		log:      log,
-		metrics:  metrics.New(),
-		sem:      make(chan struct{}, cfg.MaxConcurrent),
-		dialects: []string{engine.DialectPostgres},
-		login:    newLoginThrottle(cfg.LoginMaxFailures, cfg.LoginWindowMS, cfg.LoginMaxTracked),
+		exec:      exec,
+		store:     st,
+		cfg:       cfg,
+		log:       log,
+		metrics:   metrics.New(),
+		sem:       make(chan struct{}, cfg.MaxConcurrent),
+		dialects:  []string{engine.DialectPostgres},
+		login:     auth.NewThrottle(cfg.LoginMaxFailures, cfg.LoginWindowMS, cfg.LoginMaxTracked),
+		tutorRate: newTutorRate(cfg.TutorTurnsPerHour, 0),
 	}
 	srv.declareMetrics()
 	return srv

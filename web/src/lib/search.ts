@@ -129,8 +129,11 @@ export function buildIndex(input: {
 
   const progress = input.progress;
   if (progress) {
+    /* `find` runs for every note and saved query; one Map makes each lookup
+       constant-time instead of a scan of the whole course list. */
+    const courseById = new Map(courses.map((c) => [c.id, c]));
     for (const n of progress.notes || []) {
-      const course = courses.find((c) => c.id === n.course);
+      const course = courseById.get(n.course);
       if (!course) continue;
       const isBookmark = n.kind === 'bookmark';
       docs.push({
@@ -146,7 +149,7 @@ export function buildIndex(input: {
       });
     }
     for (const q of progress.saved || []) {
-      const course = courses.find((c) => c.id === q.course);
+      const course = courseById.get(q.course);
       if (!course) continue;
       docs.push({
         id: `saved:${q.course}:${q.ts}`,
@@ -204,9 +207,10 @@ export function search(index: SearchDoc[], query: string, limit = 25): SearchHit
 /** Group hits by kind for the results panel, preserving rank within a group. */
 export function groupHits(hits: SearchHit[]): Array<{ kind: SearchKind; hits: SearchHit[] }> {
   const order: SearchKind[] = ['lesson', 'exercise', 'section', 'objective', 'bookmark', 'note', 'saved'];
-  return order
-    .map((kind) => ({ kind, hits: hits.filter((h) => h.doc.kind === kind) }))
-    .filter((g) => g.hits.length > 0);
+  return order.flatMap((kind): Array<{ kind: SearchKind; hits: SearchHit[] }> => {
+    const group = hits.filter((h) => h.doc.kind === kind);
+    return group.length > 0 ? [{ kind, hits: group }] : [];
+  });
 }
 
 export const SEARCH_KIND_LABEL: Record<SearchKind, string> = {

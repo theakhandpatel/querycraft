@@ -1,8 +1,8 @@
 import type { PipelineEvent } from '../types';
 
-interface PipelineOptions {
+interface PipelineOptions<TLine> {
   steps?: string[];
-  lines?: [string, string][];
+  lines?: readonly (readonly [string, TLine])[];
   stepMs: number;
   lineMs: number;
   startMs?: number;
@@ -16,9 +16,9 @@ interface PipelineOptions {
    timers, suppresses `all-done`, and resolves `{ ok: false }`. Without this the
    two timer chains kept ticking after the learner cancelled the build and then
    fired `all-done` anyway, which yanked them back into the review screen. */
-export function runPipeline(
-  opts: PipelineOptions,
-  onEvent: (e: PipelineEvent) => void,
+export function runPipeline<TLine>(
+  opts: PipelineOptions<TLine>,
+  onEvent: (e: PipelineEvent<TLine>) => void,
   signal?: AbortSignal
 ): Promise<{ ok: boolean }> {
   return new Promise((resolve) => {
@@ -75,7 +75,7 @@ export function runPipeline(
       if (settled) return;
       if (li < lines.length) {
         const line = lines[li];
-        onEvent({ type: 'log', t: line[0], html: line[1] });
+        onEvent({ type: 'log', t: line[0], line: line[1] });
         li++;
         later(emitLine, opts.lineMs);
       } else {

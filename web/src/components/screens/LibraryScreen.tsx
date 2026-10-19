@@ -1,4 +1,5 @@
 import Icon from '../ui/Icon';
+import PageHead from '../ui/PageHead';
 import DialectBadge from '../ui/DialectBadge';
 import { useStore } from '../../state/store';
 import { COURSES } from '../../data/curriculum';
@@ -32,16 +33,15 @@ export default function LibraryScreen() {
 
   return (
     <div className="content">
-      <div className="pagehead">
-        <div>
-          <div className="eyebrow">Library</div>
-          <h1>Find your next course</h1>
-          <p>Preview what a course teaches, then enroll to add it to your learning list with its own progress and notes.</p>
-        </div>
-        {isAdmin && (
+      <PageHead
+        eyebrow="Library"
+        title="Find your next course"
+        action={isAdmin && (
           <button className="primary" onClick={() => s.showScreen('create')}><Icon name="sparkles" />Create your own</button>
         )}
-      </div>
+      >
+        <p>Preview what a course teaches, then enroll to add it to your learning list with its own progress and notes.</p>
+      </PageHead>
 
       <div className="filterbar">
         {FILTERS.map((x) => (

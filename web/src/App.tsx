@@ -4,6 +4,7 @@ import Toast from './components/ui/Toast';
 import PromptDialog from './components/ui/PromptDialog';
 import { TopBar, NavDrawer } from './components/Shell';
 import TablesDrawer from './components/TablesDrawer';
+import TutorDrawer from './components/TutorDrawer';
 import ChaptersDrawer from './components/ChaptersDrawer';
 import Modals from './components/Modals';
 import HomeScreen from './components/screens/HomeScreen';
@@ -13,6 +14,7 @@ import CreateScreen from './components/screens/CreateScreen';
 import BuildingScreen from './components/screens/BuildingScreen';
 import ReviewScreen from './components/screens/ReviewScreen';
 import ManageScreen from './components/screens/ManageScreen';
+import RunsScreen from './components/screens/RunsScreen';
 import LessonScreen from './components/screens/LessonScreen';
 import WorkbookScreen from './components/screens/WorkbookScreen';
 import ProgressScreen from './components/screens/ProgressScreen';
@@ -30,6 +32,7 @@ const SCREENS = {
   building: BuildingScreen,
   review: ReviewScreen,
   manage: ManageScreen,
+  runs: RunsScreen,
   lesson: LessonScreen,
   workbook: WorkbookScreen,
   'workbook-progress': ProgressScreen,
@@ -52,6 +55,7 @@ export default function App() {
            navigation. The search field closes its own panel and stops the
            event before it reaches here. */
         if (s.modal) s.closeModal();
+        else if (s.tutorTarget) s.closeTutor();
         else if (s.tablesOpen) s.setTablesOpen(false);
         else if (s.chaptersOpen) s.setChaptersOpen(false);
         else if (s.navOpen) s.setNavOpen(false);
@@ -105,6 +109,7 @@ export default function App() {
         </main>
       </div>
       <TablesDrawer />
+      <TutorDrawer />
       <ChaptersDrawer />
       <NavDrawer />
       <Modals />

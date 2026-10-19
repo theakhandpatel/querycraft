@@ -17,10 +17,10 @@ Module: `github.com/querycraft/sqlquery/backend`.
 | `POST` | `/query` | Run a single statement and return a `QueryResult` (columns, rows, row count, truncation, duration, stable error code). |
 | `POST` | `/answers/evaluate` | Run the learner's SQL and grade it against the exercise's result contract; returns `passed` plus detail. |
 | `GET` | `/datasets/{id}/tables` | Dataset introspection (schema, row counts, preview) without a live database. Only `commerce` is defined. |
-| `POST` | `/auth/signup` | Create a **learner** account and start a session; `201` with `{user, token, expiresAt}`. `409 AUTH_EMAIL_TAKEN` on a duplicate address. |
-| `POST` | `/auth/login` | Exchange email + password for a session token. Unknown email and wrong password both return the same `401 AUTH_INVALID_CREDENTIALS`. Repeated failures for one address against one account return `429 AUTH_RATE_LIMITED`. |
-| `POST` | `/auth/logout` | Revoke the bearer token. A revoked or absent token is refused with `401 AUTH_REQUIRED`. |
-| `GET` | `/auth/me` | The account behind the bearer token. |
+| `POST` | `/auth/signup` | Create a **learner** account and start a session; `201` with `{user, token, expiresAt}`. Sets the `qc_session` cookie for the SPA; the token is for API clients. `409 AUTH_EMAIL_TAKEN` on a duplicate address. |
+| `POST` | `/auth/login` | Exchange email + password for a session. Unknown email and wrong password both return the same `401 AUTH_INVALID_CREDENTIALS`. Repeated failures for one address against one account return `429 AUTH_RATE_LIMITED`. |
+| `POST` | `/auth/logout` | Revoke the session and clear the cookie. A revoked or absent session is refused with `401 AUTH_REQUIRED`. |
+| `GET` | `/auth/me` | The account behind the session (cookie or bearer token). |
 | `GET` | `/progress/{course}` | 🔒 Load the caller's progress snapshot for a course. |
 | `PUT` | `/progress/{course}` | 🔒 Replace the caller's JSON progress snapshot for a course. |
 | `POST` | `/events` | 🔒 Append an audit/attempt event; returns `202 Accepted`. |
@@ -75,14 +75,26 @@ auth surface. Error responses are shaped as
 ## Accounts and sessions
 
 Progress and events are **owner-scoped**: each read and write names the account
-it belongs to, and that id always comes from the bearer token, never from the
-request body. Two accounts can therefore hold independent snapshots for the same
-course, and a body field cannot redirect a write onto another user's rows.
+it belongs to, and that id always comes from the session, never from the request
+body. Two accounts can therefore hold independent snapshots for the same course,
+and a body field cannot redirect a write onto another user's rows.
 
-Transport is an opaque session token (`Authorization: Bearer <token>`), 256 bits
-from `crypto/rand`, stored in `app.sessions` with a 30-day TTL. Revocation is a
-`DELETE`, so logout is immediate; there is no signature key to leak. Passwords
-are bcrypt (`golang.org/x/crypto/bcrypt`).
+The SPA authenticates with the `qc_session` cookie: `HttpOnly`, `SameSite=Lax`,
+`Path=/`, and `Secure` when the request arrived over TLS. The browser sends it on
+same-origin requests, so the page never stores the credential where a script
+could read it. A mutating request that arrives with the cookie is refused with
+`403 CSRF_REFUSED` unless its `Origin`/`Sec-Fetch-Site` says same-origin; a
+request with neither header is a non-browser client and is allowed. Cross-origin
+cookie auth is not supported, because `SameSite=Lax` withholds the cookie
+cross-site and the gateway's CORS policy uses the wildcard origin; the SPA must
+be served same-origin, which the single binary does.
+
+API clients use the opaque bearer token that signup and login return in the
+response body (`Authorization: Bearer <token>`); the header wins over the cookie
+when both are present, and a present-but-invalid token does not fall back to
+the cookie. The token is 256 bits from `crypto/rand`, stored in `app.sessions`
+with a 30-day TTL. Revocation is a `DELETE`, so logout is immediate; there is no
+signature key to leak. Passwords are bcrypt (`golang.org/x/crypto/bcrypt`).
 
 A fresh install seeds one administrator (`admin_email`, default
 `admin@querycraft.local`) whose default password is **empty**, so a local install
@@ -95,8 +107,8 @@ Seeding is idempotent and never rewrites the password of an existing account.
 
 Anonymous access is still allowed for the public surface (`/health`,
 `/capabilities`, `/query`, `/answers/evaluate`, `/datasets/{id}/tables`,
-`/openapi.json`, `/docs`). A missing or unknown token leaves those alone; every
-other route answers `401 AUTH_REQUIRED`.
+`/openapi.json`, `/docs`). A missing or unknown session leaves those alone;
+every other route answers `401 AUTH_REQUIRED`.
 
 ### Failed sign-in throttling
 
@@ -127,7 +139,9 @@ It cannot be used to disable the limit or leave the table unbounded.
 
 Every response carries an `X-Request-Id`; a caller-supplied `X-Request-Id` is
 echoed back. CORS is open (`Access-Control-Allow-Origin: *`), permits the
-`Authorization` request header, and preflight `OPTIONS` returns `204`.
+`Authorization` request header, and preflight `OPTIONS` returns `204`. The
+wildcard origin cannot be combined with credentials, so a cross-origin page
+cannot authenticate with the session cookie; the SPA runs same-origin.
 
 ## Configuration
 
@@ -328,3 +342,37 @@ not gateway configuration) is set, so the default
 QC_TEST_DATABASE_URL='postgres://querycraft:querycraft@localhost:5432/querycraft_test?sslmode=disable' \
   go test ./internal/httpapi -run TestGatewayIntegration -v
 ```
+
+## The test fixture
+
+Tests that need a real server use `internal/pgtest`. It starts the same
+embedded PostgreSQL the gateway ships, so a test runs against the commerce
+dataset and the restricted learner role with no Docker and no network.
+
+| Entry point | Cluster | Database | Use it for |
+| --- | --- | --- | --- |
+| `pgtest.Shared(t)` | one per package test binary, started on first use | a private database per test, copied from the dataset template with `CREATE DATABASE ... TEMPLATE` | the default. A test gets a virgin database, and two tests cannot meet. |
+| `pgtest.Start(t)` | one per test | the test's own database | a test that stops and restarts its own server (the `SurviveARestart` pattern), or one that deliberately leaks cluster-global state. |
+
+A package that calls `pgtest.Shared` declares one `TestMain`:
+
+```go
+func TestMain(m *testing.M) { pgtest.Main(m) }
+```
+
+`pgtest.Main` stops the package cluster after the tests and exits with their
+code. A shared database is a copy of the dataset template, so a test that needs
+the app metadata schema opens it through `store.NewPostgres`, exactly as
+production does.
+
+The first boot pays for `initdb` and the dataset seed, then caches the result as
+a golden cluster under `.data/pg/golden`. Every later boot copies that cluster,
+so a shared test binary pays the expensive half once.
+
+A test binary killed with `SIGKILL` is the one cleanup `t.Cleanup` and
+`pgtest.Main` cannot serve: the postmaster would survive as an orphan.
+`startShared` leaves a detached watchdog behind for that case. The watchdog
+polls the test binary's pid, then kills the postmaster from the data directory
+and removes the cluster. It runs in its own process group, so a signal aimed at
+the test run cannot take it down with the binary it is watching.
+

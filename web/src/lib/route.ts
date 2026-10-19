@@ -20,6 +20,7 @@
  *   #/lab/:challengeId            the lab, on one registered challenge
  *   #/appearance                  appearance settings
  *   #/create                      the course-authoring flow (admin surface)
+ *   #/runs                        the agent-run audit trail (owner-scoped)
  *
  * Anything else — a fragment that is not one of ours, or one that names a
  * course or chapter the catalog does not have — resolves to Home. `unknown` on
@@ -42,7 +43,8 @@ type Route =
   | { name: 'progress' }
   | { name: 'appearance' }
   | { name: 'create' }
-  | { name: 'manage' };
+  | { name: 'manage' }
+  | { name: 'runs' };
 
 /** The slice of app state the fragment is bound to. */
 interface RouteState {
@@ -115,6 +117,8 @@ function parseRoute(hash: string): Route | null {
       return parts.length === 1 ? { name: 'create' } : null;
     case 'manage':
       return parts.length === 1 ? { name: 'manage' } : null;
+    case 'runs':
+      return parts.length === 1 ? { name: 'runs' } : null;
     case 'lab':
       if (parts.length === 1) return { name: 'lab', challengeId: null };
       if (parts.length === 2 && second) return { name: 'lab', challengeId: second };
@@ -160,6 +164,8 @@ export function routeTarget(hash: string): RouteTarget {
       return { hash: '#/create', screen: 'create', courseId: null, chapterIndex: null, challengeId: null, unknown: false };
     case 'manage':
       return { hash: '#/manage', screen: 'manage', courseId: null, chapterIndex: null, challengeId: null, unknown: false };
+    case 'runs':
+      return { hash: '#/runs', screen: 'runs', courseId: null, chapterIndex: null, challengeId: null, unknown: false };
     case 'lab':
       return {
         hash: route.challengeId ? `#/lab/${encodeURIComponent(route.challengeId)}` : '#/lab',
@@ -251,6 +257,8 @@ export function hashForState(state: RouteState): string {
       return '#/create';
     case 'manage':
       return '#/manage';
+    case 'runs':
+      return '#/runs';
     case 'challenge-lab':
       return state.challengeId ? `#/lab/${encodeURIComponent(state.challengeId)}` : '#/lab';
     case 'course':

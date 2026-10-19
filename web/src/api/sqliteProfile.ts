@@ -139,7 +139,7 @@ const MAX_SAFE_INTEGER = Number(contract.value_encoding.integer.max_safe_integer
  */
 export function sqliteColumnTypeLabel(declared: string | null | undefined): string {
   const fallback = contract.value_encoding.column_type_label?.fallback ?? 'expression';
-  const label = typeof declared === 'string' ? declared.trim() : '';
+  const label = (declared ?? '').trim();
   return label === '' ? fallback : label;
 }
 
@@ -151,8 +151,10 @@ const BLOB_PREFIX = contract.value_encoding.blob.prefix ?? '\\x';
  * deliberately not a parameter, because applying it would report a value the
  * engine never stored.
  */
+// oxlint-disable-next-line anti-slop/no-unknown-parameters -- a raw engine value is untrusted; this is the storage-class encode boundary.
 export function encodeSqliteValue(raw: unknown): RowValue {
   if (raw === null || raw === undefined) return null;
+  // oxlint-disable-next-line anti-slop/no-runtime-typeof -- the engine's storage classes are runtime JS values; this switch is their decode boundary.
   switch (typeof raw) {
     case 'boolean':
       /* No boolean class: TRUE/FALSE are 1/0 and the domain is unenforced, so

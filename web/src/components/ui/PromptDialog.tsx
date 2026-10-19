@@ -16,14 +16,16 @@ function PromptForm({ req, onCancel }: { req: PromptRequest; onCancel: () => voi
      learner opened it to type. Escape and the backdrop are the exits. */
   useDrawerFocus(true, formRef, inputRef);
 
+  /* The dialog is mounted per request (the provider renders nothing between
+     prompts), so `value` already starts from this request's default. Focusing on
+     mount is all that is left; there is no state to reset when a prop changes. */
   useEffect(() => {
-    setValue(req.defaultValue ?? '');
     const input = inputRef.current;
     if (input) {
       input.focus();
       input.select();
     }
-  }, [req]);
+  }, []);
 
   const trimmed = value.trim();
   const blocked = req.required !== false && trimmed === '';

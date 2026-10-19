@@ -1,7 +1,8 @@
-import React, { useRef } from 'react';
+import { useRef } from 'react';
 import Icon from './ui/Icon';
 import SearchBox from './SearchBox';
-import { useStore, SCREEN_NAV } from '../state/store';
+import { useStore } from '../state/store';
+import { SCREEN_NAV } from '../state/screens';
 import { courseShort, findExercise, activeModules, lessonPercent } from '../lib/model';
 import type { FoundExercise } from '../lib/model';
 import { useDrawerFocus } from './ui/useDrawerFocus';
@@ -21,14 +22,17 @@ import { useDrawerFocus } from './ui/useDrawerFocus';
  * in the Workbook or the Library.
  */
 
-function NavLink({ icon, label, active, badge, variant, onClick }: { icon: string; label: string; active?: boolean; badge?: React.ReactNode; variant: 'top' | 'drawer'; onClick: () => void }) {
+function NavLink({ icon, label, active, badge, variant, onClick }: { icon: string; label: string; active?: boolean; badge?: string; variant: 'top' | 'drawer'; onClick: () => void }) {
   const top = variant === 'top';
+  /* With a badge the accessible name has to contain the badge's visible text as
+     well as the label, so the name is the label plus the badge. */
+  const name = badge == null ? label : `${label} ${badge}`;
   return (
     <button
       className={`${top ? 'toplink' : 'nav'}${active ? ' active' : ''}`}
       onClick={onClick}
       aria-current={top && active ? 'page' : undefined}
-      aria-label={label}
+      aria-label={name}
       title={label}
     >
       <Icon name={icon} />
@@ -37,7 +41,15 @@ function NavLink({ icon, label, active, badge, variant, onClick }: { icon: strin
           aria-label and title keep the name reachable with a screen reader and
           a pointer. */}
       <span className={top ? 'toplink-label' : 'navtext'}>{label}</span>
-      {badge != null && <span className="navbadge">{badge}</span>}
+      {badge != null && (
+        /* The badge is visible text inside the button. aria-label overrides the
+           name the control would otherwise take from its content, so it has to
+           carry the badge too, or "0%" is visible text the name does not contain
+           (the a11y audit's label-content-name-mismatch). The name and the badge
+           text both carry one separating space: the flex item trims it on
+           screen, and axe compares the name against the unstripped text. */
+        <span className="navbadge">{` ${badge}`}</span>
+      )}
     </button>
   );
 }
@@ -223,7 +235,7 @@ export function NavDrawer() {
               {session?.user.name || 'Workspace'}<br />
               <span className="muted">{session?.user.email || 'Not signed in'}</span>
             </div>
-            {session?.token && (
+            {s.api.mode === 'http' && session && (
               <button className="small ghost" onClick={() => void s.logout()} aria-label="Sign out" title="Sign out">
                 <Icon name="logout" />
               </button>

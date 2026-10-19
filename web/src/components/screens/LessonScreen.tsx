@@ -22,10 +22,13 @@ export default function LessonScreen() {
      reflected here without a remount. */
   const dialect = useChapterDialect(m, course);
 
+  /* `moduleId` names the value the scroll reset depends on; `m && m.id` hid it
+     behind an expression, which is what React Doctor flags. */
+  const moduleId = m?.id;
   useEffect(() => {
     const ws = document.querySelector('.workspace');
     if (ws) ws.scrollTop = 0;
-  }, [activeLesson, m && m.id]);
+  }, [activeLesson, moduleId]);
 
   /* Measure study time instead of inventing it.
    *
@@ -123,6 +126,7 @@ export default function LessonScreen() {
             </div>
             <p>{m.summary}</p>
             <ul className="objectives">
+              {/* A fixed-length authored list; the order is the curriculum's. */}
               {(m.objectives || []).map((o, i) => (
                 <li key={i}><Icon name="check" /><span>{o}</span></li>
               ))}
@@ -154,6 +158,7 @@ export default function LessonScreen() {
               {outline.map((g, i) => {
                 const ec = g.exIds.length;
                 return (
+                  /* The index is the identity: jumpToSection(i) navigates to it. */
                   <button className="idxrow" key={i} onClick={() => jumpToSection(i)}>
                     <span className="idxnum">{i + 1 < 10 ? '0' : ''}{i + 1}</span>
                     <span className="idxlabel">{g.title}</span>

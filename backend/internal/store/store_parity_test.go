@@ -47,7 +47,7 @@ func storeMethodsRequired() []string {
 // and the JSON column.
 func TestStoreMethodsMatchAcrossBackends(t *testing.T) {
 	ctx := context.Background()
-	srv := pgtest.Start(t)
+	srv := pgtest.Shared(t)
 
 	postgres, err := NewPostgres(ctx, srv.DSN)
 	if err != nil {

@@ -33,16 +33,16 @@ export interface ExportBundle {
 }
 
 /** Every non-empty editor draft currently held in storage. */
-export function collectDrafts(storage: Storage | null = safeStorage()): Record<string, string> {
-  const drafts: Record<string, string> = {};
-  if (!storage) return drafts;
+export function collectDrafts(storage: Storage | null = safeStorage()) {
+  const drafts = new Map<string, string>();
+  if (!storage) return Object.fromEntries(drafts);
   for (let i = 0; i < storage.length; i++) {
     const key = storage.key(i);
     if (!key || !key.startsWith(DRAFT_PREFIX)) continue;
     const value = storage.getItem(key);
-    if (value != null && value !== '') drafts[key.slice(DRAFT_PREFIX.length)] = value;
+    if (value != null && value !== '') drafts.set(key.slice(DRAFT_PREFIX.length), value);
   }
-  return drafts;
+  return Object.fromEntries(drafts);
 }
 
 export function buildExportBundle(

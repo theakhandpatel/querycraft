@@ -212,7 +212,7 @@ func TestPostgresChallengesSurviveARestart(t *testing.T) {
 // Saving the same challenge id twice is an update, not a duplicate: the lab
 // re-runs and re-activates rather than failing on a unique violation.
 func TestPostgresChallengeSaveIsAnUpsert(t *testing.T) {
-	srv := pgtest.Start(t)
+	srv := pgtest.Shared(t)
 	ctx := context.Background()
 	st, err := NewPostgres(ctx, srv.DSN)
 	if err != nil {

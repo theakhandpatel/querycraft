@@ -50,6 +50,7 @@ globalThis.window = {
   },
 };
 const runResume = require('/tmp/qc-runresume.cjs');
+const courseWarmup = require('/tmp/qc-course-warmup.cjs');
 
 let failed = 0;
 function check(name, cond, detail) {
@@ -630,6 +631,61 @@ console.log('a browser that refuses storage is not a broken run');
   }
   check('and writing to it throws nothing, because the run is the gateway’s', threw === null, String(threw));
   globalThis.window = realWindow;
+}
+
+/* ---------- opening a stored course prepares its workspace ----------
+ *
+ * A stored course's exercises were verified in a workspace that had the
+ * course's setup applied. Opening the course must apply it too, or the first
+ * exercise dies with "relation does not exist" until the learner resets by
+ * hand. The warm-up fires once per course change: the engine starts and a
+ * stored course is prepared; a built-in course is warmed but never prepared,
+ * because it has no stored setup; and a refusal is reported, never thrown. */
+
+console.log('opening a stored course prepares its workspace once');
+{
+  const calls = [];
+  const api = {
+    warmUp: (dataset, dialect) => calls.push(['warm', dataset, dialect]),
+    prepareEnvironment: (courseId, dialect) => {
+      calls.push(['prepare', courseId, dialect]);
+      return Promise.resolve({ ok: true, setup_statements: 2 });
+    },
+  };
+
+  courseWarmup.warmUpCourse(api, 'commerce', 'postgresql', 'cte-revenue', () => {});
+  check('one open starts the engine once', calls.filter((c) => c[0] === 'warm').length === 1, calls);
+  check('one open prepares the stored course once', calls.filter((c) => c[0] === 'prepare').length === 1, calls);
+  check('prepare names the stored course', calls.find((c) => c[0] === 'prepare')?.[1] === 'cte-revenue', calls);
+  check('prepare carries the course dialect', calls.find((c) => c[0] === 'prepare')?.[2] === 'postgresql', calls);
+
+  calls.length = 0;
+  courseWarmup.warmUpCourse(api, 'commerce', 'postgresql', null, () => {});
+  check('a built-in course is warmed', calls.filter((c) => c[0] === 'warm').length === 1, calls);
+  check('a built-in course is never prepared', calls.some((c) => c[0] === 'prepare') === false, calls);
+
+  calls.length = 0;
+  courseWarmup.warmUpCourse(api, 'commerce', 'postgresql', 'first', () => {});
+  courseWarmup.warmUpCourse(api, 'commerce', 'postgresql', 'second', () => {});
+  check('each course change prepares its own course', calls.filter((c) => c[0] === 'prepare').map((c) => c[1]).join(',') === 'first,second', calls);
+
+  let refusal = null;
+  const failing = {
+    warmUp: () => {},
+    prepareEnvironment: () => Promise.reject(new Error('The learner workspace is unavailable.')),
+  };
+  courseWarmup.warmUpCourse(failing, 'commerce', 'postgresql', 'cte-revenue', (m) => { refusal = m; });
+  await new Promise((resolve) => setTimeout(resolve, 0));
+  check('a refused prepare is reported, not thrown', refusal === 'The learner workspace is unavailable.', refusal);
+
+  let fallback = null;
+  const opaque = {
+    warmUp: () => {},
+    prepareEnvironment: () => Promise.reject('not an error'),
+  };
+  courseWarmup.warmUpCourse(opaque, 'commerce', 'postgresql', 'cte-revenue', (m) => { fallback = m; });
+  await new Promise((resolve) => setTimeout(resolve, 0));
+  check('a refusal with no message still shows one', fallback === 'The course workspace could not be prepared.', fallback);
 }
 
 server.close();

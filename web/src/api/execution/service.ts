@@ -4,7 +4,7 @@ import type { AiAvailability } from '../aiContract';
 import { warmUpDataset } from '../pglite';
 import { STORE_DRAFTS, idbGet, idbPut } from '../idb';
 import type { ApiConfig, ApiLogEntry, ExecutionApi } from '../../types';
-import { ExecutionService, readAuthToken } from './shared';
+import { ExecutionService, readAuthUser } from './shared';
 import type { ExecutionServiceShape, NoteFn } from './shared';
 import { PGLITE_CONFIG, pgliteLayer } from './browser';
 import { httpLayer } from './http';
@@ -66,15 +66,16 @@ export function createExecutionApi(opts: {
       }),
     );
 
-  /* Availability is read once per signed-in session — the token identifies the
-     session — and remembered, the way the store already caches engine
-     capabilities, so a screen can render its controls on the first frame
-     instead of flashing "unavailable". `aiAvailability()` resolves, never
-     rejects: an unreadable probe is an unavailable answer. */
+  /* Availability is read once per signed-in account — the stored account id is
+     the local marker for "a session is attached" — and remembered, the way the
+     store already caches engine capabilities, so a screen can render its
+     controls on the first frame instead of flashing "unavailable".
+     `aiAvailability()` resolves, never rejects: an unreadable probe is an
+     unavailable answer. */
   let availabilityKey: string | null = null;
   let availabilityPromise: Promise<AiAvailability> | null = null;
   const aiAvailability = (): Promise<AiAvailability> => {
-    const key = readAuthToken() ?? '';
+    const key = readAuthUser() ?? '';
     if (availabilityPromise && availabilityKey === key) return availabilityPromise;
     availabilityKey = key;
     availabilityPromise = call((svc) => svc.aiAvailability()).catch(() => unavailableAvailability());
@@ -104,6 +105,7 @@ export function createExecutionApi(opts: {
     getTables: (dataset, dialect) => call((svc) => svc.getTables(dataset, dialect)),
     getEnvironment: () => call((svc) => svc.getEnvironment()),
     resetEnvironment: (dataset, dialect, course) => call((svc) => svc.resetEnvironment(dataset, dialect, course)),
+    prepareEnvironment: (courseId, dialect) => call((svc) => svc.prepareEnvironment(courseId, dialect)),
     warmUp(dataset, dialect) {
       /* Fire and forget: nothing waits on a warm-up, and a rejection is already
          reported by the first real query. */
@@ -164,6 +166,7 @@ export function createExecutionApi(opts: {
     diagnostics: () => call((svc) => svc.diagnostics()),
     getCourse: (id) => call((svc) => svc.getCourse(id)),
     deleteCourse: (id) => call((svc) => svc.deleteCourse(id)),
+    updateCourse: (id, edits) => call((svc) => svc.updateCourse(id, edits)),
     approveCourse: (id) => call((svc) => svc.approveCourse(id)),
     submitGeneration: (req, kind) => call((svc) => svc.submitGeneration(req, kind)),
     generationJob: (id) => call((svc) => svc.generationJob(id)),
@@ -171,6 +174,8 @@ export function createExecutionApi(opts: {
     critique: (challengeId, req) => call((svc) => svc.critique(challengeId, req)),
     reportDefect: (req) => call((svc) => svc.reportDefect(req)),
     decidePatch: (patchId, approved) => call((svc) => svc.decidePatch(patchId, approved)),
+    listRuns: () => call((svc) => svc.listRuns()),
+    getRun: (id) => call((svc) => svc.getRun(id)),
   };
 }
 
