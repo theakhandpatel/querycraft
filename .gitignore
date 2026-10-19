@@ -30,3 +30,7 @@ backend/internal/webui/dist/*
 
 # Generated code-graph output (graphify).
 graphify-out/
+
+# Local product and design context, restored from history for design work.
+PRODUCT.md
+DESIGN.md
