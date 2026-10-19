@@ -4,12 +4,15 @@ Querycraft teaches SQL by having you write it. Lessons combine short readings
 with exercises you run against a real database, and each answer is graded by the
 rows it returns.
 
-The app ships eight courses and 52 chapters across PostgreSQL and SQLite.
+The library covers the clauses, joins, subqueries, CTEs, window functions,
+query plans, and the SQLite differences that matter. Every chapter runs; every
+answer is graded live.
 
 ## Courses and lessons
 
-- **Eight courses.** Analytics, joins, subqueries, query plans, foundations, and
-  three SQLite courses. Each course states its level, length, and dialect.
+- **A library to start from.** Analytics, joins, subqueries, query plans,
+  foundations, and three SQLite courses. Each course states its level, length,
+  and dialect. The library includes eight courses and 52 chapters.
 - **Lessons built for practice.** A chapter combines reading with one or two
   exercises and a worked example. Fenced Mermaid diagrams render as SVG.
 - **Library.** Browse every course, filter by topic or dialect, and start a
@@ -93,11 +96,10 @@ The app ships eight courses and 52 chapters across PostgreSQL and SQLite.
 
 ## Run it your way
 
-- **In the browser.** The default experience runs PostgreSQL in a Web Worker
-  with PGlite. It needs no server and works offline.
-- **On the gateway.** The Go service runs PostgreSQL or SQLite on the server and
-  adds accounts, stored courses, and the tutor. The app switches to it when it
-  answers on the same origin.
+- **In the browser.** The default experience runs PostgreSQL in the page, so
+  lessons, results, and progress work without a server or a network.
+- **On the gateway.** The hosted app runs PostgreSQL or SQLite on the server and
+  adds accounts, stored courses, and the tutor.
 - **One binary.** `make build` embeds the landing page and the app in the
   gateway, which serves both with the API and its documentation on one port. It
   starts its own PostgreSQL when no database is configured.

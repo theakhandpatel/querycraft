@@ -2,9 +2,11 @@
 
 # Querycraft
 
-Querycraft teaches SQL by having you write it against a real database. Each
-exercise is graded by the rows your query returns, not by the text you typed,
-so more than one correct answer can pass.
+Querycraft teaches SQL by having you write it against a real database. Start
+from a chapter on `SELECT` and `FROM`, joins, subqueries, CTEs, or query plans,
+and every answer is graded live by the rows it returns. When the library is not
+the course you need, describe the course you want and build it yourself. It gets
+the same live grading.
 
 ![A graded exercise: the query runs, the contract checks pass, and the answer is accepted](docs/assets/walkthrough-grade.gif)
 
@@ -34,22 +36,26 @@ For configuration, backups, and deployment, read
 
 ## What you can do
 
-- **Follow a course.** Eight courses and 52 chapters cover PostgreSQL and
-  SQLite. Lessons combine reading with SQL you run and check in the page.
-- **Get graded on results.** An exercise passes when its columns, row order,
-  and values match the expected result. The app explains which check failed.
+- **Learn from real chapters.** The library covers `SELECT` and `FROM`, joins,
+  subqueries, CTEs, window functions, and query plans. PostgreSQL and SQLite
+  each get their own path, including where the two diverge.
+- **Get graded live.** Every exercise runs against a real database and passes
+  only when its columns, row order, and values match the contract. Any correct
+  query passes; the feedback names the check that failed.
+- **Design your own course.** Describe what you want to get good at. The app
+  drafts an outline and chapters, verifies every exercise against the engine,
+  and lets you edit the result. Your course is graded live, like the built-in
+  ones.
 - **Work in your own database.** Signed-in learners get a private workspace
   copied from a sealed template. Writes, DDL, and transactions work there, and
   reset restores the sample data.
 - **Keep notes as you go.** Bookmarks, saved queries, notes, and progress live
   in your workbook. Search covers lessons, exercises, notes, bookmarks, and
   saved queries with <kbd>Cmd</kbd>+<kbd>K</kbd> or <kbd>Ctrl</kbd>+<kbd>K</kbd>.
+- **Choose the look.** Start from one of 18 themes, or build one from an accent
+  color. It follows your account across devices.
 - **Ask for help.** Every exercise has hints, a solution, and an optional tutor
   that sees your query and the error you hit.
-- **Build a course.** Describe what you want to learn, and the app can generate
-  a course whose exercises are checked against the engine before you see them.
-  Use the built-in provider, or connect an OpenAI-compatible service.
-- **Make it yours.** Choose one of 18 themes or build one from an accent color.
 
 ## Screenshots
 
@@ -59,25 +65,12 @@ For configuration, backups, and deployment, read
 | Home: the next chapter, your streak, and your effort. | A lesson: reading, diagrams, and a SQL cell. |
 | <img src="docs/assets/screens/06-passed.png" width="400" alt="A graded exercise"> | <img src="docs/assets/screens/09-tables-drawer.png" width="400" alt="The tables drawer"> |
 | A graded exercise. Every contract check passed. | The tables drawer: the live schema, sample rows, and reset. |
+| <img src="docs/assets/screens/12-create-course.png" width="400" alt="Create a course"> | <img src="docs/assets/screens/15-appearance.png" width="400" alt="Choose a theme"> |
+| Describe a course; every exercise is verified before you see it. | Choose a preset, or build a theme from an accent color. |
 
 The other screens are in [`docs/assets/screens/`](docs/assets/screens/). The
 [full walkthrough](docs/assets/walkthrough.mp4) shows the app on the built
 binary at 1920×1080.
-
-## How it works
-
-The app has two ways to run SQL. By default it runs PostgreSQL in your browser
-with PGlite, inside a Web Worker, so you need no server. The Go gateway runs
-PostgreSQL or SQLite on the server, serves the same app, and adds accounts,
-stored courses, and the tutor. In a production build, the app uses the gateway
-when it answers on its own origin.
-
-`make build` produces one binary, `backend/bin/querycraft`, that serves the
-landing page, the app, the API, and the API documentation on one port. It starts
-its own PostgreSQL when no database is configured.
-
-Read [Architecture](docs/architecture.md) for the components, the data model,
-and the request path.
 
 ## Documentation
 
