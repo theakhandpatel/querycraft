@@ -3095,3 +3095,14 @@ and the effect's cleanup aborts that signal.
 `npm run typecheck` clean, `npm run lint` 0 warnings and 0 errors, `make
 audit-shell`, `make audit-themes` (18 themes, 252 pairs) and `make audit-a11y`
 (6 routes, 0 violations) OK, `make test` exit 0, `make verify` exit 0.
+
+## v0.10.0 shipped (2026-10-19)
+
+Commit `c4c03264b` on `main`, annotated tag `v0.10.0`, pushed to origin. The
+release closes every item in `docs/open-items.md`, the main list and L1 to L5:
+the store split, the Schema decoder pass with lint at zero, the shared
+per-package PostgreSQL fixture, the apidocs set and the `result_contract` fix,
+the `/runs` screen, the gate-flake repairs, the session cookie with its CSRF
+rule (ADR 0009), the axe accessibility runner, the React Doctor triage and the
+seeded adversarial fuzzing. Gates on the released tree: `make test` and
+`make verify` (TEST_JOBS=4).
