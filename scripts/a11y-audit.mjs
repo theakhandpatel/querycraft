@@ -69,7 +69,7 @@ const FAIL_IMPACTS = new Set(['critical', 'serious']);
    seeded chapter markdown, which only renders once the in-browser database has
    booted and returned its rows. */
 const ROUTES = [
-  { name: 'Home', hash: '#/', text: 'Home' },
+  { name: 'Home', hash: '#/', text: 'Workbench' },
   { name: 'Library', hash: '#/library', text: 'Library' },
   { name: 'Workbook', hash: '#/workbook', text: 'Your workbook' },
   { name: 'Progress', hash: '#/progress', text: 'Progress' },

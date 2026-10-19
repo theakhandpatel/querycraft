@@ -71,7 +71,7 @@ export default function AppearanceScreen() {
         <div>
           <div className="eyebrow">Appearance</div>
           <h1>Theme &amp; reading</h1>
-          <p>Light and dark are one token set with two palettes. Default is light, ink on paper with a pine accent.</p>
+          <p>Light and dark are one token set with two palettes. Default is Ledger: warm paper, ink, and a pine accent.</p>
         </div>
       </div>
 

@@ -300,7 +300,7 @@ export function StoreProvider({ children }: { children: React.ReactNode }) {
      navigation after that goes through `hashchange`. */
   const [entry] = useState<RouteTarget>(initialRoute);
   const [uiState, setUiState] = useState<UiState>(() => {
-    const s = loadJSON<UiState | null>(STATE_KEY, null) || { selectedCourseId: 'sql-analytics', libraryFilter: 'all' };
+    const s = loadJSON<UiState | null>(STATE_KEY, null) || { selectedCourseId: 'sqlite-essentials', libraryFilter: 'all' };
     if (!s.libraryFilter) s.libraryFilter = 'all';
     /* A chapter link names its course as well as its chapter, and opening a
        chapter from inside the app selects that course; a link resolves the

@@ -18,7 +18,7 @@ No videos. No multiple choice. No "close enough."
 
 ## Start with a chapter. Or write your own.
 
-The library takes you through `SELECT` and `FROM`, joins, subqueries, CTEs, window functions, and query plans. PostgreSQL is the main engine. SQLite gets its own courses, including the places where the two disagree, because the differences are where the learning lives.
+The library starts with SQLite Essentials, then the PostgreSQL foundations. From there it covers `SELECT` and `FROM`, joins, subqueries, CTEs, and window functions. PostgreSQL is the deeper path, where analytics, query plans, and the job-oriented material live. The translation course covers the places where the two engines disagree, because the differences are where the learning lives.
 
 When the course you need does not exist, describe it. Querycraft builds the outline, writes the chapters, and runs every exercise against the engine before you see it. Edit anything. The course you build is graded live, like every other chapter.
 
@@ -45,7 +45,7 @@ make serve
 
 Open the address the gateway prints and choose **Start a lesson**.
 
-The first start prepares PostgreSQL and the sample data. Later starts are instant. To use your own PostgreSQL, read [Self-hosting](docs/self-hosting.md).
+The first start prepares the database and the sample data. Later starts are instant. To use your own PostgreSQL, read [Self-hosting](docs/self-hosting.md).
 
 ## Documentation
 

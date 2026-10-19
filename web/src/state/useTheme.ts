@@ -52,7 +52,7 @@ interface ThemeStore {
 }
 
 export function useTheme({ api, authReady, session }: ThemeStoreOptions): ThemeStore {
-  const [theme, setThemeState] = useState<ThemePreference>(() => loadJSON<ThemePreference>(THEME_KEY, 'light'));
+  const [theme, setThemeState] = useState<ThemePreference>(() => loadJSON<ThemePreference>(THEME_KEY, 'ledger'));
   const [motion, setMotionState] = useState<boolean>(() => loadJSON<boolean>(MOTION_KEY, false));
 
   /* User-defined themes: their token blocks are injected as a style element,
@@ -71,7 +71,7 @@ export function useTheme({ api, authReady, session }: ThemeStoreOptions): ThemeS
   }, [customThemes]);
 
   const effectiveTheme = useMemo<ThemePreference>(
-    () => (theme === 'system' ? (window.matchMedia && window.matchMedia('(prefers-color-scheme: dark)').matches ? 'dark' : 'light') : theme),
+    () => (theme === 'system' ? (window.matchMedia && window.matchMedia('(prefers-color-scheme: dark)').matches ? 'dark' : 'ledger') : theme),
     [theme]
   );
   useEffect(() => {
@@ -102,7 +102,7 @@ export function useTheme({ api, authReady, session }: ThemeStoreOptions): ThemeS
     const mq = window.matchMedia ? window.matchMedia('(prefers-color-scheme: dark)') : null;
     if (!mq) return;
     const fn = () => {
-      if (loadJSON<ThemeName>(THEME_KEY, 'light') === 'system') document.documentElement.setAttribute('data-theme', mq.matches ? 'dark' : 'light');
+      if (loadJSON<ThemeName>(THEME_KEY, 'ledger') === 'system') document.documentElement.setAttribute('data-theme', mq.matches ? 'dark' : 'ledger');
     };
     if (mq.addEventListener) mq.addEventListener('change', fn);
     else mq.addListener(fn);

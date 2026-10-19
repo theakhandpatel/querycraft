@@ -1002,7 +1002,16 @@ var POSTGRES_TO_SQLITE_MODULES: CourseModule[] = [
    closed dialect set — `web/src/lib/dialect.ts` is the only reader, and
    `scripts/content-audit.mjs` fails if a course or chapter ever carries a
    dialect the app cannot run. */
+/* The first entry is the first course a new learner meets: SQLite runs in the
+   browser with no server. Foundations is the first PostgreSQL course, and the
+   rest follow from there. Array order is the signal, so keep it deliberate. */
 var COURSES: Course[] = [
+  { id:'sqlite-essentials', title:'SQLite Essentials', domain:'SQLite', level:'Beginner \u2192 intermediate', minutes:99,
+    source:'library', enrolled:true, built:true, dialect:'sqlite', modules:SQLITE_ESSENTIALS_MODULES,
+    blurb:'The engine on its own terms: a database that is a file, storage classes and type affinity, the rowid, dates as ISO-8601 text, LIKE and GLOB, reading EXPLAIN QUERY PLAN, and an honest account of what SQLite cannot do.' },
+  { id:'foundations', title:'SQL Foundations', domain:'Commerce & retail', level:'Beginner', minutes:100,
+    source:'library', enrolled:true, built:true, dialect:'postgresql', modules:FOUNDATIONS_MODULES,
+    blurb:'The clauses underneath every query: projection and DISTINCT, WHERE and boolean precedence, ORDER BY with LIMIT and OFFSET, NULL, IN/BETWEEN/LIKE, CASE, and aggregation with HAVING.' },
   { id:'sql-analytics', title:'SQL Analytics in the Real World', domain:'Commerce & retail', level:'Intermediate', minutes:120,
     source:'created', enrolled:true, built:true, dialect:'postgresql', modules:MODULES,
     blurb:'Go beyond basic aggregation: revenue reports, ranking, cohort retention and query reasoning on one realistic commerce dataset.' },
@@ -1015,12 +1024,6 @@ var COURSES: Course[] = [
   { id:'subqueries', title:'Subqueries and set operations', domain:'Commerce & retail', level:'Intermediate', minutes:70,
     source:'library', enrolled:true, built:true, dialect:'postgresql', modules:SUBQUERIES_MODULES,
     blurb:'Use one query as the input to another: scalar and list subqueries, correlated EXISTS, the NOT IN NULL trap, and set operations that compare whole result sets.' },
-  { id:'foundations', title:'SQL Foundations', domain:'Commerce & retail', level:'Beginner', minutes:100,
-    source:'library', enrolled:true, built:true, dialect:'postgresql', modules:FOUNDATIONS_MODULES,
-    blurb:'The clauses underneath every query: projection and DISTINCT, WHERE and boolean precedence, ORDER BY with LIMIT and OFFSET, NULL, IN/BETWEEN/LIKE, CASE, and aggregation with HAVING.' },
-  { id:'sqlite-essentials', title:'SQLite Essentials', domain:'SQLite', level:'Beginner \u2192 intermediate', minutes:99,
-    source:'library', enrolled:true, built:true, dialect:'sqlite', modules:SQLITE_ESSENTIALS_MODULES,
-    blurb:'The engine on its own terms: a database that is a file, storage classes and type affinity, the rowid, dates as ISO-8601 text, LIKE and GLOB, reading EXPLAIN QUERY PLAN, and an honest account of what SQLite cannot do.' },
   { id:'sqlite-in-production', title:'SQLite in Production', domain:'SQLite', level:'Intermediate \u2192 advanced', minutes:100,
     source:'library', enrolled:true, built:true, dialect:'sqlite', modules:SQLITE_IN_PRODUCTION_MODULES,
     blurb:'The parts of SQLite that surprise application developers: one writer and WAL, the pragmas that are per-connection, STRICT tables, foreign keys that do not fire by default, JSON and generated columns, schema changes with user_version, and shipping the file.' },

@@ -95,8 +95,8 @@ export default function AuthScreen() {
     <div className="authwrap">
       <div className="authcard">
         <div className="brand" style={{ padding: 0 }}>
-          <div className="brandmark"><Icon name="terminal" /></div>
-          <span className="brandname">querycraft</span>
+          <span className="brandmark" aria-hidden="true" />
+          <span className="brandname">Querycraft</span>
         </div>
 
         <div className="authtabs" role="tablist">

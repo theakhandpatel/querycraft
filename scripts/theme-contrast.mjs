@@ -1,9 +1,9 @@
 #!/usr/bin/env node
 /*
  * Theme contrast audit — every shipped preset clears 4.5:1 on its key text
- * pairs. The palettes live in web/src/styles/themes.css (one block per theme
- * over the shared custom properties) plus querycraft.css's :root (light
- * default) and [data-theme="dark"].
+ * pairs. The palettes live in web/src/styles/themes.css (one block per named
+ * theme over the shared custom properties) plus querycraft.css's :root (the
+ * Ledger default) and [data-theme="dark"].
  *
  * What is checked, per theme: body text (--text) and secondary text
  * (--text-2) on the page canvas and the surface; small metadata text
@@ -94,7 +94,7 @@ function check(theme, pairs) {
 
 const blocks = [];
 const rootBlock = css.match(/:root\{([^}]*)\}/);
-blocks.push({ __id: 'light (default)', __aliases: ['light'], ...tokensFrom(rootBlock[1]) });
+blocks.push({ __id: 'ledger (default)', __aliases: ['ledger'], ...tokensFrom(rootBlock[1]) });
 for (const m of css.matchAll(/\[data-theme="(dark)"\]\{([^}]*)\}/g)) {
   blocks.push({ __id: m[1], ...tokensFrom(m[2]) });
 }
@@ -132,7 +132,7 @@ for (const block of blocks) {
   ]);
 }
 
-for (const t of ['light', 'dark']) {
+for (const t of ['ledger', 'light', 'dark']) {
   if (!seen.has(t)) {
     failures++;
     console.log(`  FAIL   the ${t} default block is missing`);

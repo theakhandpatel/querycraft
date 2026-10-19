@@ -18,7 +18,8 @@ interface ThemeDef {
 }
 
 export const THEMES: ThemeDef[] = [
-  // Light family.
+  // Light family. Ledger is the default: warm paper, ink, and pine.
+  { id: 'ledger', label: 'Ledger · paper & pine', mode: 'light', swatch: { bg: '#f2ecdf', surface: '#faf5e9', accent: '#145947' } },
   { id: 'light', label: 'Light · Ink & Pine', mode: 'light', swatch: { bg: '#f4f5f7', surface: '#ffffff', accent: '#0c6f5c' } },
   { id: 'paper', label: 'Paper · warm reading', mode: 'light', swatch: { bg: '#f5f0e5', surface: '#fbf7ee', accent: '#0c6f5c' } },
   { id: 'ocean-light', label: 'Ocean · cool light', mode: 'light', swatch: { bg: '#edf1f6', surface: '#ffffff', accent: '#1d5fb0' } },

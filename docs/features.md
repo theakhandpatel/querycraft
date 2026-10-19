@@ -4,15 +4,16 @@ Querycraft teaches SQL by having you write it. Lessons combine short readings
 with exercises you run against a real database, and each answer is graded by the
 rows it returns.
 
-The library covers the clauses, joins, subqueries, CTEs, window functions,
-query plans, and the SQLite differences that matter. Every chapter runs; every
-answer is graded live.
+The library starts with SQLite, then moves to PostgreSQL. It covers the clauses,
+joins, subqueries, CTEs, window functions, query plans, and the differences
+between the two engines. Every chapter runs; every answer is graded live.
 
 ## Courses and lessons
 
-- **A library to start from.** Analytics, joins, subqueries, query plans,
-  foundations, and three SQLite courses. Each course states its level, length,
-  and dialect. The library includes eight courses and 52 chapters.
+- **A library to start from.** SQLite Essentials first, then SQL Foundations,
+  analytics, joins, subqueries, query plans, and two deeper SQLite courses. Each
+  course states its level, length, and dialect. The library includes eight
+  courses and 52 chapters.
 - **Lessons built for practice.** A chapter combines reading with one or two
   exercises and a worked example. Fenced Mermaid diagrams render as SVG.
 - **Library.** Browse every course, filter by topic or dialect, and start a
@@ -43,9 +44,10 @@ answer is graded live.
   the sample data at any time.
 - **Tables drawer.** Inspect the live schema, column types, keys, nullability,
   and sample rows without leaving the lesson.
-- **Two engines.** PostgreSQL is the main teaching engine. SQLite is a second
-  dialect with its own courses, so you can learn the differences that matter
-  when you move between the two.
+- **Two engines.** SQLite is the first teaching engine in the browser.
+  PostgreSQL is the deeper path: analytics, query plans, and the job-oriented
+  material. The SQLite courses cover the differences that matter when you move
+  between the two.
 
 ## Workbook and search
 
@@ -96,8 +98,9 @@ answer is graded live.
 
 ## Run it your way
 
-- **In the browser.** The default experience runs PostgreSQL in the page, so
-  lessons, results, and progress work without a server or a network.
+- **In the browser.** The browser build starts with SQLite, so lessons, results,
+  and progress work without a server or a network. PostgreSQL also runs in the
+  page for the PostgreSQL courses.
 - **On the gateway.** The hosted app runs PostgreSQL or SQLite on the server and
   adds accounts, stored courses, and the tutor.
 - **One binary.** `make build` embeds the landing page and the app in the

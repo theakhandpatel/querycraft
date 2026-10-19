@@ -5,11 +5,30 @@
  * scripts/theme-contrast.mjs (every preset clears 4.5:1 on its key text
  * pairs). Adding a theme: one block here, one entry in the registry.
  *
- * Structural tokens (fonts, radii, easing) stay in querycraft.css's :root —
- * they are not per-theme.
+ * The Ledger default is the :root block in querycraft.css; every other named
+ * preset gets a block here. Structural tokens (fonts, radii, easing) stay in
+ * :root — they are not per-theme.
  */
 
 /* ---------- light family ---------- */
+
+/* Light · Ink & Pine: the original cool-gray light palette, kept as an explicit
+   preset. Ledger is the app default and lives in querycraft.css's :root. */
+:root[data-theme="light"]{
+  color-scheme:light;
+  --bg:#f4f5f7; --surface:#ffffff; --surface-2:#f7f8fa; --surface-3:#eef0f3;
+  --line:#e3e6eb; --line-strong:#cbd1da;
+  --text:#14161a; --text-2:#494f5a; --text-3:#626873;
+  --accent:#0c6f5c; --accent-ink:#0c6f5c; --accent-solid:#0b6b59; --accent-hover:#0a5c4d;
+  --on-accent:#fff;
+  --accent-soft:rgba(12,111,92,.09); --accent-line:rgba(12,111,92,.26);
+  --green:#1a7f4f; --green-soft:rgba(26,127,79,.11); --green-ink:#15663f;
+  --amber:#8a5a10; --amber-soft:rgba(138,90,16,.12); --amber-ink:#6f4909;
+  --red:#b3352f; --red-soft:rgba(179,53,47,.10); --red-ink:#8f2a25;
+  --code-bg:#fbfcfd; --code-text:#20303f; --code-line:#e6e9ee;
+  --shadow:0 1px 2px rgba(20,22,26,.05),0 10px 30px -18px rgba(20,22,26,.28);
+  --shadow-lg:0 24px 60px -30px rgba(20,22,26,.42);
+}
 
 /* Paper · warm reading light: cream surfaces, warm ink, the pine accent kept
    for brand. Chapters read like a book. */

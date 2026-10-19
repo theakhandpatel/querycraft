@@ -4,7 +4,7 @@
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
 <title>Querycraft — Learn SQL by writing it</title>
-<meta name="description" content="Querycraft teaches SQL by running what you write against a real PostgreSQL database and grading the rows that come back. A query is a claim; the database returns the evidence.">
+<meta name="description" content="Querycraft teaches SQL by running what you write against a real database and grading the rows that come back. Start with SQLite in the browser, then move to PostgreSQL. A query is a claim; the database returns the evidence.">
 <link rel="icon" href="/landing/assets/icon.svg" type="image/svg+xml">
 <link rel="preconnect" href="https://fonts.googleapis.com">
 <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
@@ -288,6 +288,13 @@
   .index td { padding: 15px 0; border-bottom: 1px solid var(--rule); vertical-align: baseline; }
   .index .no { width: 44px; font-family: var(--serif); font-size: 19px; color: var(--rule-strong); font-variant-numeric: oldstyle-nums; }
   .index .title { font-size: 20px; letter-spacing: -.01em; }
+  .index .start {
+    display: inline-block; margin-left: 10px; padding: 2px 7px;
+    border: 1px solid var(--pine); color: var(--pine);
+    font-family: var(--mono); font-size: 8.5px; font-weight: 500;
+    letter-spacing: .1em; text-transform: uppercase; white-space: nowrap;
+    vertical-align: 2px;
+  }
   .index .meta { font-family: var(--mono); font-size: 10px; letter-spacing: .04em; color: var(--ink-2); white-space: nowrap; }
   .index tr:hover td { background: var(--pine-wash); }
   .index .num { text-align: right; }
@@ -443,22 +450,22 @@
 
       <div class="hero-actions">
         <a class="btn" href="/app/">Start a lesson<span class="arrow">→</span></a>
-        <p class="fine">Free to use · Sign in to keep your progress</p>
+        <p class="fine">Start with SQLite in the browser · Sign in to keep your progress</p>
       </div>
 
       <div class="proof" id="proof" style="margin-top:34px">
         <div class="proof-head">
           <span>Proof 01</span>
-          <span class="dialect">PostgreSQL</span>
+          <span class="dialect">SQLite</span>
           <span>Commerce dataset</span>
           <span class="right">Recorded example</span>
         </div>
         <pre class="query"><code><span class="k">select</span> c.name,
-       <span class="k">count</span>(o.id) <span class="k">as</span> orders,
+       <span class="k">count</span>(<span class="k">distinct</span> o.id) <span class="k">as</span> orders,
        <span class="k">sum</span>(oi.quantity * oi.unit_price) <span class="k">as</span> revenue
 <span class="k">from</span> customers c
-<span class="k">join</span> orders o <span class="k">using</span> (customer_id)
-<span class="k">join</span> order_items oi <span class="k">using</span> (order_id)
+<span class="k">join</span> orders o <span class="k">on</span> o.customer_id = c.id
+<span class="k">join</span> order_items oi <span class="k">on</span> oi.order_id = o.id
 <span class="k">group by</span> c.name
 <span class="k">order by</span> revenue <span class="k">desc</span>
 <span class="k">limit</span> 3;</code></pre>
@@ -595,18 +602,18 @@
     <div class="content">
       <p class="kicker">The library</p>
       <h2>Start from a chapter.</h2>
-      <p class="body">Start with the clauses, then joins, subqueries, CTEs, plans, and the SQLite courses that show where the two engines diverge. Or describe the course you need and build it.</p>
+      <p class="body">Start with SQLite Essentials, then the PostgreSQL foundations. The library goes on to joins, subqueries, CTEs, plans, and the courses that show where the two engines diverge. Or describe the course you need and build it.</p>
       <table class="index">
         <thead><tr><th></th><th>Course</th><th></th><th>Dialect</th><th class="num">Ch.</th></tr></thead>
         <tbody>
-          <tr><td class="no">01</td><td class="title">SQL Analytics in the Real World</td><td class="meta">Intermediate</td><td class="meta" style="color:var(--pine)">PostgreSQL</td><td class="meta num">9</td></tr>
-          <tr><td class="no">02</td><td class="title">Joins without guesswork</td><td class="meta">Beginner → intermediate</td><td class="meta" style="color:var(--pine)">PostgreSQL</td><td class="meta num">3</td></tr>
-          <tr><td class="no">03</td><td class="title">PostgreSQL query plans</td><td class="meta">Intermediate</td><td class="meta" style="color:var(--pine)">PostgreSQL</td><td class="meta num">8</td></tr>
-          <tr><td class="no">04</td><td class="title">Subqueries and set operations</td><td class="meta">Intermediate</td><td class="meta" style="color:var(--pine)">PostgreSQL</td><td class="meta num">4</td></tr>
-          <tr><td class="no">05</td><td class="title">SQL Foundations</td><td class="meta">Beginner</td><td class="meta" style="color:var(--pine)">PostgreSQL</td><td class="meta num">7</td></tr>
-          <tr><td class="no">06</td><td class="title">SQLite Essentials</td><td class="meta">Beginner → intermediate</td><td class="meta">SQLite</td><td class="meta num">7</td></tr>
-          <tr><td class="no">07</td><td class="title">SQLite in Production</td><td class="meta">Intermediate → advanced</td><td class="meta">SQLite</td><td class="meta num">7</td></tr>
-          <tr><td class="no">08</td><td class="title">Postgres to SQLite</td><td class="meta">Intermediate → advanced</td><td class="meta">SQLite</td><td class="meta num">7</td></tr>
+          <tr><td class="no">01</td><td class="title">SQLite Essentials <span class="start">Start here</span></td><td class="meta">Beginner → intermediate</td><td class="meta" style="color:var(--pine)">SQLite</td><td class="meta num">7</td></tr>
+          <tr><td class="no">02</td><td class="title">SQL Foundations</td><td class="meta">Beginner</td><td class="meta" style="color:var(--pine)">PostgreSQL</td><td class="meta num">7</td></tr>
+          <tr><td class="no">03</td><td class="title">SQL Analytics in the Real World</td><td class="meta">Intermediate</td><td class="meta" style="color:var(--pine)">PostgreSQL</td><td class="meta num">9</td></tr>
+          <tr><td class="no">04</td><td class="title">Joins without guesswork</td><td class="meta">Beginner → intermediate</td><td class="meta" style="color:var(--pine)">PostgreSQL</td><td class="meta num">3</td></tr>
+          <tr><td class="no">05</td><td class="title">PostgreSQL query plans</td><td class="meta">Intermediate</td><td class="meta" style="color:var(--pine)">PostgreSQL</td><td class="meta num">8</td></tr>
+          <tr><td class="no">06</td><td class="title">Subqueries and set operations</td><td class="meta">Intermediate</td><td class="meta" style="color:var(--pine)">PostgreSQL</td><td class="meta num">4</td></tr>
+          <tr><td class="no">07</td><td class="title">SQLite in Production</td><td class="meta">Intermediate → advanced</td><td class="meta" style="color:var(--pine)">SQLite</td><td class="meta num">7</td></tr>
+          <tr><td class="no">08</td><td class="title">Postgres to SQLite</td><td class="meta">Intermediate → advanced</td><td class="meta" style="color:var(--pine)">SQLite</td><td class="meta num">7</td></tr>
         </tbody>
       </table>
 
@@ -624,18 +631,19 @@
 
       <div class="engines">
         <p class="kicker">Two engines, one grammar</p>
+        <p class="body" style="font-size:16.5px;margin-bottom:18px">SQLite is the first path: it runs in the browser with no server. PostgreSQL is the deeper path, where analytics, query plans, and the job-oriented material live.</p>
         <div class="codes">
           <div class="code-plate">
-            <div class="code-label"><span class="dot"></span>PostgreSQL</div>
-            <pre><code><span class="k">select</span> date_trunc(<span class="k">'month'</span>, ordered_at) <span class="k">as</span> month,
+            <div class="code-label"><span class="dot"></span>SQLite</div>
+            <pre><code><span class="k">select</span> strftime(<span class="k">'%Y-%m'</span>, ordered_at) <span class="k">as</span> month,
        <span class="k">count</span>(*) <span class="k">as</span> orders
 <span class="k">from</span> orders
 <span class="k">group by</span> 1
 <span class="k">order by</span> 1;</code></pre>
           </div>
           <div class="code-plate">
-            <div class="code-label"><span class="dot muted"></span>SQLite</div>
-            <pre><code><span class="k">select</span> strftime(<span class="k">'%Y-%m'</span>, ordered_at) <span class="k">as</span> month,
+            <div class="code-label"><span class="dot muted"></span>PostgreSQL</div>
+            <pre><code><span class="k">select</span> date_trunc(<span class="k">'month'</span>, ordered_at) <span class="k">as</span> month,
        <span class="k">count</span>(*) <span class="k">as</span> orders
 <span class="k">from</span> orders
 <span class="k">group by</span> 1
@@ -656,7 +664,7 @@
       <h2>No server. No setup.</h2>
       <div class="machine">
         <div>
-          <p class="body">The browser build runs PostgreSQL in a Web Worker, compiled to WebAssembly, so lessons and results work offline. The hosted build runs the Go gateway for accounts, stored courses, and SQLite.</p>
+          <p class="body">The browser build starts with SQLite, so lessons and results work offline. PostgreSQL is the next step in the browser. The hosted build runs the Go gateway for accounts and stored courses on PostgreSQL or SQLite.</p>
           <p class="body" style="font-size:15px;color:var(--ink-3)">One binary when you host it: the landing, the app, the API, and its documentation on one port.</p>
         </div>
         <div>
@@ -675,7 +683,7 @@
         <h2>Write your first query.</h2>
       </div>
       <div>
-        <p>Pick a course, open a chapter, or write your own. The database will tell you the truth.</p>
+        <p>Start with SQLite, pick a course, or write your own. The database will tell you the truth.</p>
         <a class="btn" href="/app/">Start a lesson<span class="arrow">→</span></a>
         <p class="fine">Free · Sign in to keep your progress</p>
         <p class="colophon">Querycraft · A working notebook for SQL</p>

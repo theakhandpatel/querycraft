@@ -740,6 +740,7 @@ export interface PromptRequest {
 }
 
 export type ThemeName =
+  | 'ledger'
   | 'light'
   | 'dark'
   | 'paper'

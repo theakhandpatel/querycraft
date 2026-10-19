@@ -36,7 +36,7 @@ export default function ResultGrid({ qr }: { qr: QueryResult | null }) {
     : `Query result with ${qr.row_count} row${qr.row_count === 1 ? '' : 's'}`;
   return (
     <>
-      <div className="tablewrap" role="region" aria-label={`${label} — scrollable`} tabIndex={0}>
+      <div className="tablewrap" key={qr.request_id ?? label} role="region" aria-label={`${label} — scrollable`} tabIndex={0}>
         <table>
           {/* Visually hidden: the visible description is `.resultfoot`. */}
           <caption className="visually-hidden">{label}</caption>

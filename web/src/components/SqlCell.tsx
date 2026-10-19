@@ -34,8 +34,10 @@ interface FeedbackCtx {
 }
 
 /* One inline SQL cell. Holds its own draft + result + feedback state; execution
-   and grading always go through the API boundary, never computed here. */
-export default function SqlCell({ block, module: mod, course }: { block: Block; module: CourseModule; course: Course }) {
+   and grading always go through the API boundary, never computed here.
+   `onPassed` lets a host that derives its own next step (the workbench on Home)
+   hold the page still for the verdict instead of advancing under the learner. */
+export default function SqlCell({ block, module: mod, course, onPassed }: { block: Block; module: CourseModule; course: Course; onPassed?: () => void }) {
   const s = useStore();
   const isExercise = block.type === 'exercise';
   const id = block.id as string;
@@ -87,6 +89,7 @@ export default function SqlCell({ block, module: mod, course }: { block: Block; 
   const [planBusy, setPlanBusy] = useState(false);
   const [tutorBusy, setTutorBusy] = useState(false);
   const taRef = useRef<HTMLTextAreaElement>(null);
+  const feedbackRef = useRef<HTMLDivElement>(null);
 
   useEffect(() => {
     let alive = true;
@@ -117,6 +120,14 @@ export default function SqlCell({ block, module: mod, course }: { block: Block; 
     ta.style.height = Math.max(96, ta.scrollHeight) + 'px';
   }
   useEffect(autogrow, [code]);
+
+  /* The verdict is the moment. When it lands, bring it into view without
+     hiding the result above it; the reduced-motion setting makes the move
+     instant. */
+  useEffect(() => {
+    if (!fb || (fb.kind !== 'passed' && fb.kind !== 'failed' && fb.kind !== 'error')) return;
+    feedbackRef.current?.scrollIntoView({ block: 'nearest', behavior: s.motion ? 'auto' : 'smooth' });
+  }, [fb, s.motion]);
 
   function onChange(e: React.ChangeEvent<HTMLTextAreaElement>) {
     setCode(e.target.value);
@@ -156,6 +167,7 @@ export default function SqlCell({ block, module: mod, course }: { block: Block; 
       s.recordEvent(id, 'passed', undefined);
       setFb({ kind: 'passed', checks: out.checks });
       s.toast('Exercise passed. Nice.');
+      onPassed?.();
     } else {
       const cause = out.checks.find((r) => !r.ok) || { label: 'the result contract' };
       s.recordEvent(id, 'failed', undefined);
@@ -190,6 +202,7 @@ export default function SqlCell({ block, module: mod, course }: { block: Block; 
       if (verdict.passed) {
         s.recordEvent(id, 'passed', undefined);
         s.toast('Plan passed. Nice.');
+        onPassed?.();
       } else {
         const cause = verdict.checks.find((r) => !r.ok) || { label: 'the perf contract' };
         s.recordEvent(id, 'failed', undefined);
@@ -340,7 +353,9 @@ export default function SqlCell({ block, module: mod, course }: { block: Block; 
           {isExercise ? (
             <>
               <button
-                className="primary small"
+                /* Once the contract passes, the next move is the primary one.
+                   Run stays available but stops competing with it. */
+                className={fb?.kind === 'passed' ? 'small' : 'primary small'}
                 onClick={run}
                 disabled={dialectRefused}
                 title={dialectRefused ? dialectSupport.refusal ?? undefined : undefined}
@@ -353,11 +368,25 @@ export default function SqlCell({ block, module: mod, course }: { block: Block; 
                 title={dialectRefused ? dialectSupport.refusal ?? undefined : undefined}
                 aria-describedby={dialectRefused ? refusalId : undefined}
               ><Icon name="check" />Check answer</button>
-              <button className="small ghost" onClick={hint}>Hint</button>
-              <button className="small ghost" onClick={solution}>Show solution</button>
-              <button className="small ghost" onClick={openTutor}><Icon name="sparkles" />Ask tutor</button>
-              <button className="small ghost" onClick={() => keep(code)}>Keep query</button>
-              <button className="small ghost" onClick={reset}><Icon name="refresh" />Reset</button>
+              <span className="celldesktop-extra">
+                <button className="small ghost" onClick={hint}>Hint</button>
+                <button className="small ghost" onClick={solution}>Show solution</button>
+                <button className="small ghost" onClick={openTutor}><Icon name="sparkles" />Ask tutor</button>
+                <button className="small ghost" onClick={() => keep(code)}>Keep query</button>
+                <button className="small ghost" onClick={reset}><Icon name="refresh" />Reset</button>
+              </span>
+              {/* On a phone the five secondary controls live behind one menu so
+                  the cell keeps two actions and the thumb keeps its target. */}
+              <details className="cellmore">
+                <summary className="small">More</summary>
+                <div className="cellmoremenu">
+                  <button className="small ghost" onClick={hint}>Hint</button>
+                  <button className="small ghost" onClick={solution}>Show solution</button>
+                  <button className="small ghost" onClick={openTutor}><Icon name="sparkles" />Ask tutor</button>
+                  <button className="small ghost" onClick={() => keep(code)}>Keep query</button>
+                  <button className="small ghost" onClick={reset}><Icon name="refresh" />Reset</button>
+                </div>
+              </details>
             </>
           ) : (
             <>
@@ -368,8 +397,17 @@ export default function SqlCell({ block, module: mod, course }: { block: Block; 
                 title={dialectRefused ? dialectSupport.refusal ?? undefined : undefined}
                 aria-describedby={dialectRefused ? refusalId : undefined}
               ><Icon name="play" />Run</button>
-              <button className="small ghost" onClick={() => keep(code)}>Keep query</button>
-              <button className="small ghost" onClick={reset}><Icon name="refresh" />Reset</button>
+              <span className="celldesktop-extra">
+                <button className="small ghost" onClick={() => keep(code)}>Keep query</button>
+                <button className="small ghost" onClick={reset}><Icon name="refresh" />Reset</button>
+              </span>
+              <details className="cellmore">
+                <summary className="small">More</summary>
+                <div className="cellmoremenu">
+                  <button className="small ghost" onClick={() => keep(code)}>Keep query</button>
+                  <button className="small ghost" onClick={reset}><Icon name="refresh" />Reset</button>
+                </div>
+              </details>
             </>
           )}
           <span className="kb"><span className="kbd">Ctrl</span>+<span className="kbd">Enter</span></span>
@@ -433,7 +471,7 @@ export default function SqlCell({ block, module: mod, course }: { block: Block; 
             <ResultGrid qr={qr} />
           )}
         </div>
-        <div className="cellfeedback">{renderFeedback(fb, { block, hint, solution, accept, run, keep, nextChapter, explain })}</div>
+        <div className="cellfeedback" ref={feedbackRef}>{renderFeedback(fb, { block, hint, solution, accept, run, keep, nextChapter, explain })}</div>
         {block.note ? <div className="cellnote">{block.note}</div> : null}
       </div>
     </div>
@@ -576,12 +614,13 @@ function renderFeedback(fb: Feedback | null, ctx: FeedbackCtx) {
   if (fb.kind === 'passed') {
     return (
       <div className="fb passed">
+        <span className="verdict-stamp" aria-hidden="true">Passed</span>
         <div className="fbhead"><Icon name="check" />Passed</div>
         Your result satisfies the contract on the current exercise version.
         <CheckList checks={fb.checks} />
-        <div className="fbactions actions">
-          <span className="pill subtle"><span className="dot"></span> Recorded</span>
-          <button className="small ghost" onClick={nextChapter}>Next chapter<Icon name="arrow-right" /></button>
+        <div className="fbactions actions verdict-actions">
+          <span className="verdict-record"><span className="dot" aria-hidden="true" />Recorded</span>
+          <button className="primary small" onClick={nextChapter}>Next chapter<Icon name="arrow-right" /></button>
         </div>
       </div>
     );
