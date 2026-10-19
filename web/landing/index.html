@@ -234,6 +234,7 @@
   .drawer-shot img { display: block; width: 100%; height: auto; }
   .shot img { display: block; width: 100%; height: auto; }
   .caption { margin: 12px 0 0; font-family: var(--mono); font-size: 10px; letter-spacing: .04em; color: var(--ink-3); }
+  .section-intro { max-width: 62ch; margin-bottom: 34px; }
   .annotations { display: grid; grid-template-columns: repeat(3, 1fr); gap: 26px; margin-top: 38px; }
   .annotation { border-top: 1px solid var(--line-strong); padding-top: 12px; }
   .annotation .n { font-family: var(--mono); font-size: 10px; color: var(--pine); letter-spacing: .06em; }
@@ -281,7 +282,7 @@
 
   /* runs */
   .runs { display: grid; grid-template-columns: .85fr 1.15fr; gap: 56px; align-items: start; }
-  .gif { border: 1px solid var(--line); border-radius: 12px; display: block; width: 100%; aspect-ratio: 4 / 5; object-fit: cover; object-position: center; background: var(--raised); }
+  .gif { border: 1px solid var(--line); border-radius: 12px; display: block; width: 100%; height: auto; background: var(--raised); }
 
   /* closing field */
   .close { background: var(--pine); border-top: 1px solid var(--pine); padding: 96px 0 104px; }
@@ -361,14 +362,14 @@
           <a class="btn" href="/app/">Start a lesson</a>
           <a class="textlink" href="#grading">See how grading works</a>
         </div>
-        <p class="note"><span class="dot"></span>No account needed · Runs in your browser</p>
+        <p class="note"><span class="dot"></span>Free to use · Sign in to open a lesson</p>
       </div>
 
       <div class="cell" id="demo-cell">
         <div class="cell-head">
           <span class="cell-name">exercise.sql</span>
           <span class="badge">PostgreSQL</span>
-          <span class="sample">Sample data</span>
+          <span class="sample">Recorded example</span>
         </div>
         <pre class="code"><code><span class="k">select</span> c.name,
        <span class="k">count</span>(<span class="k">distinct</span> o.id) <span class="k">as</span> orders,
@@ -380,7 +381,7 @@
 <span class="k">order by</span> revenue <span class="k">desc</span>
 <span class="k">limit</span> 3;</code></pre>
         <div class="cell-bar">
-          <button class="run" type="button" data-run>Run example</button>
+          <button class="run" type="button" data-run>Replay example</button>
           <span class="key">⌘↵</span>
           <span class="sample">Recorded on the commerce dataset</span>
         </div>
@@ -451,16 +452,12 @@
 
   <section id="lesson">
     <div class="wrap">
-      <div class="split" style="margin-bottom:34px">
-        <div>
-          <h2>Read a little. Then write.</h2>
-          <p class="body">A chapter mixes a short reading with a worked example and one or two exercises. The editor sits beside the question, the result sits under the query, and the feedback names the check that failed.</p>
-        </div>
-        <div>
-          <div class="shot"><img src="/landing/assets/lesson.png" alt="A Querycraft lesson with the reading column, a SQL cell, and a result grid" width="1440" height="900"></div>
-          <p class="caption">A chapter from SQL Analytics in the Real World.</p>
-        </div>
+      <div class="section-intro">
+        <h2>Read a little. Then write.</h2>
+        <p class="body">A chapter mixes a short reading with a worked example and one or two exercises. The editor sits beside the question, the result sits under the query, and the feedback names the check that failed.</p>
       </div>
+      <div class="shot"><img src="/landing/assets/lesson.png" alt="A Querycraft lesson with the reading column, a SQL cell, and a result grid" width="1280" height="720"></div>
+      <p class="caption">A chapter from SQL Analytics in the Real World.</p>
       <div class="annotations">
         <div class="annotation"><div class="n">01</div><h3>The reading column</h3><p>Short prose, diagrams, and syntax you can copy. Chapter content is seeded from the course.</p></div>
         <div class="annotation"><div class="n">02</div><h3>The cell</h3><p>Run, check, hint, solution, keep, reset. The editor stays next to the question.</p></div>
@@ -551,7 +548,7 @@
     <div class="wrap runs">
       <div>
         <h2>No server. No setup.</h2>
-        <p class="body">The default experience runs PostgreSQL in a Web Worker, compiled to WebAssembly. Lessons, results, and your progress work without a network. Run the Go gateway when you want accounts, stored courses, or SQLite on the server.</p>
+        <p class="body">The browser build runs PostgreSQL in a Web Worker, compiled to WebAssembly. Lessons, results, and your progress work without a network. The hosted app runs the Go gateway: accounts, stored courses, and SQLite on the server.</p>
         <p class="body" style="margin-top:14px;font-size:14.5px;color:var(--ink-3)">One binary when you host it: the app, the API, and its documentation on one port.</p>
       </div>
       <div>

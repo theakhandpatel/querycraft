@@ -291,7 +291,7 @@ export default function SqlCell({ block, module: mod, course }: { block: Block; 
       if (fb.kind === 'pending') return 'Checking your answer against the contract.';
       if (fb.kind === 'passed') return 'Your answer passed.';
       if (fb.kind === 'failed') return `Not yet — ${String(fb.cause.label).toLowerCase()}.`;
-      if (fb.kind === 'error') return `Execution error ${fb.code}. This is not a wrong answer; fix the statement and run again.`;
+      if (fb.kind === 'error') return `Execution error ${fb.code}. This is not a wrong answer. ${executionHelp(fb.code)}`;
       if (fb.kind === 'hint') return `${fb.hints.length} hint${fb.hints.length === 1 ? '' : 's'} shown.`;
       if (fb.kind === 'tutorPending') return 'Asking the tutor for a hint.';
       if (fb.kind === 'tutor') return 'Tutor hint shown.';
@@ -456,6 +456,30 @@ function CheckList({ checks }: { checks: CheckResult[] }) {
   );
 }
 
+/** The recovery a learner can act on, per execution error. The old copy told
+    every failure to "fix the statement", which is false for a missing engine,
+    a timeout, or a result cap. */
+function executionHelp(code: string): string {
+  switch (code) {
+    case 'QUERY_SYNTAX_ERROR':
+      return 'The database rejected the syntax. Fix the statement and run again.';
+    case 'QUERY_RUNTIME_ERROR':
+      return 'The statement failed at runtime. Check the names and the data, then run again.';
+    case 'QUERY_TIMEOUT':
+      return 'The statement took too long. Narrow the work or raise the timeout, then run again.';
+    case 'RESULT_LIMIT_EXCEEDED':
+      return 'The result exceeded the limit. Add a filter or a LIMIT, then run again.';
+    case 'ENVIRONMENT_UNAVAILABLE':
+      return 'The database is not reachable right now. This is not a problem in your statement. Try again when the workspace is ready.';
+    case 'PERSISTENCE_FAILED':
+      return 'The workspace could not save the result. Try again.';
+    case 'EVALUATION_ERROR':
+      return 'The answer could not be checked. Try again.';
+    default:
+      return 'The statement did not run. Try again, or read the error code above.';
+  }
+}
+
 function renderFeedback(fb: Feedback | null, ctx: FeedbackCtx) {
   if (!fb) return null;
   const { block, hint, solution, accept, run, keep, nextChapter, explain } = ctx;
@@ -466,7 +490,7 @@ function renderFeedback(fb: Feedback | null, ctx: FeedbackCtx) {
     return (
       <div className="fb error">
         <div className="fbhead"><Icon name="alert" />Execution error — not a wrong answer</div>
-        This is an execution failure, so it is reported as <span className="fbcode">{fb.code}</span>, not as a failed attempt. Fix the statement and run again.
+        This is an execution failure, so it is reported as <span className="fbcode">{fb.code}</span>, not as a failed attempt. {executionHelp(fb.code)}
         <div className="fbactions actions">
           <button className="small ghost" onClick={explain}>
             <Icon name="sparkles" />Explain my mistake

@@ -149,7 +149,7 @@ export function httpLayer(opts: {
       return { status: res.status, body: parsed };
     });
 
-  const request = <Body extends object>(method: string, path: string, body?: Body, opts?: { rawErrorBodies?: boolean }) =>
+  const request = <Body extends object>(method: string, path: string, body?: Body, opts?: { rawErrorBodies?: boolean; quietUnauthorized?: boolean }) =>
     Effect.gen(function* () {
       const { status, body: parsed } = yield* perform(method, path, body);
       /* A 401 means the session is absent, expired or invalid. AUTH_REQUIRED is
@@ -162,7 +162,10 @@ export function httpLayer(opts: {
         const code = failure.code ?? 'AUTH_REQUIRED';
         if (code === 'AUTH_REQUIRED') {
           clearAuthUser();
-          unauthorized();
+          /* `me` runs on every boot, before anyone has signed in. A 401 there
+             means "signed out", not "your session expired", so that one caller
+             asks for the notice to stay quiet. */
+          if (!opts?.quietUnauthorized) unauthorized();
         }
         return yield* Effect.fail(authFailure(code, failure.message ?? 'Authentication required.', 401));
       }
@@ -251,7 +254,7 @@ export function httpLayer(opts: {
     me: () => {
       /* The cookie may name a session even though nothing local holds a token,
          so ask every time: a 401 is "signed out", an answer is the account. */
-      return request('GET', '/auth/me').pipe(
+      return request('GET', '/auth/me', undefined, { quietUnauthorized: true }).pipe(
         Effect.flatMap((json) => decodeUser(json).pipe(Effect.mapError(asGatewayError))),
         Effect.tap((user) => Effect.sync(() => writeAuthUser(user.id))),
         Effect.map((user): User | null => user),
