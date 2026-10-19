@@ -100,6 +100,11 @@ The adapters behind `ExecutionService` must agree. `VITE_API_MODE` selects
 `/health` on its own origin and uses the `http` adapter when the gateway answers.
 That is how the single binary works with no configuration.
 
+`VITE_APP_MODE` selects the product surface. Full is the gateway build with
+accounts, AI, stored courses, runs, and admin. Simple is the public browser
+sample: the built-in library, local progress, and no hosted surfaces. The static
+build sets it to `simple` and forces the browser adapter.
+
 | Adapter | Engine | Where it runs | What it reports about itself |
 | --- | --- | --- | --- |
 | `pglite` | PostgreSQL compiled to WebAssembly | A Web Worker in the tab | A runaway statement stops when the worker is terminated. |

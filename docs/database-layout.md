@@ -30,8 +30,10 @@ cluster  (one postgres process)
 ```
 
 The browser database has a smaller `app` schema. It holds `content_docs` and
-`content_meta` for the chapter reading content. It does not hold accounts or
-progress, because those live in IndexedDB in browser mode.
+`content_meta` for chapter content that a learner can query. Lessons read the
+bundled markdown directly, so opening a chapter does not wait for this database.
+It does not hold accounts or progress, because those live in IndexedDB in
+browser mode.
 
 ## Why the dataset is isolated
 

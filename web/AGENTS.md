@@ -13,7 +13,9 @@ React 18 + TypeScript + Vite. Strict `tsconfig.json`.
   - `dataset.ts`: imports `backend/internal/dataset/*.sql` with Vite `?raw`
     (one schema/seed shared with the Go evaluator).
   - `content.ts`: splits `src/data/content/*.md` into sections and seeds them
-    into the `content_docs` table on first run (the bundle is only the seeder).
+    into the `content_docs` table when a PostgreSQL workspace boots. Lessons
+    read the bundled sections directly. The table is for SQL access, not the
+    reading path.
   - `compare.ts`: result-contract comparison, mirroring the Go evaluator
     (`backend/internal/eval/compare.go`).
   - `execution/`: `ExecutionService` (Effect `Context.Service`) with
@@ -22,15 +24,18 @@ React 18 + TypeScript + Vite. Strict `tsconfig.json`.
   - `index.ts`: `createApi()` picks pglite (default) or http from
     `VITE_API_MODE`; in a production build with no explicit mode it probes its
     own origin `/health` and uses `http` when the gateway answers.
-- `src/data/curriculum.ts`: courses, chapters and the prose blocks used when a
-  module has no authored markdown.
+- `src/components/editor/`: the CodeMirror SQL editor. `SqlEditor.tsx` is the
+  React boundary and imports `sqlEditorRuntime.ts` dynamically; `lib/sqlSchema.ts`
+  caches the `getTables` completion source.
+- `src/data/courses/`: one module per built-in course. `curriculum.ts` assembles
+  the catalog and keeps the public `COURSES` and `MODULES` names.
 - `src/data/content/*.md`: authored chapter markdown, one file per module id.
   **Eight courses, 52 chapters** ship complete: `sql-analytics` (`m1`–`m9`),
   `joins` (`j1`–`j3`), `subqueries` (`q1`–`q4`), `plans` (`p1`–`p8`),
   `foundations` (`f1`–`f7`), `sqlite-essentials` (`s1`–`s7`),
   `sqlite-in-production` (`r1`–`r7`), `postgres-to-sqlite` (`x1`–`x7`). The list
-  of record is `web/src/data/curriculum.ts` (`COURSES`). See
-  `docs/content-authoring.md`.
+  of record is `web/src/data/courses/index.ts` (`COURSES`), re-exported by
+  `web/src/data/curriculum.ts`. See `docs/content-authoring.md`.
 - `src/state/store.tsx`: the single provider; `useStore()` returns the
   exported `StoreValue`.
 - `src/lib/markdown.ts`: markdown to sanitised HTML (DOMPurify); fenced
@@ -45,6 +50,8 @@ React 18 + TypeScript + Vite. Strict `tsconfig.json`.
 `VITE_API_MODE` accepts `pglite` (default) or `http`; `http` also reads
 `VITE_API_BASE` (default `http://localhost:8080`) for the Go gateway. Docker is
 not required for the default flow, because PGlite runs in the browser tab.
+`VITE_APP_MODE` is `simple` for the public browser sample and unset or `full` for
+the gateway build.
 
 ## Effect
 
