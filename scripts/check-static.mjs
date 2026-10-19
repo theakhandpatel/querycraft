@@ -229,6 +229,15 @@ async function main() {
     const verdict = (await page.locator('.verdict-stamp').innerText()).trim();
     assert(/passed/i.test(verdict), `the first SQLite exercise did not pass (verdict: ${verdict})`);
 
+    /* The sample's promise is that progress stays in this browser. Reload the
+       app and read the stored progress back; an in-memory pass would be a
+       different, weaker product. */
+    await page.waitForTimeout(700);
+    await page.reload({ waitUntil: 'domcontentloaded' });
+    await page.waitForSelector('main.workspace .screen.active');
+    await page.waitForFunction(() => !document.querySelector('.authwrap .spin'));
+    await page.waitForFunction(() => /1 passed/i.test(document.body.innerText));
+
     const pgliteData = requests.filter((url) => /pglite.*\.(data|wasm)(\?|$)/i.test(url) || /pglite\.data/i.test(url));
     assert(pgliteData.length === 0, `the first load requested the PGlite engine: ${pgliteData.join(', ')}`);
     assert(failures.length === 0, `static assets failed: ${failures.join('; ')}`);
