@@ -312,6 +312,12 @@
     font-family: var(--mono); font-size: 11.5px; line-height: 1.7; color: var(--ink);
   }
 
+  /* create and themes blocks */
+  .create { display: grid; grid-template-columns: .95fr 1.05fr; gap: 36px; align-items: start; margin-top: 52px; padding-top: 26px; border-top: 1px solid var(--rule); }
+  .create h3 { margin: 0 0 10px; font-family: var(--serif); font-size: clamp(26px, 2.4vw, 34px); line-height: 1.05; letter-spacing: -.02em; font-weight: 600; }
+  .create .body { font-size: 16.5px; }
+  .look-plate { max-width: 720px; }
+
   /* machine */
   .machine { display: grid; grid-template-columns: minmax(0, .8fr) minmax(0, 1.2fr); gap: 44px; align-items: start; }
   .gif-plate { background: var(--sheet); border: 1px solid var(--rule-strong); padding: 7px; }
@@ -359,7 +365,7 @@
     .margin { border-right: 0; padding-right: 0; display: flex; align-items: baseline; gap: 16px; }
     .folio { font-size: 36px; }
     .margin p { margin: 0; max-width: none; }
-    .plates-split, .machine, .close .wrap { grid-template-columns: 1fr; gap: 34px; }
+    .plates-split, .machine, .close .wrap, .create, .look { grid-template-columns: 1fr; gap: 26px; }
     .plate-tall { margin: 0; max-width: 300px; }
     .notes { grid-template-columns: 1fr; gap: 18px; }
     .codes { grid-template-columns: 1fr; }
@@ -403,6 +409,7 @@
     <nav class="nav" aria-label="Primary">
       <a href="#contract">The contract</a>
       <a href="#lesson">Lessons</a>
+      <a href="#look">Themes</a>
       <a href="#courses">Courses</a>
       <a href="https://github.com/theakhandpatel/querycraft/tree/main/docs">Docs</a>
     </nav>
@@ -411,6 +418,7 @@
       <nav aria-label="Menu">
         <a href="#contract">The contract</a>
         <a href="#lesson">Lessons</a>
+        <a href="#look">Themes</a>
         <a href="#courses">Courses</a>
         <a href="https://github.com/theakhandpatel/querycraft/tree/main/docs">Docs</a>
         <a href="/app/">Start a lesson</a>
@@ -509,7 +517,7 @@
     <div class="content">
       <p class="kicker">Read, then do</p>
       <h2>Read a little. Then write.</h2>
-      <p class="body">A chapter pairs a short reading with a worked example and one or two exercises. The editor sits beside the question, the rows sit under the query, and the feedback names the check that failed.</p>
+      <p class="body">A chapter pairs a short reading with a worked example and one or two exercises. The library covers SELECT and FROM, joins, subqueries, CTEs, window functions, and query plans. The editor sits beside the question, the rows sit under the query, and the feedback names the check that failed.</p>
       <div class="plate" style="margin-top:32px">
         <img src="/landing/assets/lesson.png" alt="A Querycraft lesson with the reading column, a SQL cell, and a result grid" width="1280" height="720">
       </div>
@@ -565,15 +573,29 @@
     </div>
   </section>
 
-  <section class="spread" id="courses">
+  <section class="spread" id="look">
     <aside class="margin">
       <span class="folio">05</span>
-      <p>Eight courses. Start at the shelf.</p>
+      <p>A theme that follows you.</p>
     </aside>
     <div class="content">
-      <p class="kicker">The shelf</p>
-      <h2>Eight courses. One habit.</h2>
-      <p class="body">Start with the clauses, then joins, subqueries, plans, and the SQLite courses that show where the two engines diverge.</p>
+      <p class="kicker">The look</p>
+      <h2>Choose a theme, or make one.</h2>
+      <p class="body">Start from eighteen presets, from light and dark to terminal and familiar palettes. Or build a theme from a single accent color: the inks tune themselves, and the theme follows your account.</p>
+      <div class="plate look-plate" style="margin-top:30px"><img src="/landing/assets/appearance.png" alt="The appearance screen with a theme grid and a custom accent picker" width="720" height="700"></div>
+      <p class="caption">The appearance screen: presets, contrast, and a custom accent.</p>
+    </div>
+  </section>
+
+  <section class="spread" id="courses">
+    <aside class="margin">
+      <span class="folio">06</span>
+      <p>A library to start from.</p>
+    </aside>
+    <div class="content">
+      <p class="kicker">The library</p>
+      <h2>Start from a chapter.</h2>
+      <p class="body">Start with the clauses, then joins, subqueries, CTEs, plans, and the SQLite courses that show where the two engines diverge. Or describe the course you need and build it.</p>
       <table class="index">
         <thead><tr><th></th><th>Course</th><th></th><th>Dialect</th><th class="num">Ch.</th></tr></thead>
         <tbody>
@@ -587,6 +609,18 @@
           <tr><td class="no">08</td><td class="title">Postgres to SQLite</td><td class="meta">Intermediate → advanced</td><td class="meta">SQLite</td><td class="meta num">7</td></tr>
         </tbody>
       </table>
+
+      <div class="create">
+        <div>
+          <p class="kicker">Your course</p>
+          <h3>Describe the course you want.</h3>
+          <p class="body">Describe what you want to get good at. Querycraft drafts an outline and chapters, runs every exercise against the engine before it is stored, and lets you edit the result. Your course gets the same live grading as the built-in ones.</p>
+        </div>
+        <div>
+          <div class="plate"><img src="/landing/assets/create-course.png" alt="Create a course from a goal" width="760" height="660"></div>
+          <p class="caption">Create a course from a goal; every exercise is verified first.</p>
+        </div>
+      </div>
 
       <div class="engines">
         <p class="kicker">Two engines, one grammar</p>
@@ -614,7 +648,7 @@
 
   <section class="spread" id="machine">
     <aside class="margin">
-      <span class="folio">06</span>
+      <span class="folio">07</span>
       <p>One binary when you host it.</p>
     </aside>
     <div class="content">
@@ -641,7 +675,7 @@
         <h2>Write your first query.</h2>
       </div>
       <div>
-        <p>Pick a course, open a chapter, and run something. The database will tell you the truth.</p>
+        <p>Pick a course, open a chapter, or write your own. The database will tell you the truth.</p>
         <a class="btn" href="/app/">Start a lesson<span class="arrow">→</span></a>
         <p class="fine">Free · Sign in to keep your progress</p>
         <p class="colophon">Querycraft · A working notebook for SQL</p>
