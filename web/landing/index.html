@@ -4,34 +4,27 @@
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
 <title>Querycraft — Learn SQL by writing it</title>
-<meta name="description" content="Querycraft teaches SQL by running what you write against a real PostgreSQL database and grading the rows that come back. Any correct query passes.">
+<meta name="description" content="Querycraft teaches SQL by running what you write against a real PostgreSQL database and grading the rows that come back. A query is a claim; the database returns the evidence.">
 <link rel="icon" href="/landing/assets/icon.svg" type="image/svg+xml">
 <link rel="preconnect" href="https://fonts.googleapis.com">
 <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
-<link href="https://fonts.googleapis.com/css2?family=Geist:wght@400;500;600&family=Geist+Mono:wght@400;500&family=Space+Grotesk:wght@500;600;700&display=swap" rel="stylesheet">
+<link href="https://fonts.googleapis.com/css2?family=Source+Serif+4:ital,wght@0,400;0,600;0,700;1,400;1,600&family=Geist+Mono:wght@400;500&display=swap" rel="stylesheet">
 <style>
   :root {
-    --paper: #f4f5f7;
-    --raised: #ffffff;
-    --sunken: #f7f8fa;
-    --fill: #eef0f3;
-    --line: #e3e6eb;
-    --line-strong: #cbd1da;
-    --ink: #14161a;
-    --ink-2: #494f5a;
-    --ink-3: #636a75;
-    --pine: #0b6b59;
-    --pine-hover: #0a5c4d;
-    --pine-wash: rgba(12, 111, 92, .10);
-    --pine-line: rgba(12, 111, 92, .26);
-    --pass: #1a7f4f;
-    --amber: #8a5a10;
-    --code: #fbfcfd;
-    --code-ink: #20303f;
-    --sans: "Geist", ui-sans-serif, system-ui, -apple-system, "Segoe UI", Roboto, sans-serif;
-    --display: "Space Grotesk", "Geist", ui-sans-serif, system-ui, sans-serif;
-    --mono: "Geist Mono", ui-monospace, SFMono-Regular, Menlo, "Cascadia Code", monospace;
-    --wrap: 1200px;
+    --paper: #f2ecdf;
+    --sheet: #faf5e9;
+    --ink: #1f1b15;
+    --ink-2: #4c463a;
+    --ink-3: #7c7363;
+    --rule: #d7cdb9;
+    --rule-strong: #b9ad96;
+    --pine: #145947;
+    --pine-deep: #0d4639;
+    --pine-wash: #e4ece5;
+    --stamp: #145947;
+    --serif: "Source Serif 4", Georgia, "Times New Roman", serif;
+    --mono: "Geist Mono", ui-monospace, SFMono-Regular, Menlo, monospace;
+    --wrap: 1240px;
   }
 
   * { box-sizing: border-box; }
@@ -40,296 +33,359 @@
     margin: 0;
     background: var(--paper);
     color: var(--ink);
-    font-family: var(--sans);
-    font-size: 16px;
-    line-height: 1.6;
+    font-family: var(--serif);
+    font-size: 18px;
+    line-height: 1.7;
     -webkit-font-smoothing: antialiased;
     text-rendering: optimizeLegibility;
   }
   ::selection { background: var(--pine-wash); color: var(--ink); }
   a { color: inherit; }
   img { max-width: 100%; }
-  .wrap { max-width: var(--wrap); margin: 0 auto; padding: 0 40px; }
+  .wrap { max-width: var(--wrap); margin: 0 auto; padding: 0 48px; }
+  .skip {
+    position: absolute; left: -9999px; top: 0;
+    background: var(--pine); color: var(--sheet); padding: 10px 14px;
+    font-family: var(--mono); font-size: 11px; z-index: 10;
+  }
+  .skip:focus { left: 12px; top: 12px; }
 
   /* ---------- top bar ---------- */
-  .top { border-bottom: 1px solid var(--line); background: var(--paper); }
-  .top .wrap { height: 68px; display: flex; align-items: center; gap: 34px; }
-  .brand {
-    display: inline-flex; align-items: center; gap: 9px;
-    font-family: var(--display); font-size: 20px; font-weight: 600;
-    letter-spacing: -.03em; text-decoration: none; color: var(--ink);
+  .top { border-bottom: 1px solid var(--rule); }
+  .top-inner {
+    min-height: 72px; display: flex; align-items: center; gap: 34px;
   }
-  .brand .mark { width: 8px; height: 8px; border-radius: 2px; background: var(--pine); }
+  .brand {
+    display: inline-flex; align-items: baseline; gap: 8px;
+    font-family: var(--serif); font-size: 24px; font-weight: 600;
+    letter-spacing: -.02em; text-decoration: none; color: var(--ink);
+  }
+  .brand .mark {
+    display: inline-block; width: 7px; height: 7px; background: var(--pine);
+    transform: translateY(-2px);
+  }
   .nav { display: flex; gap: 26px; margin-left: auto; }
-  .nav a { font-size: 14px; color: var(--ink-2); text-decoration: none; }
-  .nav a:hover { color: var(--ink); }
+  .nav a {
+    font-family: var(--mono); font-size: 10px; letter-spacing: .12em;
+    text-transform: uppercase; color: var(--ink-2); text-decoration: none;
+    padding-bottom: 3px; border-bottom: 1px solid transparent;
+  }
+  .nav a:hover { color: var(--ink); border-bottom-color: var(--pine); }
+  .top-cta {
+    font-family: var(--mono); font-size: 10px; letter-spacing: .1em;
+    text-transform: uppercase; text-decoration: none; color: var(--pine);
+    border: 1px solid var(--pine); padding: 9px 13px; border-radius: 2px;
+  }
+  .top-cta:hover { background: var(--pine); color: var(--sheet); }
+  .menu { display: none; position: relative; margin-left: auto; }
+  .menu summary {
+    list-style: none; cursor: pointer; font-family: var(--mono);
+    font-size: 10px; letter-spacing: .1em; text-transform: uppercase;
+    border: 1px solid var(--rule-strong); padding: 8px 11px; border-radius: 2px;
+  }
+  .menu summary::-webkit-details-marker { display: none; }
+  .menu[open] summary { background: var(--sheet); }
+  .menu nav {
+    position: absolute; right: 0; top: calc(100% + 8px); z-index: 5;
+    display: grid; min-width: 200px; background: #fffaf0;
+    border: 1px solid var(--rule-strong); border-top: 3px double var(--rule-strong);
+    padding: 6px 0; box-shadow: 0 14px 30px -18px rgba(31, 27, 21, .45);
+  }
+  .menu nav a {
+    padding: 10px 14px; font-family: var(--mono); font-size: 10px;
+    letter-spacing: .1em; text-transform: uppercase; text-decoration: none;
+    color: var(--ink-2);
+  }
+  .menu nav a:hover { background: var(--pine-wash); color: var(--ink); }
+
   .btn {
-    display: inline-flex; align-items: center; justify-content: center; gap: 8px;
-    background: var(--pine); color: #fff; border: 1px solid var(--pine);
-    border-radius: 9px; padding: 12px 18px;
-    font-family: var(--sans); font-size: 14px; font-weight: 500;
-    text-decoration: none; cursor: pointer;
+    display: inline-flex; align-items: center; justify-content: center;
+    background: var(--pine); color: var(--sheet);
+    border: 1px solid var(--pine); border-radius: 2px;
+    padding: 13px 22px; font-family: var(--serif); font-size: 17px;
+    font-weight: 600; text-decoration: none; cursor: pointer;
     transition: background .15s ease, border-color .15s ease;
   }
-  .btn:hover { background: var(--pine-hover); border-color: var(--pine-hover); }
+  .btn:hover { background: var(--pine-deep); border-color: var(--pine-deep); }
   .btn:focus-visible { outline: 2px solid var(--pine); outline-offset: 3px; }
-  .btn.small { padding: 9px 14px; font-size: 13px; }
-  .btn.ghost { background: transparent; color: var(--ink); border-color: var(--line-strong); }
-  .btn.ghost:hover { background: var(--fill); border-color: var(--line-strong); }
+  .btn .arrow { font-family: var(--mono); font-size: 13px; margin-left: 10px; }
 
   /* ---------- hero ---------- */
-  .hero { padding: 86px 0 70px; }
-  .hero .wrap { display: grid; grid-template-columns: 1.02fr .98fr; gap: 62px; align-items: center; }
+  .hero { padding: 48px 0 64px; }
+  .hero-head {
+    display: grid; grid-template-columns: minmax(0, 1.35fr) minmax(0, .65fr);
+    gap: 58px; align-items: end; margin-bottom: 46px;
+  }
   h1 {
-    margin: 0 0 24px;
-    font-family: var(--display);
-    font-size: clamp(52px, 6.5vw, 94px);
-    line-height: .97;
-    letter-spacing: -.035em;
-    font-weight: 600;
+    margin: 0; font-family: var(--serif);
+    font-size: clamp(54px, 6.6vw, 96px); line-height: .98;
+    letter-spacing: -.025em; font-weight: 600; max-width: 13ch;
   }
-  h1 em { font-style: normal; color: var(--pine); }
-  .lede {
-    margin: 0 0 28px; max-width: 46ch;
-    font-size: 19px; line-height: 1.55; color: var(--ink-2);
+  h1 em { font-style: italic; font-weight: 400; color: var(--pine); }
+  .hero-note {
+    border-top: 1px solid var(--rule-strong); padding-top: 14px;
+    font-style: italic; color: var(--ink-3); font-size: 15px; line-height: 1.6;
+    max-width: 30ch;
   }
-  .actions { display: flex; align-items: center; gap: 22px; flex-wrap: wrap; }
-  .textlink {
-    font-size: 14px; color: var(--ink); text-decoration: none;
-    border-bottom: 1px solid var(--line-strong); padding-bottom: 2px;
+  .hero-note strong { font-style: normal; color: var(--ink-2); font-weight: 600; }
+  .hero-actions { display: flex; align-items: center; gap: 22px; margin-top: 24px; flex-wrap: wrap; }
+  .fine {
+    font-family: var(--mono); font-size: 10px; letter-spacing: .06em;
+    color: var(--ink-3); margin: 18px 0 0;
   }
-  .textlink:hover { border-color: var(--ink); }
-  .note {
-    display: flex; align-items: center; gap: 9px; margin-top: 28px;
-    font-family: var(--mono); font-size: 10.5px; letter-spacing: .05em;
+
+  /* ---------- the proof sheet ---------- */
+  .proof {
+    background: var(--sheet);
+    border: 1px solid var(--rule-strong);
+    border-top: 3px double var(--rule-strong);
+    position: relative;
+  }
+  .proof-head {
+    display: flex; align-items: center; gap: 18px; flex-wrap: wrap;
+    padding: 11px 22px; border-bottom: 1px solid var(--rule);
+    font-family: var(--mono); font-size: 9.5px; letter-spacing: .1em;
     text-transform: uppercase; color: var(--ink-3);
   }
-  .note .dot { width: 6px; height: 6px; border-radius: 50%; background: var(--pass); }
-
-  /* ---------- the exercise cell ---------- */
-  .cell {
-    background: var(--raised);
-    border: 1px solid var(--line);
-    border-radius: 12px;
-    box-shadow: 0 1px 2px rgba(20, 22, 26, .05), 0 24px 48px -30px rgba(20, 22, 26, .28);
-    overflow: hidden;
-  }
-  .cell-head {
-    display: flex; align-items: center; gap: 10px;
-    padding: 12px 16px; border-bottom: 1px solid var(--line);
-  }
-  .cell-name { font-family: var(--mono); font-size: 11px; letter-spacing: .03em; color: var(--ink-2); }
-  .badge {
-    margin-left: auto; padding: 3px 8px; border-radius: 999px;
-    border: 1px solid var(--pine-line); background: var(--pine-wash);
-    font-family: var(--mono); font-size: 9.5px; letter-spacing: .07em;
-    text-transform: uppercase; color: var(--pine);
-  }
-  .sample { font-family: var(--mono); font-size: 9.5px; color: var(--ink-3); letter-spacing: .03em; }
-  pre.code {
-    margin: 0; padding: 18px 18px 16px; overflow-x: auto;
-    background: var(--code); border-bottom: 1px solid var(--line);
-    font-family: var(--mono); font-size: 12.5px; line-height: 1.75; color: var(--code-ink);
-    tab-size: 2;
+  .proof-head .dialect { color: var(--pine); }
+  .proof-head .right { margin-left: auto; }
+  .query {
+    margin: 0; padding: 26px 22px 22px;
+    font-family: var(--mono); font-size: clamp(15px, 1.8vw, 26px);
+    line-height: 1.62; color: var(--ink); overflow-x: auto;
+    border-bottom: 1px solid var(--rule); white-space: pre;
   }
   .k { color: var(--pine); }
-  .s { color: var(--amber); }
-  .c { color: var(--ink-3); }
-  .cell-bar {
-    display: flex; align-items: center; gap: 12px;
-    padding: 11px 16px; border-bottom: 1px solid var(--line);
+  .proof-lower {
+    display: grid; grid-template-columns: minmax(0, 1.3fr) minmax(0, .7fr);
+    gap: 0;
   }
-  .run {
-    display: inline-flex; align-items: center; gap: 7px;
-    padding: 6px 11px; border: 1px solid var(--line-strong); border-radius: 7px;
-    background: var(--raised); color: var(--ink);
-    font-family: var(--sans); font-size: 12px; font-weight: 500; cursor: pointer;
+  .result-table { width: 100%; border-collapse: collapse; font-family: var(--mono); font-size: 13px; }
+  .result-table th {
+    text-align: left; padding: 12px 22px 7px;
+    font-size: 9px; font-weight: 500; letter-spacing: .12em;
+    text-transform: uppercase; color: var(--ink-3);
   }
-  .run:hover { background: var(--fill); }
-  .run:focus-visible { outline: 2px solid var(--pine); outline-offset: 2px; }
-  .key { font-family: var(--mono); font-size: 9.5px; color: var(--ink-3); }
-  .cell-bar .sample { margin-left: auto; }
-  table.result { width: 100%; border-collapse: collapse; font-family: var(--mono); font-size: 12px; }
-  .result th {
-    padding: 10px 16px 6px; text-align: left;
-    font-size: 9px; font-weight: 500; letter-spacing: .09em; text-transform: uppercase;
-    color: var(--ink-3);
+  .result-table th.num, .result-table td.num { text-align: right; }
+  .result-table td { padding: 9px 22px; border-top: 1px solid var(--rule); }
+  .contract {
+    border-left: 1px solid var(--rule); padding: 16px 22px 18px;
+    display: flex; flex-direction: column; gap: 8px;
   }
-  .result td { padding: 7px 16px; border-top: 1px solid var(--line); }
-  .result td.num { text-align: right; font-variant-numeric: tabular-nums; }
-  .result th.num { text-align: right; }
-  .verdict {
-    display: grid; grid-template-columns: minmax(0, 1fr) auto; align-items: center; gap: 16px;
-    padding: 13px 16px; border-top: 1px solid var(--line); background: var(--sunken);
+  .contract .label {
+    font-family: var(--mono); font-size: 9px; letter-spacing: .12em;
+    text-transform: uppercase; color: var(--ink-3); margin-bottom: 2px;
   }
-  .checks { display: grid; grid-template-columns: 1fr 1fr; gap: 6px 18px; min-width: 0; }
-  .check { display: flex; align-items: center; gap: 7px; font-size: 11.5px; color: var(--ink-2); white-space: nowrap; }
-  .check svg { width: 13px; height: 13px; color: var(--pass); flex: none; }
+  .check {
+    display: flex; align-items: center; gap: 9px;
+    font-family: var(--mono); font-size: 11px; color: var(--ink-2);
+    white-space: nowrap;
+  }
+  .check svg { width: 13px; height: 13px; color: var(--pine); flex: none; }
   .stamp {
-    justify-self: end; padding: 4px 9px; border: 2px solid var(--pass); border-radius: 3px;
-    font-family: var(--mono); font-size: 10.5px; letter-spacing: .12em;
-    text-transform: uppercase; color: var(--pass); transform: rotate(-5deg);
+    align-self: flex-start; margin-top: 12px;
+    border: 2px solid var(--stamp); color: var(--stamp);
+    padding: 5px 10px; font-family: var(--mono); font-size: 10px;
+    letter-spacing: .14em; text-transform: uppercase;
+    transform: rotate(-4deg); transform-origin: left center;
   }
-
-  /* hero animation: visible by default, replayed when the cell runs */
-  @keyframes rowIn { from { opacity: 0; transform: translateY(4px); } to { opacity: 1; transform: none; } }
-  @keyframes checkIn { from { opacity: 0; transform: scale(.7); } to { opacity: 1; transform: none; } }
-  @keyframes stampIn { from { opacity: 0; transform: rotate(-14deg) scale(1.15); } to { opacity: 1; transform: rotate(-5deg) scale(1); } }
-  .cell.is-running .result tbody tr { animation: rowIn .42s cubic-bezier(.2, .7, .2, 1) both; }
-  .cell.is-running .result tbody tr:nth-child(1) { animation-delay: .10s; }
-  .cell.is-running .result tbody tr:nth-child(2) { animation-delay: .17s; }
-  .cell.is-running .result tbody tr:nth-child(3) { animation-delay: .24s; }
-  .cell.is-running .check { animation: checkIn .30s cubic-bezier(.2, .7, .2, 1) both; }
-  .cell.is-running .check:nth-child(1) { animation-delay: .34s; }
-  .cell.is-running .check:nth-child(2) { animation-delay: .41s; }
-  .cell.is-running .check:nth-child(3) { animation-delay: .48s; }
-  .cell.is-running .check:nth-child(4) { animation-delay: .55s; }
-  .cell.is-running .stamp { animation: stampIn .34s cubic-bezier(.2, .7, .2, 1) both; animation-delay: .64s; }
-
-  /* ---------- proof strip ---------- */
-  .proof { border-top: 1px solid var(--line); border-bottom: 1px solid var(--line); }
-  .proof .wrap { display: flex; }
-  .proof span {
-    flex: 1; padding: 15px 0; text-align: center;
-    border-left: 1px solid var(--line);
-    font-family: var(--mono); font-size: 10px; letter-spacing: .07em;
-    text-transform: uppercase; color: var(--ink-2);
+  .replay {
+    position: absolute; right: 22px; bottom: -15px;
+    background: var(--paper); border: 1px solid var(--rule-strong);
+    padding: 6px 10px; font-family: var(--mono); font-size: 9px;
+    letter-spacing: .1em; text-transform: uppercase; color: var(--ink-2);
+    cursor: pointer; border-radius: 2px;
   }
-  .proof span:first-child { border-left: 0; }
+  .replay:hover { color: var(--ink); border-color: var(--pine); }
+  .replay:focus-visible { outline: 2px solid var(--pine); outline-offset: 2px; }
 
-  /* ---------- sections ---------- */
-  section { padding: 92px 0; border-top: 1px solid var(--line); }
+  @keyframes printRow { from { opacity: 0; transform: translateY(-3px); } to { opacity: 1; transform: none; } }
+  @keyframes drawCheck { from { opacity: 0; transform: scale(.72); } to { opacity: 1; transform: none; } }
+  @keyframes landStamp { from { opacity: 0; transform: rotate(-12deg) scale(1.12); } to { opacity: 1; transform: rotate(-4deg) scale(1); } }
+  .proof.is-running .result-table tbody tr { animation: printRow .38s cubic-bezier(.2,.7,.2,1) both; }
+  .proof.is-running .result-table tbody tr:nth-child(1) { animation-delay: .10s; }
+  .proof.is-running .result-table tbody tr:nth-child(2) { animation-delay: .17s; }
+  .proof.is-running .result-table tbody tr:nth-child(3) { animation-delay: .24s; }
+  .proof.is-running .check { animation: drawCheck .28s cubic-bezier(.2,.7,.2,1) both; }
+  .proof.is-running .check:nth-of-type(1) { animation-delay: .34s; }
+  .proof.is-running .check:nth-of-type(2) { animation-delay: .41s; }
+  .proof.is-running .check:nth-of-type(3) { animation-delay: .48s; }
+  .proof.is-running .check:nth-of-type(4) { animation-delay: .55s; }
+  .proof.is-running .stamp { animation: landStamp .32s cubic-bezier(.2,.7,.2,1) both; animation-delay: .64s; }
+
+  /* ---------- spreads ---------- */
+  .spread {
+    display: grid; grid-template-columns: 172px minmax(0, 1fr);
+    gap: 56px; max-width: var(--wrap); margin: 0 auto;
+    padding: 78px 48px 82px;
+    border-top: 1px solid var(--rule-strong);
+  }
+  .margin { border-right: 1px solid var(--rule); padding-right: 24px; }
+  .folio {
+    display: block; font-family: var(--serif); font-size: 58px;
+    line-height: .9; color: var(--rule-strong); font-variant-numeric: oldstyle-nums;
+  }
+  .margin p {
+    margin: 20px 0 0; font-style: italic; font-size: 14px;
+    line-height: 1.6; color: var(--ink-3); max-width: 20ch;
+  }
+  .content { min-width: 0; }
   h2 {
-    margin: 0 0 18px; font-family: var(--display);
-    font-size: clamp(34px, 4.2vw, 56px); line-height: 1.02;
-    letter-spacing: -.03em; font-weight: 600; max-width: 20ch;
+    margin: 0 0 20px; font-family: var(--serif); font-weight: 600;
+    font-size: clamp(38px, 4.5vw, 64px); line-height: 1.02;
+    letter-spacing: -.02em; max-width: 18ch;
   }
-  .body { margin: 0; max-width: 62ch; font-size: 16.5px; line-height: 1.7; color: var(--ink-2); }
-  .split { display: grid; grid-template-columns: .85fr 1.15fr; gap: 64px; align-items: start; }
-
-  /* contract panel */
-  .panel { border: 1px solid var(--line); border-radius: 12px; background: var(--raised); overflow: hidden; }
-  .panel-head {
-    padding: 12px 18px; border-bottom: 1px solid var(--line);
-    font-family: var(--mono); font-size: 9.5px; letter-spacing: .09em;
-    text-transform: uppercase; color: var(--ink-3);
-  }
-  .rule { display: grid; grid-template-columns: 178px 1fr 16px; gap: 18px; padding: 15px 18px; border-top: 1px solid var(--line); align-items: start; }
-  .rule:first-of-type { border-top: 0; }
-  .rule h3 { margin: 0; font-size: 13.5px; font-weight: 600; letter-spacing: -.01em; }
-  .rule p { margin: 0; font-size: 13px; line-height: 1.55; color: var(--ink-2); }
-  .rule svg { width: 14px; height: 14px; color: var(--pass); margin-top: 3px; }
-  .panel-foot {
-    padding: 12px 18px; border-top: 1px solid var(--line); background: var(--sunken);
-    font-size: 12.5px; color: var(--ink-2);
+  .body { margin: 0; max-width: 64ch; color: var(--ink-2); font-size: 18.5px; line-height: 1.72; }
+  .body + .body { margin-top: 14px; }
+  .kicker {
+    font-family: var(--mono); font-size: 9.5px; letter-spacing: .12em;
+    text-transform: uppercase; color: var(--pine); margin: 0 0 12px;
   }
 
-  /* screenshots */
-  .shot { border: 1px solid var(--line); border-radius: 12px; overflow: hidden; background: var(--raised); box-shadow: 0 24px 48px -34px rgba(20, 22, 26, .30); }
-  .drawer-shot {
-    max-width: 360px; margin: 0 auto; overflow: hidden;
-    border: 1px solid var(--line); border-radius: 10px; background: var(--raised);
-    box-shadow: 0 24px 48px -34px rgba(20, 22, 26, .30);
+  /* ledger table */
+  .ledger { width: 100%; border-collapse: collapse; margin-top: 34px; }
+  .ledger th {
+    text-align: left; padding: 0 0 10px;
+    font-family: var(--mono); font-size: 9px; font-weight: 500;
+    letter-spacing: .12em; text-transform: uppercase; color: var(--ink-3);
+    border-bottom: 1px solid var(--rule-strong);
   }
-  .drawer-shot img { display: block; width: 100%; height: auto; }
-  .shot img { display: block; width: 100%; height: auto; }
-  .caption { margin: 12px 0 0; font-family: var(--mono); font-size: 10px; letter-spacing: .04em; color: var(--ink-3); }
-  .section-intro { max-width: 62ch; margin-bottom: 34px; }
-  .annotations { display: grid; grid-template-columns: repeat(3, 1fr); gap: 26px; margin-top: 38px; }
-  .annotation { border-top: 1px solid var(--line-strong); padding-top: 12px; }
-  .annotation .n { font-family: var(--mono); font-size: 10px; color: var(--pine); letter-spacing: .06em; }
-  .annotation h3 { margin: 6px 0 4px; font-size: 14px; font-weight: 600; }
-  .annotation p { margin: 0; font-size: 13px; line-height: 1.55; color: var(--ink-2); }
-
-  /* workspace */
-  .workspace { display: grid; grid-template-columns: 1fr 1fr; gap: 56px; align-items: center; }
-  .facts { margin: 26px 0 0; padding: 0; list-style: none; border-top: 1px solid var(--line); }
-  .facts li { display: flex; justify-content: space-between; gap: 24px; padding: 12px 0; border-bottom: 1px solid var(--line); font-size: 13.5px; }
-  .facts span:first-child { color: var(--ink-3); font-family: var(--mono); font-size: 10px; letter-spacing: .06em; text-transform: uppercase; padding-top: 2px; }
-  .facts span:last-child { text-align: right; color: var(--ink-2); }
-
-  /* courses */
-  .courses { width: 100%; border-collapse: collapse; margin-top: 34px; }
-  .courses th {
-    padding: 0 0 10px; text-align: left; border-bottom: 1px solid var(--line-strong);
-    font-family: var(--mono); font-size: 9px; font-weight: 500; letter-spacing: .09em;
-    text-transform: uppercase; color: var(--ink-3);
-  }
-  .courses td { padding: 15px 0; border-bottom: 1px solid var(--line); vertical-align: baseline; }
-  .courses tr:hover td { background: var(--pine-wash); }
-  .courses .title { font-family: var(--display); font-size: 19px; letter-spacing: -.02em; }
-  .courses .meta { font-family: var(--mono); font-size: 10.5px; color: var(--ink-2); letter-spacing: .02em; }
-  .courses .pg { color: var(--pine); }
-  .courses .lite { color: var(--ink-3); }
-  .courses th:nth-child(2), .courses td:nth-child(2) { width: 130px; }
-  .courses th:nth-child(3), .courses td:nth-child(3) { width: 90px; text-align: right; }
-  .courses th:nth-child(4), .courses td:nth-child(4) { width: 220px; padding-left: 32px; }
-
-  /* dialect codes */
-  .codes { display: grid; grid-template-columns: 1fr; gap: 12px; margin-top: 30px; }
-  .code-card { border: 1px solid var(--line); border-radius: 10px; overflow: hidden; background: var(--raised); }
-  .code-card .label {
-    display: flex; align-items: center; gap: 8px; padding: 9px 14px;
-    border-bottom: 1px solid var(--line); font-family: var(--mono); font-size: 9.5px;
-    letter-spacing: .08em; text-transform: uppercase; color: var(--ink-3);
-  }
-  .code-card .label .dot { width: 6px; height: 6px; border-radius: 50%; background: var(--pine); }
-  .code-card .label .dot.grey { background: var(--line-strong); }
-  .code-card pre {
-    margin: 0; padding: 14px; background: var(--code); overflow-x: auto;
-    font-family: var(--mono); font-size: 11.5px; line-height: 1.7; color: var(--code-ink);
+  .ledger td { padding: 15px 0; border-bottom: 1px solid var(--rule); vertical-align: top; }
+  .ledger td:first-child { width: 30%; }
+  .ledger .name { font-weight: 600; font-size: 17px; }
+  .ledger .rule-text { color: var(--ink-2); font-size: 15.5px; line-height: 1.55; }
+  .ledger .mark { width: 34px; text-align: right; }
+  .ledger .mark svg { width: 15px; height: 15px; color: var(--pine); }
+  .ledger-note {
+    margin: 22px 0 0; font-style: italic; color: var(--ink-3); font-size: 15px;
   }
 
-  /* runs */
-  .runs { display: grid; grid-template-columns: .85fr 1.15fr; gap: 56px; align-items: start; }
-  .gif { border: 1px solid var(--line); border-radius: 12px; display: block; width: 100%; height: auto; background: var(--raised); }
+  /* plates */
+  .plate { background: var(--sheet); border: 1px solid var(--rule-strong); padding: 7px; }
+  .plate img { display: block; width: 100%; height: auto; }
+  .caption {
+    margin: 10px 0 0; font-family: var(--mono); font-size: 9.5px;
+    letter-spacing: .06em; color: var(--ink-3);
+  }
+  .plates-split { display: grid; grid-template-columns: minmax(0, 1.1fr) minmax(0, .9fr); gap: 36px; align-items: start; }
+  .plate-tall { max-width: 340px; margin-left: auto; }
+  .plate-tall img { width: 100%; height: auto; }
 
-  /* closing field */
-  .close { background: var(--pine); border-top: 1px solid var(--pine); padding: 96px 0 104px; }
-  .close h2 { color: #fff; max-width: 16ch; margin-bottom: 20px; font-size: clamp(42px, 5.8vw, 80px); }
-  .close p { color: rgba(255, 255, 255, .78); max-width: 44ch; font-size: 17px; line-height: 1.6; margin: 0 0 30px; }
-  .close .btn { background: #f4f5f7; border-color: #f4f5f7; color: var(--pine); }
+  /* annotations under the lesson plate */
+  .notes { display: grid; grid-template-columns: repeat(3, 1fr); gap: 28px; margin-top: 34px; }
+  .note { border-top: 1px solid var(--rule-strong); padding-top: 11px; }
+  .note .n { font-family: var(--mono); font-size: 9px; letter-spacing: .1em; color: var(--pine); }
+  .note h3 { margin: 7px 0 4px; font-size: 17px; font-weight: 600; }
+  .note p { margin: 0; font-size: 14px; line-height: 1.55; color: var(--ink-2); }
+
+  /* course index */
+  .index { width: 100%; border-collapse: collapse; margin-top: 36px; }
+  .index th {
+    text-align: left; padding: 0 0 10px; border-bottom: 1px solid var(--rule-strong);
+    font-family: var(--mono); font-size: 9px; font-weight: 500;
+    letter-spacing: .12em; text-transform: uppercase; color: var(--ink-3);
+  }
+  .index td { padding: 15px 0; border-bottom: 1px solid var(--rule); vertical-align: baseline; }
+  .index .no { width: 44px; font-family: var(--serif); font-size: 19px; color: var(--rule-strong); font-variant-numeric: oldstyle-nums; }
+  .index .title { font-size: 20px; letter-spacing: -.01em; }
+  .index .meta { font-family: var(--mono); font-size: 10px; letter-spacing: .04em; color: var(--ink-2); white-space: nowrap; }
+  .index tr:hover td { background: var(--pine-wash); }
+  .index .num { text-align: right; }
+  .index th.num { text-align: right; }
+  .index th:nth-child(3), .index td:nth-child(3) { width: 96px; }
+  .index th:nth-child(4), .index td:nth-child(4) { width: 214px; padding-left: 28px; }
+  .index th:nth-child(5), .index td:nth-child(5) { width: 90px; padding-left: 22px; }
+
+  .engines { margin-top: 54px; border-top: 1px solid var(--rule); padding-top: 20px; }
+  .engines .kicker { margin-bottom: 14px; }
+  .codes { display: grid; grid-template-columns: 1fr 1fr; gap: 18px; }
+  .code-plate { background: var(--sheet); border: 1px solid var(--rule); }
+  .code-plate .code-label {
+    display: flex; align-items: center; gap: 8px; padding: 8px 12px;
+    border-bottom: 1px solid var(--rule); font-family: var(--mono);
+    font-size: 9px; letter-spacing: .1em; text-transform: uppercase; color: var(--ink-3);
+  }
+  .code-plate .code-label .dot { width: 5px; height: 5px; background: var(--pine); }
+  .code-plate .code-label .dot.muted { background: var(--rule-strong); }
+  .code-plate pre {
+    margin: 0; padding: 13px 14px; overflow-x: auto;
+    font-family: var(--mono); font-size: 11.5px; line-height: 1.7; color: var(--ink);
+  }
+
+  /* machine */
+  .machine { display: grid; grid-template-columns: minmax(0, .8fr) minmax(0, 1.2fr); gap: 44px; align-items: start; }
+  .gif-plate { background: var(--sheet); border: 1px solid var(--rule-strong); padding: 7px; }
+  .gif-plate img { display: block; width: 100%; height: auto; }
+  .machine .fine { margin-top: 18px; }
+
+  /* close */
+  .close { background: var(--pine); color: var(--sheet); border-top: 1px solid var(--pine-deep); padding: 84px 0 92px; }
+  .close .wrap { display: grid; grid-template-columns: minmax(0, 1.2fr) minmax(0, .8fr); gap: 48px; align-items: start; }
+  .close h2 { color: var(--sheet); font-size: clamp(44px, 5.8vw, 84px); margin: 0; max-width: 14ch; }
+  .close p { color: rgba(250,245,233,.78); margin: 0 0 26px; font-size: 18px; }
+  .close .btn { background: var(--sheet); color: var(--pine-deep); border-color: var(--sheet); }
   .close .btn:hover { background: #fff; border-color: #fff; }
-  .close .tiny { margin-top: 18px; font-family: var(--mono); font-size: 10px; letter-spacing: .06em; text-transform: uppercase; color: rgba(255, 255, 255, .62); }
+  .close .fine { color: rgba(250,245,233,.62); }
+  .close .colophon {
+    margin-top: 54px; padding-top: 16px; border-top: 1px solid rgba(250,245,233,.24);
+    font-family: var(--mono); font-size: 9.5px; letter-spacing: .07em;
+    color: rgba(250,245,233,.55); text-transform: uppercase;
+  }
 
   /* footer */
-  footer { padding: 26px 0 40px; }
-  .foot { display: flex; align-items: center; gap: 24px; justify-content: space-between; font-size: 12.5px; color: var(--ink-3); }
-  .foot .links { display: flex; gap: 20px; }
-  .foot a { color: var(--ink-2); text-decoration: none; }
-  .foot a:hover { color: var(--ink); }
-
-  @media (max-width: 1000px) {
-    .hero .wrap, .split, .workspace, .runs { grid-template-columns: 1fr; gap: 42px; }
-    .hero { padding-top: 60px; }
-    .nav { display: none; }
-    .top .wrap { justify-content: space-between; }
-    .annotations { grid-template-columns: 1fr; gap: 18px; }
-    .codes { grid-template-columns: 1fr; }
-    .rule { grid-template-columns: 150px 1fr 16px; }
-    .proof .wrap { flex-wrap: wrap; }
-    .proof span { flex: 1 1 50%; border-top: 1px solid var(--line); }
-    .proof span:nth-child(-n+2) { border-top: 0; }
-    .proof span:nth-child(odd) { border-left: 0; }
+  footer { padding: 28px 0 38px; }
+  .foot { display: flex; align-items: baseline; gap: 26px; justify-content: space-between; }
+  .foot .brand { font-size: 20px; }
+  .foot .links { display: flex; gap: 22px; }
+  .foot a {
+    font-family: var(--mono); font-size: 9.5px; letter-spacing: .1em;
+    text-transform: uppercase; color: var(--ink-2); text-decoration: none;
   }
-  @media (max-width: 640px) {
-    .wrap { padding: 0 20px; }
-    h1 { font-size: 48px; }
-    .lede { font-size: 17px; }
-    section { padding: 68px 0; }
-    .hero { padding: 48px 0 52px; }
-    .cell-head .sample { display: none; }
-    pre.code { font-size: 11px; padding: 14px; }
-    .result th, .result td { padding-left: 12px; padding-right: 12px; }
-    .checks { grid-template-columns: 1fr; }
-    .verdict { grid-template-columns: 1fr; gap: 10px; }
-    .stamp { display: inline-block; justify-self: start; }
-    .rule { grid-template-columns: 1fr 16px; }
-    .rule h3 { grid-column: 1 / -1; }
-    .courses .level { display: none; }
-    .courses .title { font-size: 16px; }
+  .foot a:hover { color: var(--pine); }
+  .foot .set {
+    font-family: var(--mono); font-size: 8.5px; letter-spacing: .08em;
+    text-transform: uppercase; color: var(--ink-3);
+  }
+
+  /* ---------- responsive ---------- */
+  @media (max-width: 1040px) {
+    .nav { display: none; }
+    .menu { display: block; }
+    .hero-head { grid-template-columns: 1fr; gap: 26px; }
+    .hero-note { max-width: 46ch; }
+    .proof-lower { grid-template-columns: 1fr; }
+    .contract { border-left: 0; border-top: 1px solid var(--rule); }
+    .spread { grid-template-columns: 1fr; gap: 22px; padding: 62px 0; }
+    .margin { border-right: 0; padding-right: 0; display: flex; align-items: baseline; gap: 16px; }
+    .folio { font-size: 36px; }
+    .margin p { margin: 0; max-width: none; }
+    .plates-split, .machine, .close .wrap { grid-template-columns: 1fr; gap: 34px; }
+    .plate-tall { margin: 0; max-width: 300px; }
+    .notes { grid-template-columns: 1fr; gap: 18px; }
+    .codes { grid-template-columns: 1fr; }
+    .close .wrap { align-items: start; }
+  }
+  @media (max-width: 660px) {
+    .wrap, .spread { padding-left: 20px; padding-right: 20px; }
+    .top-inner { min-height: 62px; gap: 16px; }
+    .top-cta { display: none; }
+    .hero { padding: 42px 0 56px; }
+    h1 { font-size: 50px; }
+    .body { font-size: 17px; }
+    .query { font-size: 11.5px; padding: 18px 14px; }
+    .proof-head { padding: 9px 14px; gap: 10px; }
+    .proof-head .right { margin-left: 0; }
+    .result-table th, .result-table td { padding-left: 14px; padding-right: 14px; }
+    .contract { padding: 14px; }
+    .replay { position: static; margin: 12px 14px 14px; }
+    .ledger td:first-child { width: 38%; }
+    .index .no { width: 28px; }
+    .index .title { font-size: 16px; }
+    .index th:nth-child(4), .index td:nth-child(4) { display: none; }
+    .index th:nth-child(5), .index td:nth-child(5) { width: 64px; padding-left: 10px; }
+    .index .meta { font-size: 9px; }
+    .close { padding: 58px 0 64px; }
     .foot { flex-direction: column; align-items: flex-start; gap: 14px; }
-    .close { padding: 68px 0 76px; }
   }
   @media (prefers-reduced-motion: reduce) {
     * { animation: none !important; transition: none !important; }
@@ -339,258 +395,284 @@
 </head>
 <body>
 
+<a class="skip" href="#main">Skip to content</a>
+
 <header class="top">
-  <div class="wrap">
-    <a class="brand" href="/"><span class="mark"></span>querycraft</a>
+  <div class="wrap top-inner">
+    <a class="brand" href="/"><span class="mark"></span>Querycraft</a>
     <nav class="nav" aria-label="Primary">
-      <a href="#grading">How grading works</a>
+      <a href="#contract">The contract</a>
       <a href="#lesson">Lessons</a>
       <a href="#courses">Courses</a>
       <a href="https://github.com/theakhandpatel/querycraft/tree/main/docs">Docs</a>
     </nav>
-    <a class="btn small" href="/app/">Start learning</a>
+    <details class="menu">
+      <summary>Menu</summary>
+      <nav aria-label="Menu">
+        <a href="#contract">The contract</a>
+        <a href="#lesson">Lessons</a>
+        <a href="#courses">Courses</a>
+        <a href="https://github.com/theakhandpatel/querycraft/tree/main/docs">Docs</a>
+        <a href="/app/">Start a lesson</a>
+      </nav>
+    </details>
+    <a class="top-cta" href="/app/">Start a lesson</a>
   </div>
 </header>
 
-<main>
-  <section class="hero" style="border-top:0">
+<main id="main">
+  <section class="hero">
     <div class="wrap">
-      <div>
-        <h1>Learn SQL by <em>writing it.</em></h1>
-        <p class="lede">Querycraft runs what you write against a real PostgreSQL database and grades the rows that come back. Write it your way. If the result is right, you pass.</p>
-        <div class="actions">
-          <a class="btn" href="/app/">Start a lesson</a>
-          <a class="textlink" href="#grading">See how grading works</a>
+      <div class="hero-head">
+        <div>
+          <h1>Learn SQL by <em>writing it.</em></h1>
         </div>
-        <p class="note"><span class="dot"></span>Free to use · Sign in to open a lesson</p>
+        <div class="hero-note">
+          <strong>A query is a claim.</strong> The database returns the evidence.
+          Querycraft grades what the rows say, not how you wrote the statement.
+        </div>
       </div>
 
-      <div class="cell" id="demo-cell">
-        <div class="cell-head">
-          <span class="cell-name">exercise.sql</span>
-          <span class="badge">PostgreSQL</span>
-          <span class="sample">Recorded example</span>
+      <div class="hero-actions">
+        <a class="btn" href="/app/">Start a lesson<span class="arrow">→</span></a>
+        <p class="fine">Free to use · Sign in to keep your progress</p>
+      </div>
+
+      <div class="proof" id="proof" style="margin-top:34px">
+        <div class="proof-head">
+          <span>Proof 01</span>
+          <span class="dialect">PostgreSQL</span>
+          <span>Commerce dataset</span>
+          <span class="right">Recorded example</span>
         </div>
-        <pre class="code"><code><span class="k">select</span> c.name,
-       <span class="k">count</span>(<span class="k">distinct</span> o.id) <span class="k">as</span> orders,
-       <span class="k">round</span>(<span class="k">sum</span>(oi.quantity * oi.unit_price), 2) <span class="k">as</span> revenue
+        <pre class="query"><code><span class="k">select</span> c.name,
+       <span class="k">count</span>(o.id) <span class="k">as</span> orders,
+       <span class="k">sum</span>(oi.quantity * oi.unit_price) <span class="k">as</span> revenue
 <span class="k">from</span> customers c
-<span class="k">join</span> orders o <span class="k">on</span> o.customer_id = c.id
-<span class="k">join</span> order_items oi <span class="k">on</span> oi.order_id = o.id
+<span class="k">join</span> orders o <span class="k">using</span> (customer_id)
+<span class="k">join</span> order_items oi <span class="k">using</span> (order_id)
 <span class="k">group by</span> c.name
 <span class="k">order by</span> revenue <span class="k">desc</span>
 <span class="k">limit</span> 3;</code></pre>
-        <div class="cell-bar">
-          <button class="run" type="button" data-run>Replay example</button>
-          <span class="key">⌘↵</span>
-          <span class="sample">Recorded on the commerce dataset</span>
-        </div>
-        <table class="result">
-          <thead>
-            <tr><th>name</th><th class="num">orders</th><th class="num">revenue</th></tr>
-          </thead>
-          <tbody>
-            <tr><td>Ada Whitfield</td><td class="num">5</td><td class="num">1666.40</td></tr>
-            <tr><td>Emi Tanaka</td><td class="num">4</td><td class="num">1651.65</td></tr>
-            <tr><td>Omar Park</td><td class="num">3</td><td class="num">1397.40</td></tr>
-          </tbody>
-        </table>
-        <div class="verdict">
-          <div class="checks">
+        <div class="proof-lower">
+          <table class="result-table">
+            <thead>
+              <tr><th>name</th><th class="num">orders</th><th class="num">revenue</th></tr>
+            </thead>
+            <tbody>
+              <tr><td>Ada Whitfield</td><td class="num">5</td><td class="num">1666.40</td></tr>
+              <tr><td>Emi Tanaka</td><td class="num">4</td><td class="num">1651.65</td></tr>
+              <tr><td>Omar Park</td><td class="num">3</td><td class="num">1397.40</td></tr>
+            </tbody>
+          </table>
+          <div class="contract">
+            <span class="label">The contract</span>
             <span class="check"><svg viewBox="0 0 16 16" fill="none" aria-hidden="true"><path d="M3 8.5 6.2 12 13 4.5" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"/></svg>Columns and order</span>
             <span class="check"><svg viewBox="0 0 16 16" fill="none" aria-hidden="true"><path d="M3 8.5 6.2 12 13 4.5" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"/></svg>Rows</span>
             <span class="check"><svg viewBox="0 0 16 16" fill="none" aria-hidden="true"><path d="M3 8.5 6.2 12 13 4.5" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"/></svg>Row order</span>
             <span class="check"><svg viewBox="0 0 16 16" fill="none" aria-hidden="true"><path d="M3 8.5 6.2 12 13 4.5" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"/></svg>Values</span>
+            <span class="stamp">Passed 4/4</span>
           </div>
-          <span class="stamp">Passed</span>
         </div>
+        <button class="replay" type="button" data-run>Replay the proof</button>
       </div>
     </div>
   </section>
 
-  <div class="proof">
-    <div class="wrap">
-      <span>8 courses</span>
-      <span>52 chapters</span>
-      <span>PostgreSQL + SQLite</span>
-      <span>Runs in your browser</span>
-    </div>
-  </div>
-
-  <section id="grading">
-    <div class="wrap split">
-      <div>
-        <h2>The result is the answer.</h2>
-        <p class="body">An exercise declares the columns, the row order, and the values that count as correct. Any query that produces them passes: a join, a subquery, a window function. A query that returns the wrong rows fails, however tidy it looks.</p>
-      </div>
-      <div class="panel" aria-label="What the result contract checks">
-        <div class="panel-head">What the contract checks</div>
-        <div class="rule">
-          <h3>Columns and order</h3>
-          <p>The result has the expected columns, in the expected order.</p>
-          <svg viewBox="0 0 16 16" fill="none" aria-hidden="true"><path d="M3 8.5 6.2 12 13 4.5" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"/></svg>
-        </div>
-        <div class="rule">
-          <h3>Rows</h3>
-          <p>The right rows, with no extras and none missing.</p>
-          <svg viewBox="0 0 16 16" fill="none" aria-hidden="true"><path d="M3 8.5 6.2 12 13 4.5" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"/></svg>
-        </div>
-        <div class="rule">
-          <h3>Row order</h3>
-          <p>When the exercise asks for an order, the rows arrive in it.</p>
-          <svg viewBox="0 0 16 16" fill="none" aria-hidden="true"><path d="M3 8.5 6.2 12 13 4.5" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"/></svg>
-        </div>
-        <div class="rule">
-          <h3>Values</h3>
-          <p>Each value matches, with the comparison the exercise declares.</p>
-          <svg viewBox="0 0 16 16" fill="none" aria-hidden="true"><path d="M3 8.5 6.2 12 13 4.5" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"/></svg>
-        </div>
-        <div class="panel-foot">The app never compares your SQL text. Two different queries can both be right.</div>
-      </div>
-    </div>
-  </section>
-
-  <section id="lesson">
-    <div class="wrap">
-      <div class="section-intro">
-        <h2>Read a little. Then write.</h2>
-        <p class="body">A chapter mixes a short reading with a worked example and one or two exercises. The editor sits beside the question, the result sits under the query, and the feedback names the check that failed.</p>
-      </div>
-      <div class="shot"><img src="/landing/assets/lesson.png" alt="A Querycraft lesson with the reading column, a SQL cell, and a result grid" width="1280" height="720"></div>
-      <p class="caption">A chapter from SQL Analytics in the Real World.</p>
-      <div class="annotations">
-        <div class="annotation"><div class="n">01</div><h3>The reading column</h3><p>Short prose, diagrams, and syntax you can copy. Chapter content is seeded from the course.</p></div>
-        <div class="annotation"><div class="n">02</div><h3>The cell</h3><p>Run, check, hint, solution, keep, reset. The editor stays next to the question.</p></div>
-        <div class="annotation"><div class="n">03</div><h3>The result</h3><p>Rows and checks return together. When a check fails, the feedback says which one and why.</p></div>
-      </div>
-    </div>
-  </section>
-
-  <section id="workbook">
-    <div class="wrap split">
-      <div>
-        <h2>The work between lessons.</h2>
-        <p class="body">Every bookmarked exercise, saved query, note, and attempt stays in your workbook. Search across lessons and your own material with <kbd>Cmd</kbd>+<kbd>K</kbd> or <kbd>Ctrl</kbd>+<kbd>K</kbd>. Export a copy as JSON, or import it on another machine without overwriting what you have.</p>
-      </div>
-      <div>
-        <div class="shot"><img src="/landing/assets/workbook.png" alt="The workbook: progress, course content, notes, and saved queries" width="1280" height="720"></div>
-        <p class="caption">The workbook: progress, course content, notes, and saved queries.</p>
-      </div>
-    </div>
-  </section>
-
-  <section id="workspace">
-    <div class="wrap workspace">
-      <div>
-        <h2>A database you can break.</h2>
-        <p class="body">Sign in and you get a private copy of the sample database. Writes, schema changes, and transactions all work. Reset restores the original data in one click. Signed out, queries run read-only against the shared data.</p>
-        <ul class="facts">
-          <li><span>Signed out</span><span>Read-only on the shared dataset</span></li>
-          <li><span>Signed in</span><span>Your own copy, writable, with reset</span></li>
-          <li><span>Every answer</span><span>Graded by the rows it returns</span></li>
-        </ul>
-      </div>
-      <div>
-        <div class="drawer-shot"><img src="/landing/assets/tables-drawer.png" alt="The tables drawer showing table names, columns, types, and sample rows" width="440" height="900"></div>
-        <p class="caption">The tables drawer: the live schema, sample rows, and reset.</p>
-      </div>
-    </div>
-  </section>
-
-  <section id="courses">
-    <div class="wrap">
-      <h2>Eight courses. One habit.</h2>
-      <p class="body">Start with the clauses, then move to joins, subqueries, plans, and the parts of SQLite that surprise PostgreSQL developers.</p>
-      <table class="courses">
-        <thead><tr><th>Course</th><th>Dialect</th><th class="num">Chapters</th><th class="level">Level</th></tr></thead>
+  <section class="spread" id="contract">
+    <aside class="margin">
+      <span class="folio">01</span>
+      <p>The contract. Grading by result, never by text.</p>
+    </aside>
+    <div class="content">
+      <p class="kicker">The claim and the evidence</p>
+      <h2>The result is the answer.</h2>
+      <p class="body">An exercise declares its columns, the order of the rows, and the values that count as correct. A join, a subquery, or a window function all pass if the evidence matches. A query that returns the wrong rows fails, however tidy it looks.</p>
+      <table class="ledger">
+        <thead><tr><th>Check</th><th>What it means</th><th class="num"></th></tr></thead>
         <tbody>
-          <tr><td class="title">SQL Analytics in the Real World</td><td class="meta pg">PostgreSQL</td><td class="meta num">9</td><td class="meta level">Intermediate</td></tr>
-          <tr><td class="title">Joins without guesswork</td><td class="meta pg">PostgreSQL</td><td class="meta num">3</td><td class="meta level">Beginner → intermediate</td></tr>
-          <tr><td class="title">PostgreSQL query plans</td><td class="meta pg">PostgreSQL</td><td class="meta num">8</td><td class="meta level">Intermediate</td></tr>
-          <tr><td class="title">Subqueries and set operations</td><td class="meta pg">PostgreSQL</td><td class="meta num">4</td><td class="meta level">Intermediate</td></tr>
-          <tr><td class="title">SQL Foundations</td><td class="meta pg">PostgreSQL</td><td class="meta num">7</td><td class="meta level">Beginner</td></tr>
-          <tr><td class="title">SQLite Essentials</td><td class="meta lite">SQLite</td><td class="meta num">7</td><td class="meta level">Beginner → intermediate</td></tr>
-          <tr><td class="title">SQLite in Production</td><td class="meta lite">SQLite</td><td class="meta num">7</td><td class="meta level">Intermediate → advanced</td></tr>
-          <tr><td class="title">Postgres to SQLite</td><td class="meta lite">SQLite</td><td class="meta num">7</td><td class="meta level">Intermediate → advanced</td></tr>
+          <tr><td class="name">Columns and order</td><td class="rule-text">The result has the expected columns, in the expected order.</td><td class="mark"><svg viewBox="0 0 16 16" fill="none" aria-hidden="true"><path d="M3 8.5 6.2 12 13 4.5" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"/></svg></td></tr>
+          <tr><td class="name">Rows</td><td class="rule-text">The right rows, with no extras and none missing.</td><td class="mark"><svg viewBox="0 0 16 16" fill="none" aria-hidden="true"><path d="M3 8.5 6.2 12 13 4.5" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"/></svg></td></tr>
+          <tr><td class="name">Row order</td><td class="rule-text">When the exercise asks for an order, the rows arrive in it.</td><td class="mark"><svg viewBox="0 0 16 16" fill="none" aria-hidden="true"><path d="M3 8.5 6.2 12 13 4.5" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"/></svg></td></tr>
+          <tr><td class="name">Values</td><td class="rule-text">Each value matches, with the comparison the exercise declares.</td><td class="mark"><svg viewBox="0 0 16 16" fill="none" aria-hidden="true"><path d="M3 8.5 6.2 12 13 4.5" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"/></svg></td></tr>
         </tbody>
       </table>
+      <p class="ledger-note">Two different queries can both be right. The app cannot tell them apart, and it does not try.</p>
     </div>
   </section>
 
-  <section>
-    <div class="wrap split">
-      <div>
-        <h2>PostgreSQL first. SQLite too.</h2>
-        <p class="body">PostgreSQL is the main engine. Three SQLite courses teach where the two diverge: types, dates, the rowid, and the queries that have no direct port. The same grading rules apply to both.</p>
+  <section class="spread" id="lesson">
+    <aside class="margin">
+      <span class="folio">02</span>
+      <p>A chapter is a page you can run.</p>
+    </aside>
+    <div class="content">
+      <p class="kicker">Read, then do</p>
+      <h2>Read a little. Then write.</h2>
+      <p class="body">A chapter pairs a short reading with a worked example and one or two exercises. The editor sits beside the question, the rows sit under the query, and the feedback names the check that failed.</p>
+      <div class="plate" style="margin-top:32px">
+        <img src="/landing/assets/lesson.png" alt="A Querycraft lesson with the reading column, a SQL cell, and a result grid" width="1280" height="720">
       </div>
-      <div class="codes">
-        <div class="code-card">
-          <div class="label"><span class="dot"></span>PostgreSQL</div>
-          <pre><code><span class="k">select</span> date_trunc(<span class="s">'month'</span>, ordered_at) <span class="k">as</span> month,
-       <span class="k">count</span>(*) <span class="k">as</span> orders
-<span class="k">from</span> orders
-<span class="k">group by</span> 1
-<span class="k">order by</span> 1;</code></pre>
-        </div>
-        <div class="code-card">
-          <div class="label"><span class="dot grey"></span>SQLite</div>
-          <pre><code><span class="k">select</span> strftime(<span class="s">'%Y-%m'</span>, ordered_at) <span class="k">as</span> month,
-       <span class="k">count</span>(*) <span class="k">as</span> orders
-<span class="k">from</span> orders
-<span class="k">group by</span> 1
-<span class="k">order by</span> 1;</code></pre>
-        </div>
+      <p class="caption">A chapter from SQL Analytics in the Real World.</p>
+      <div class="notes">
+        <div class="note"><span class="n">01</span><h3>The reading</h3><p>Short prose, diagrams, and syntax you can copy. The chapter content is seeded from the course.</p></div>
+        <div class="note"><span class="n">02</span><h3>The cell</h3><p>Run, check, hint, solution, keep, reset. The editor stays next to the question.</p></div>
+        <div class="note"><span class="n">03</span><h3>The evidence</h3><p>Rows and checks return together. When a check fails, the feedback says which one and why.</p></div>
       </div>
     </div>
   </section>
 
-  <section id="runs">
-    <div class="wrap runs">
-      <div>
-        <h2>No server. No setup.</h2>
-        <p class="body">The browser build runs PostgreSQL in a Web Worker, compiled to WebAssembly. Lessons, results, and your progress work without a network. The hosted app runs the Go gateway: accounts, stored courses, and SQLite on the server.</p>
-        <p class="body" style="margin-top:14px;font-size:14.5px;color:var(--ink-3)">One binary when you host it: the app, the API, and its documentation on one port.</p>
+  <section class="spread" id="workspace">
+    <aside class="margin">
+      <span class="folio">03</span>
+      <p>Your own workspace. Writable, resettable, private.</p>
+    </aside>
+    <div class="content">
+      <p class="kicker">A database you can break</p>
+      <h2>Sign in. Get your own copy.</h2>
+      <div class="plates-split">
+        <div>
+          <p class="body">A signed-in learner gets a private copy of the sample database. Writes, schema changes, and transactions work. Reset restores the original data in one click. Signed out, queries run read-only against the shared dataset.</p>
+          <table class="ledger" style="margin-top:26px">
+            <tbody>
+              <tr><td class="name">Signed out</td><td class="rule-text">Read-only on the shared dataset.</td></tr>
+              <tr><td class="name">Signed in</td><td class="rule-text">Your own copy, writable, with reset.</td></tr>
+              <tr><td class="name">Every answer</td><td class="rule-text">Graded by the rows it returns.</td></tr>
+            </tbody>
+          </table>
+        </div>
+        <div class="plate-tall">
+          <div class="plate"><img src="/landing/assets/tables-drawer.png" alt="The tables drawer showing table names, columns, types, and sample rows" width="440" height="900"></div>
+          <p class="caption">The tables drawer: schema, sample rows, reset.</p>
+        </div>
       </div>
-      <div>
-        <img class="gif" src="/landing/assets/walkthrough.gif" alt="A short walkthrough: signing in, opening a lesson, running a query, and passing the checks" width="1440" height="810">
-        <p class="caption">Fifteen seconds in the real app: sign in, a lesson, a graded answer, the tables drawer.</p>
+    </div>
+  </section>
+
+  <section class="spread" id="workbook">
+    <aside class="margin">
+      <span class="folio">04</span>
+      <p>The work between lessons.</p>
+    </aside>
+    <div class="content">
+      <p class="kicker">The record</p>
+      <h2>What you keep.</h2>
+      <p class="body">Bookmarks, saved queries, notes, and the history of every exercise stay in the workbook. Search covers the lessons and your own material. Export a copy as JSON, or import it elsewhere without overwriting what you have.</p>
+      <div class="plate" style="margin-top:32px">
+        <img src="/landing/assets/workbook.png" alt="The workbook: progress, course content, notes, and saved queries" width="1280" height="720">
+      </div>
+      <p class="caption">The workbook: progress, course content, notes, and saved queries.</p>
+    </div>
+  </section>
+
+  <section class="spread" id="courses">
+    <aside class="margin">
+      <span class="folio">05</span>
+      <p>Eight courses. Start at the shelf.</p>
+    </aside>
+    <div class="content">
+      <p class="kicker">The shelf</p>
+      <h2>Eight courses. One habit.</h2>
+      <p class="body">Start with the clauses, then joins, subqueries, plans, and the SQLite courses that show where the two engines diverge.</p>
+      <table class="index">
+        <thead><tr><th></th><th>Course</th><th></th><th>Dialect</th><th class="num">Ch.</th></tr></thead>
+        <tbody>
+          <tr><td class="no">01</td><td class="title">SQL Analytics in the Real World</td><td class="meta">Intermediate</td><td class="meta" style="color:var(--pine)">PostgreSQL</td><td class="meta num">9</td></tr>
+          <tr><td class="no">02</td><td class="title">Joins without guesswork</td><td class="meta">Beginner → intermediate</td><td class="meta" style="color:var(--pine)">PostgreSQL</td><td class="meta num">3</td></tr>
+          <tr><td class="no">03</td><td class="title">PostgreSQL query plans</td><td class="meta">Intermediate</td><td class="meta" style="color:var(--pine)">PostgreSQL</td><td class="meta num">8</td></tr>
+          <tr><td class="no">04</td><td class="title">Subqueries and set operations</td><td class="meta">Intermediate</td><td class="meta" style="color:var(--pine)">PostgreSQL</td><td class="meta num">4</td></tr>
+          <tr><td class="no">05</td><td class="title">SQL Foundations</td><td class="meta">Beginner</td><td class="meta" style="color:var(--pine)">PostgreSQL</td><td class="meta num">7</td></tr>
+          <tr><td class="no">06</td><td class="title">SQLite Essentials</td><td class="meta">Beginner → intermediate</td><td class="meta">SQLite</td><td class="meta num">7</td></tr>
+          <tr><td class="no">07</td><td class="title">SQLite in Production</td><td class="meta">Intermediate → advanced</td><td class="meta">SQLite</td><td class="meta num">7</td></tr>
+          <tr><td class="no">08</td><td class="title">Postgres to SQLite</td><td class="meta">Intermediate → advanced</td><td class="meta">SQLite</td><td class="meta num">7</td></tr>
+        </tbody>
+      </table>
+
+      <div class="engines">
+        <p class="kicker">Two engines, one grammar</p>
+        <div class="codes">
+          <div class="code-plate">
+            <div class="code-label"><span class="dot"></span>PostgreSQL</div>
+            <pre><code><span class="k">select</span> date_trunc(<span class="k">'month'</span>, ordered_at) <span class="k">as</span> month,
+       <span class="k">count</span>(*) <span class="k">as</span> orders
+<span class="k">from</span> orders
+<span class="k">group by</span> 1
+<span class="k">order by</span> 1;</code></pre>
+          </div>
+          <div class="code-plate">
+            <div class="code-label"><span class="dot muted"></span>SQLite</div>
+            <pre><code><span class="k">select</span> strftime(<span class="k">'%Y-%m'</span>, ordered_at) <span class="k">as</span> month,
+       <span class="k">count</span>(*) <span class="k">as</span> orders
+<span class="k">from</span> orders
+<span class="k">group by</span> 1
+<span class="k">order by</span> 1;</code></pre>
+          </div>
+        </div>
+      </div>
+    </div>
+  </section>
+
+  <section class="spread" id="machine">
+    <aside class="margin">
+      <span class="folio">06</span>
+      <p>One binary when you host it.</p>
+    </aside>
+    <div class="content">
+      <p class="kicker">The machine</p>
+      <h2>No server. No setup.</h2>
+      <div class="machine">
+        <div>
+          <p class="body">The browser build runs PostgreSQL in a Web Worker, compiled to WebAssembly, so lessons and results work offline. The hosted build runs the Go gateway for accounts, stored courses, and SQLite.</p>
+          <p class="body" style="font-size:15px;color:var(--ink-3)">One binary when you host it: the landing, the app, the API, and its documentation on one port.</p>
+        </div>
+        <div>
+          <div class="gif-plate">
+            <img src="/landing/assets/walkthrough.gif" alt="A short walkthrough: signing in, opening a lesson, running a query, and passing the checks" width="960" height="540">
+          </div>
+          <p class="caption">Fifteen seconds in the real app.</p>
+        </div>
       </div>
     </div>
   </section>
 
   <section class="close">
     <div class="wrap">
-      <h2>Write your first query.</h2>
-      <p>Pick a course, open a chapter, and run something. The database will tell you the truth.</p>
-      <a class="btn" href="/app/">Start a lesson</a>
-      <p class="tiny">Free · No account needed</p>
+      <div>
+        <h2>Write your first query.</h2>
+      </div>
+      <div>
+        <p>Pick a course, open a chapter, and run something. The database will tell you the truth.</p>
+        <a class="btn" href="/app/">Start a lesson<span class="arrow">→</span></a>
+        <p class="fine">Free · Sign in to keep your progress</p>
+        <p class="colophon">Querycraft · A working notebook for SQL</p>
+      </div>
     </div>
   </section>
 </main>
 
 <footer>
   <div class="wrap foot">
-    <a class="brand" href="/"><span class="mark"></span>querycraft</a>
+    <a class="brand" href="/"><span class="mark"></span>Querycraft</a>
     <div class="links">
       <a href="https://github.com/theakhandpatel/querycraft/tree/main/docs">Documentation</a>
       <a href="https://github.com/theakhandpatel/querycraft">GitHub</a>
       <a href="/docs">API</a>
     </div>
-    <span>PostgreSQL · SQLite · React · Go</span>
+    <span class="set">Set in Source Serif 4 and Geist Mono</span>
   </div>
 </footer>
 
 <script>
   (() => {
-    const cell = document.getElementById('demo-cell');
+    const proof = document.getElementById('proof');
     const run = document.querySelector('[data-run]');
-    if (!cell || !run) return;
+    if (!proof || !run) return;
     const reduce = window.matchMedia('(prefers-reduced-motion: reduce)').matches;
     const play = () => {
       if (reduce) return;
-      cell.classList.remove('is-running');
-      void cell.offsetWidth;
-      cell.classList.add('is-running');
+      proof.classList.remove('is-running');
+      void proof.offsetWidth;
+      proof.classList.add('is-running');
     };
     run.addEventListener('click', play);
     if (!reduce) requestAnimationFrame(play);
