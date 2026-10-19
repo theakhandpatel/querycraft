@@ -8,7 +8,7 @@
   rules, and grading the same answers as the gateway's `modernc.org/sqlite` executor. Four
   builds are credible. Which one, and what does choosing it commit the adapter to?
 
-Settles **D12** in `docs/technical-design.md` §15. Extends ADR 0004 (why the app is
+Settles **D12**. Extends ADR 0004 (why the app is
 PostgreSQL-first and SQLite is a second dialect) to the browser half of that dialect;
 ADR 0006 settles the *gateway* half's isolation. Every number below is measured on this
 machine (Linux, x86-64, Node 20.17 for the harness, Chromium for the in-page checks) and

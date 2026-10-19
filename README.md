@@ -2,131 +2,96 @@
 
 # Querycraft
 
-Learn SQL by writing it. Every exercise runs on a real PostgreSQL engine, and
-every answer is graded by comparing your query's result against an explicit
-contract. It never compares SQL text, so there is more than one right answer.
+Querycraft teaches SQL by having you write it against a real database. Each
+exercise is graded by the rows your query returns, not by the text you typed,
+so more than one correct answer can pass.
 
-The whole product is one binary: `make build` writes `backend/bin/querycraft`,
-which serves the app, the API, and its own documentation, and starts its own
-PostgreSQL. No Docker and no configuration.
+![A graded exercise: the query runs, the contract checks pass, and the answer is accepted](docs/assets/walkthrough-grade.gif)
 
-[![Graded: Passed](docs/assets/walkthrough-poster.png)](docs/assets/walkthrough.mp4)
+## Run it
 
-| Recording | |
-| --- | --- |
-| [Walkthrough, MP4, 0:53, 1080p](docs/assets/walkthrough.mp4) | The full flow, recorded on the built binary at 1920×1080: sign-in, the theme picker, a lesson in Dracula, a graded exercise, the tables drawer, the workbook, progress, the challenge lab, the manage surface (gateway health, AI provider, course inventory), and a switch to the Terminal theme. |
-| [Highlight GIF](docs/assets/walkthrough-grade.gif) | The graded exercise, first 15 seconds. |
+You need Go 1.26 or later and Node 20.19 or later.
+
+```sh
+make install   # frontend dependencies, once
+make build
+make serve
+```
+
+Open <http://localhost:8080> and start a lesson.
+
+The first start prepares a local PostgreSQL database with sample data. It takes
+about 10 seconds. Later starts are immediate. To use your own PostgreSQL, create
+`querycraft.json`:
+
+```json
+{"database_url":"postgres://user:pass@host:5432/db?sslmode=disable"}
+```
+
+For configuration, backups, and deployment, read
+[Self-hosting](docs/self-hosting.md).
+
+## What you can do
+
+- **Follow a course.** Eight courses and 52 chapters cover PostgreSQL and
+  SQLite. Lessons combine reading with SQL you run and check in the page.
+- **Get graded on results.** An exercise passes when its columns, row order,
+  and values match the expected result. The app explains which check failed.
+- **Work in your own database.** Signed-in learners get a private workspace
+  copied from a sealed template. Writes, DDL, and transactions work there, and
+  reset restores the sample data.
+- **Keep notes as you go.** Bookmarks, saved queries, notes, and progress live
+  in your workbook. Search covers lessons, exercises, notes, bookmarks, and
+  saved queries with <kbd>Cmd</kbd>+<kbd>K</kbd> or <kbd>Ctrl</kbd>+<kbd>K</kbd>.
+- **Ask for help.** Every exercise has hints, a solution, and an optional tutor
+  that sees your query and the error you hit.
+- **Build a course.** Describe what you want to learn, and the app can generate
+  a course whose exercises are checked against the engine before you see them.
+  Use the built-in provider, or connect an OpenAI-compatible service.
+- **Make it yours.** Choose one of 18 themes or build one from an accent color.
+
+## Screenshots
 
 | | |
 | --- | --- |
-| <img src="docs/assets/screens/02-home.png" width="380" alt="Home"> | <img src="docs/assets/screens/04-lesson.png" width="380" alt="Lesson"> |
-| Home. The next chapter, your streak, and your effort. | A lesson. Reading column, diagrams, and the SQL cell. |
-| <img src="docs/assets/screens/06-passed.png" width="380" alt="Graded"> | <img src="docs/assets/screens/09-tables-drawer.png" width="380" alt="Tables drawer"> |
-| Graded. All four contract clauses pass. | The tables drawer. The live schema, with a workspace reset. |
+| <img src="docs/assets/screens/02-home.png" width="400" alt="Home screen"> | <img src="docs/assets/screens/04-lesson.png" width="400" alt="A lesson with a SQL cell"> |
+| Home: the next chapter, your streak, and your effort. | A lesson: reading, diagrams, and a SQL cell. |
+| <img src="docs/assets/screens/06-passed.png" width="400" alt="A graded exercise"> | <img src="docs/assets/screens/09-tables-drawer.png" width="400" alt="The tables drawer"> |
+| A graded exercise. Every contract check passed. | The tables drawer: the live schema, sample rows, and reset. |
 
-The other fourteen screens are in `docs/assets/screens/` — including the
-manage surface (gateway health, the AI provider, the course inventory) and the
-theme picker with every preset.
+The other screens are in [`docs/assets/screens/`](docs/assets/screens/). The
+[full walkthrough](docs/assets/walkthrough.mp4) shows the app on the built
+binary at 1920×1080.
 
-## What you get
+## How it works
 
-**Eight complete courses.** 52 chapters across PostgreSQL and SQLite, with 53
-worked examples and 53 exercises: analytics, joins, subqueries, query plans,
-foundations, and three SQLite courses. Authoring is built in: describe what
-you want to get good at, and the gateway generates a course whose every
-exercise is verified against the real engine before you see it.
+The app has two ways to run SQL. By default it runs PostgreSQL in your browser
+with PGlite, inside a Web Worker, so you need no server. The Go gateway runs
+PostgreSQL or SQLite on the server, serves the same app, and adds accounts,
+stored courses, and the tutor. In a production build, the app uses the gateway
+when it answers on its own origin.
 
-**A real engine, not a simulation.** The app runs full PostgreSQL in your
-browser, in a Web Worker. It needs no server, works offline, and can stop a
-runaway statement instantly.
+`make build` produces one binary, `backend/bin/querycraft`, that serves the app,
+the API, and the API documentation on one port. It starts its own PostgreSQL
+when no database is configured.
 
-**Grading by result, not by text.** An answer passes when its result matches
-the contract: the columns, the row order, and the values. The same rules run
-in the browser and on the server.
-
-**Your own workspace.** An anonymous query runs read-only against the shared
-dataset. A signed-in learner gets a private database copied from a sealed
-template on first use. There, writes, DDL, and transactions all work, and the
-tables drawer can restore the original data at any time.
-
-**A workbook that stays yours.** Bookmarks, saved queries, notes, and progress
-history live on your device. One search field covers lesson text, exercises,
-notes, bookmarks, and saved queries with `Cmd`+`K` or `Ctrl`+`K`. Export
-writes a versioned JSON file with no credentials; import merges without
-overwriting.
-
-**A challenge lab.** Signed-in learners can generate practice challenges and
-whole courses from the dataset. Bring any provider: the built-in deterministic
-provider needs no key, any OpenAI-compatible server is one setting away, and
-Anthropic, OpenAI, Gemini and 35 more providers resolve from the embedded
-model catalog.
-
-**Eighteen themes, or yours.** Light, dark, warm, cool, high-contrast and
-terminal presets — plus famous palettes like One Dark, Dracula, Nord and
-Tokyo Night — all gated at 4.5:1 contrast. Make your own from an accent
-color; the inks tune themselves, and the theme follows your account.
-
-**Keyboard accessible.** The app works end to end with the keyboard only, with
-a skip link, visible focus, and dialogs that trap and return focus.
-
-## Try it
-
-You need Go 1.26 or later and Node 20.19 or later. If `go` is not on `PATH`,
-run `export PATH=$PATH:/usr/local/go/bin`.
-
-```sh
-make build        # frontend, embed, gateway -> backend/bin/querycraft
-make serve        # app and API on http://localhost:8080
-```
-
-The first start downloads PostgreSQL once, creates its cluster, and loads the
-commerce dataset. This takes about 10 seconds. Later starts are immediate. The
-cluster lives under `.data/pg/` relative to where you started the gateway
-(the repository root for `make serve`); `querycraft db status` prints the
-resolved paths. `make verify` runs this cold start on every run and checks the
-responses.
-
-A new install seeds an administrator at `admin@querycraft.local` with an empty
-password, so the first sign-in needs no setup. That empty password works only
-on the loopback default (`127.0.0.1:8080`); a network bind requires
-`admin_password` in the config file. Public signups get the `learner` role.
-
-To use your own PostgreSQL instead of the embedded one:
-
-```sh
-printf '{"database_url":"postgres://user:pass@host:5432/db?sslmode=disable"}\n' > querycraft.json
-./backend/bin/querycraft
-```
-
-Every setting has a key in that file, and the binary is a small CLI:
-
-```sh
-querycraft db status    # what the gateway would resolve right now
-querycraft db reset     # delete the local cluster; the next start re-applies the dataset
-```
-
-The API documents itself: open `http://localhost:8080/docs` for the Swagger
-UI, or read `backend/README.md` for the endpoints and every configuration key.
+Read [Architecture](docs/architecture.md) for the components, the data model,
+and the request path.
 
 ## Documentation
 
-| Question | Document |
+| Topic | Document |
 | --- | --- |
-| How do the parts fit together, with diagrams? | [`docs/architecture.md`](docs/architecture.md) |
-| How do I build, test, and extend it? | [`docs/development.md`](docs/development.md) |
-| How do I run it on a server, and what should I back up? | [`docs/self-hosting.md`](docs/self-hosting.md) |
-| What does the product do, and what is unfinished? | [`docs/features.md`](docs/features.md) |
-| How do the endpoints and settings work? | [`backend/README.md`](backend/README.md) |
-| Where is every document indexed? | [`docs/README.md`](docs/README.md) |
-| Why was a decision made? | [`docs/adr/`](docs/adr/) |
+| Build, test, and extend | [`docs/development.md`](docs/development.md) |
+| Run on a server, configure, back up | [`docs/self-hosting.md`](docs/self-hosting.md) |
+| Feature reference | [`docs/features.md`](docs/features.md) |
+| Architecture and data layout | [`docs/architecture.md`](docs/architecture.md), [`docs/database-layout.md`](docs/database-layout.md) |
+| API endpoints and configuration keys | [`backend/README.md`](backend/README.md) |
+| Design decisions | [`docs/adr/`](docs/adr/) |
+| All documentation | [`docs/README.md`](docs/README.md) |
 
-## Status
+## Contributing
 
-The app covers the full course experience from the design: the home dashboard,
-courses, lessons with SQL cells, the tables drawer, the workbook, progress,
-the challenge lab, and the authoring screens. Eight courses ship complete, and
-every exercise is graded against a result contract.
-
-What is unfinished is listed where the work is tracked:
-[`docs/features.md`](docs/features.md) lists the open items, and
-[`progress.md`](progress.md) records what has shipped.
+Read [Development](docs/development.md) for the repository layout, the test
+suite, and the writing and code conventions. Before you open a pull request,
+run `make test` and `make verify`.

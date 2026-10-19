@@ -1,9 +1,8 @@
 # Adapter parity: the same lesson on both engines
 
-Design source: `docs/technical-design.md` §14 (M3 exit gate: *"The same lesson
-content runs against both adapters unchanged"*), §4.2 (QueryResult and the
-closed error codes), §6.1 (the value-comparison rule), §5.4 (Adapter B).
-Instrument: `scripts/adapter-parity-audit.mjs`.
+The gate: *"The same lesson content runs against both adapters unchanged."*
+The audit compares each row and each value, not the query text. Instrument:
+`scripts/adapter-parity-audit.mjs`.
 
 ## What it proves
 
@@ -208,8 +207,8 @@ adapter-parity-audit: OK (4 skipped)
 
 ## The SQLite dialect (`--dialect sqlite`)
 
-`docs/technical-design.md` / `docs/m6-implementation-plan.md` add a second
-dialect to the same product: a learner can write SQLite as well as PostgreSQL.
+The second dialect is part of the same product: a learner can write SQLite as
+well as PostgreSQL.
 The parity gate is the same idea with a different pair of engines, so it is the
 same instrument with `--dialect sqlite` (M6 step 8). The PostgreSQL half is
 untouched and is still the default:

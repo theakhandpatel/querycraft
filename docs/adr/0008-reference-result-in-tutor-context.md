@@ -6,8 +6,7 @@
 - **Question:** when the tutor helps a learner, may the model see the exercise's
   answer, and if so which part of it?
 
-Settles **Ask Tutor** in `docs/technical-design.md` §6.4 and §11.2, and amends
-ADR 0005's "What the model may see".
+Settles **Ask Tutor**, and amends ADR 0005's "What the model may see".
 
 ## Context
 

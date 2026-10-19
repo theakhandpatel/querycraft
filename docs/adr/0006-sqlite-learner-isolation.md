@@ -9,7 +9,7 @@
   the database. What is the equivalent, what does it cost here, and what must a reset do
   that PostgreSQL's reset does not have to do?
 
-Settles **D14** in `docs/technical-design.md` §15. Extends ADR 0003 (who gets a writable
+Settles **D14**. Extends ADR 0003 (who gets a writable
 workspace, and what reset means) and ADR 0002 (how one is created) to the second dialect
 ADR 0004 accepted; ADR 0004's own estimate, *"a file copy costs ~1 ms and no connection
 at all"*, is re-measured below rather than restated.

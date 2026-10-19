@@ -52,9 +52,8 @@ against its schema. The full map:
 | `GET /docs` | Swagger UI (HTML) |
 
 An earlier `evaluation.schema.json` described a persisted *Evaluation record*
-(`attempt_id`, `status`, `feedback_codes`, `evaluator_version`) taken from
-`docs/technical-design.md` §4.4. No endpoint or storage path ever emitted that
-record, so the schema was rewritten to the response `POST /answers/evaluate`
-actually returns. A persisted record would need its own schema.
+(`attempt_id`, `status`, `feedback_codes`, `evaluator_version`). No endpoint or
+storage path ever emitted that record, so the schema was rewritten to the
+response `POST /answers/evaluate` actually returns. A persisted record would need its own schema.
 
-See `docs/technical-design.md` sections 4 and 6 for the full rules.
+See `backend/internal/eval/` and `contracts/fixtures/` for the full rules.

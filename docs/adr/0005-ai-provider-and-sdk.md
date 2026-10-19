@@ -7,9 +7,9 @@
   interface it owns, and what provider is the default when nothing is
   configured?
 
-Settles **AI provider and SDK** in `docs/technical-design.md` §15. Shaped by
-§11.2 (*"the SDK is chosen after a spike against a provider-neutral interface, not
-by preference"*) and by the §12 threat table row *Provider key leak*.
+Settles **AI provider and SDK**. Shaped by the requirement that the SDK is
+chosen after a spike against a provider-neutral interface, not by preference, and
+by the threat of a provider key leak.
 
 ## Context
 

@@ -1,6 +1,6 @@
 # Result-contract fixtures
 
-The language-neutral fixture suite from `docs/technical-design.md` §6.3. The
+The language-neutral fixture suite for result grading. The
 result-contract evaluator exists twice, JavaScript (`web/src/api/compare.ts`,
 M1) and Go (`backend/internal/eval`, M3), and both are judged against **these
 files**. A new comparison rule is added here first, then implemented in both

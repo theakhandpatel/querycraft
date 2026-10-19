@@ -104,9 +104,7 @@ Stated honestly, because the owner's instinct is not wrong in the abstract:
 The decision above is "PostgreSQL is the default engine", not "SQLite is banned". The
 owner has asked for SQLite courses too, and that is a different (and good) product idea:
 a course that teaches where SQLite differs from PostgreSQL is exactly the kind of thing
-this app is for. It is tracked as **M6 "Second dialect, SQLite"** in
-`docs/technical-design.md` §14, with open decisions D12–D15. Adding it is real work
-precisely because of the reasons above: dialect-aware grading, error classification and
+this app is for. Adding it is real work precisely because of the reasons above: dialect-aware grading, error classification and
 value encoding, plus a second dataset and a per-dialect parity audit. It does not change
 which engine the existing three courses run on.
 

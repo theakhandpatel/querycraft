@@ -67,8 +67,8 @@ decoder belongs. `web/oxlint.config.ts` explains every severity it sets.
 
 `npm run doctor` runs React Doctor over `web/src`. It reports accessibility,
 render behaviour and bundle findings. It is a report, not a gate. Treat each
-finding as a hypothesis and check it against the file. `progress.md` records
-the verdicts for the run on 2026-10-16.
+finding as a hypothesis and check it against the file. Record the verdict
+beside the change.
 
 ## Working on the gateway
 

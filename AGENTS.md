@@ -138,8 +138,8 @@ project's own instruction. `web/tools/oxlint/anti-slop/PROVENANCE.md` records th
 upstream revision. Read them before you change a severity.
 
 React Doctor's findings are hypotheses, not verdicts. Check each one against the
-file before you act on it. `progress.md` records the verdicts for the run on
-2026-10-16, including the four that were false positives or deliberate.
+file before you act on it. Record the verdict beside the change, including
+findings you decide are false positives or deliberate.
 
 ## Writing
 

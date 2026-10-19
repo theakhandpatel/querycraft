@@ -7,7 +7,7 @@
   a separate database, a separate schema, or the one shared schema with row
   scoping, and what does creating and dropping one actually cost here?
 
-Supersedes nothing. Resolves **D11** in `docs/technical-design.md` §2.
+Supersedes nothing. Resolves **D11**.
 
 ## Decision
 

@@ -1,10 +1,7 @@
 # Architecture
 
-This document describes the released app, `v0.10.0`. The design source is
-[`technical-design.md`](technical-design.md), and the decisions of record are in
-[`adr/`](adr/).
-
-The document says how the parts fit together and why. Each section points to the
+This document describes how the parts fit together and why. The decisions of
+record are in [`adr/`](adr/). Each section points to the
 code that proves the claim.
 
 ## 1. One repository, two parts, one contract
@@ -302,9 +299,8 @@ Where to read next, by question:
 | Why PostgreSQL first, and SQLite second? | `docs/adr/0004-postgresql-not-sqlite.md` |
 | How does the model seam work? | `docs/adr/0005-ai-provider-and-sdk.md` |
 | Where is the schema? | `docs/database-layout.md` |
-| How does grading work? | `docs/technical-design.md` section 6, `contracts/fixtures/` |
-| Where is the backend layout, and why? | `docs/backend-decomposition.md` |
-| What has shipped, and what is open? | `progress.md` |
+| How does grading work? | `contracts/fixtures/` and `backend/internal/eval/` |
+| Where is the backend layout, and why? | [`../backend/README.md`](../backend/README.md) |
 | How do I write a lesson? | `docs/content-authoring.md` |
 
 ## 9. How the gateway starts

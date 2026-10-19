@@ -1,9 +1,8 @@
 # The JSON export
 
 One document, written by the workbook's **Export** button (and from Appearance
-beside *Clear my data*). It is the learner's own copy of their work, and per
-`technical-design.md` §8.3, the migration path between browser mode and server
-mode.
+beside *Clear my data*). It is the learner's own copy of their work, and the migration path between
+browser mode and server mode.
 
 ```jsonc
 {
