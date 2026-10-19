@@ -7,8 +7,9 @@ matches its contract is caught before a learner meets it. The audit is part of
 
 ## What it runs
 
-The audit imports the catalog (`web/src/data/curriculum.ts`) and the app's own
-resolvers, `web/src/lib/dialect.ts` and `web/src/lib/dataset.ts`. The dialect and
+The audit imports the catalog (`web/src/data/curriculum.ts`, assembled from
+`web/src/data/courses/`) and the app's own resolvers, `web/src/lib/dialect.ts`
+and `web/src/lib/dataset.ts`. The dialect and
 dataset for each exercise are therefore the ones a screen would choose, with the
 same precedence: block, then module, then course, then the default.
 

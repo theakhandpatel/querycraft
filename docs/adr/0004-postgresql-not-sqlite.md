@@ -19,7 +19,7 @@ This is not a taste judgement. The repository's own content settles it.
 
 ## The evidence: the course *is* PostgreSQL
 
-`web/src/data/curriculum.ts` plus `web/src/data/content/*.md` (23 chapters,
+`web/src/data/courses/` plus `web/src/data/content/*.md` (23 chapters,
 ~164 KiB) use these constructs, counted by `rg`:
 
 | Construct | Occurrences | SQLite |

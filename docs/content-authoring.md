@@ -8,27 +8,27 @@ the curriculum. Both are data. No lesson text lives in application code.
 | Piece | Path | Role |
 | --- | --- | --- |
 | Lesson markdown | `web/src/data/content/<module-id>.md` | The authored prose. One file per module. |
-| Curriculum | `web/src/data/curriculum.ts` | Module ids, titles, objectives, examples, and graded exercises. |
+| Curriculum | `web/src/data/courses/<id>.ts` | Module ids, titles, objectives, examples, and graded exercises. `web/src/data/curriculum.ts` assembles the catalog. |
 | Seeder | `web/src/api/content.ts`, `web/src/lib/contentSeed.ts` | Splits each file into sections and keeps the browser database in step with the bundle. |
 | Browser table | `app.content_docs` | `(course_id, module_id, ordinal, section, markdown)`. |
 | Browser metadata | `app.content_meta` | The fingerprint of the bundle that produced the rows. |
-| Reader, browser mode | `fetchModuleContent()` | `SELECT section, markdown FROM app.content_docs WHERE module_id = $1 ORDER BY ordinal`. |
+| Reader, browser mode | `getContent()` in `web/src/api/execution/browser.ts` | Returns the bundled sections. Reading a chapter does not open PGlite. |
 | Reader, gateway mode | `getContent()` in `web/src/api/execution/http.ts` | Returns the bundled sections. The gateway does not store chapter prose. |
 
-In browser mode, the database is what the lesson page renders and the bundle is
-only the seeder. The seeder runs when the in-browser database is created, which
-is once per page load, and on a workspace reset. It compares the bundle's
-fingerprint with the one in `app.content_meta` and rewrites `app.content_docs`
-when they differ. A changed or added module therefore appears without a manual
-migration.
+The lesson page renders the bundled sections in both modes. PGlite still seeds
+`app.content_docs` when a PostgreSQL workspace boots, so a learner can query the
+app metadata, but opening a chapter never waits for that database. The seeder
+compares the bundle's fingerprint with `app.content_meta` and rewrites the table
+when they differ. A changed or added module appears without a manual migration.
 
-In gateway mode, the client renders the bundled sections directly. The prose is
-still authored once, in the same markdown files.
+The prose is authored once, in the markdown files. The gateway does not need a
+second copy.
 
 ## File name is module id
 
 `m1.md` seeds module `m1`, `j3.md` seeds `j3`, `q2.md` seeds `q2`. The file name
-is the module id, and it must match an id in `curriculum.ts`.
+is the module id, and it must match an id in the course's module under
+`web/src/data/courses/`.
 
 The course comes from the first letter of the module id through the prefix map in
 `web/src/lib/contentSeed.ts`:
@@ -87,11 +87,12 @@ Answer prose.
 
 ## Add a module
 
-1. Add the module to `curriculum.ts`: id, title, objectives, blocks, and a graded
-   exercise with `solution` and `contract`.
+1. Add the module to the course's file under `web/src/data/courses/`: id, title,
+   objectives, blocks, and a graded exercise with `solution` and `contract`.
 2. Add `web/src/data/content/<id>.md`.
-3. If the module belongs to a new course, register the course in `COURSES` and
-   add its prefix to `COURSE_BY_PREFIX` in `web/src/lib/contentSeed.ts`.
+3. If the module belongs to a new course, add the course to `COURSES` in
+   `web/src/data/courses/index.ts` and add its prefix to `COURSE_BY_PREFIX` in
+   `web/src/lib/contentSeed.ts`.
 
 The seeding loop is data-driven. The lesson page loads the module ids from the
 courses, so no separate content preload list needs editing.
