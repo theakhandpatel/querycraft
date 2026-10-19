@@ -1,5 +1,6 @@
 import { Option, Schema } from 'effect';
 import { createExecutionApi } from './execution/service';
+import { SIMPLE_MODE } from '../lib/mode';
 import type { ExecutionApi } from '../types';
 
 /* One seam. Everything above it (screens, workbook, lesson) is adapter-agnostic.
@@ -49,6 +50,9 @@ async function probeGatewayEngine(base: string): Promise<string | null> {
 }
 
 function requestedMode(): ApiMode {
+  /* The simple build is browser-only by definition. An env file that still
+     names the gateway must not turn the public sample into a broken client. */
+  if (SIMPLE_MODE) return 'pglite';
   const requested = import.meta.env.VITE_API_MODE;
   return requested === 'http' ? 'http' : 'pglite';
 }
@@ -64,6 +68,12 @@ function requestedMode(): ApiMode {
  */
 export async function resolveApiMode(): Promise<void> {
   if (resolvedMode) return;
+  /* Simple never probes its host for a gateway. GitHub Pages has no /health,
+     and a 404 should not be part of the public sample's boot path. */
+  if (SIMPLE_MODE) {
+    resolvedMode = 'pglite';
+    return;
+  }
   const requested = import.meta.env.VITE_API_MODE;
   if (requested === 'http' || requested === 'pglite') {
     resolvedMode = requested;

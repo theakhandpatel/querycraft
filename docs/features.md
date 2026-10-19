@@ -8,6 +8,18 @@ The library starts with SQLite, then moves to PostgreSQL. It covers the clauses,
 joins, subqueries, CTEs, window functions, query plans, and the differences
 between the two engines. Every chapter runs; every answer is graded live.
 
+## Two ways to run
+
+The browser sample runs entirely in the page. It carries the built-in library,
+runs SQLite and PostgreSQL in the browser, and keeps progress, notes, and themes
+on this device. It needs no account and no server. It is the build published on
+GitHub Pages.
+
+The hosted build runs the Go gateway. It adds accounts, private server
+workspaces, AI course generation, the tutor, stored courses, generation runs,
+and administration. The library, grading, workbook, themes, and export work the
+same way in both builds.
+
 ## Courses and lessons
 
 - **A library to start from.** SQLite Essentials first, then SQL Foundations,
@@ -28,18 +40,24 @@ between the two engines. Every chapter runs; every answer is graded live.
   order. The app never compares SQL text, so any correct query passes.
 - **Useful feedback.** When a check fails, the app names the check and returns a
   stable error code such as `QUERY_TIMEOUT` or `QUERY_SYNTAX_ERROR`.
-- **Help when you need it.** Every exercise offers a hint and a solution. Ask
-  tutor sends your query and the error to the configured model and talks you
-  through it without revealing the reference query.
+- **Help when you need it.** Every exercise offers a hint and a solution. In the
+  hosted build, Ask tutor sends your query and the error to the configured model
+  and talks you through it without revealing the reference query.
 - **Run and check.** A cell runs with <kbd>Ctrl</kbd>+<kbd>Enter</kbd> or
   <kbd>Cmd</kbd>+<kbd>Enter</kbd>. You can run, check, reveal a hint or the
   solution, keep the query, reset the cell, or bookmark the exercise.
 
 ## Your workspace
 
-- **Signed out.** Queries run read-only against the shared sample data. A write
-  is refused.
-- **Signed in.** You get a private database copied from a sealed template.
+In the browser sample, the local workspace is writable from the first query.
+`INSERT`, `UPDATE`, `DELETE`, DDL, and transactions all work. Reset restores the
+sample data at any time. Progress stays on this device.
+
+In the hosted build:
+
+- Signed out, queries run read-only against the shared sample data. A write is
+  refused.
+- Signed in, you get a private database copied from a sealed template.
   `INSERT`, `UPDATE`, `DELETE`, DDL, and transactions all work. Reset restores
   the sample data at any time.
 - **Tables drawer.** Inspect the live schema, column types, keys, nullability,
@@ -59,7 +77,7 @@ between the two engines. Every chapter runs; every answer is graded live.
 - Export writes a versioned JSON file with no credentials. Import checks the
   file and merges it without overwriting work you already have.
 
-## Accounts
+## Accounts (hosted build)
 
 - A new install seeds an administrator at `admin@querycraft.local` with a blank
   password. The blank password works only on the default loopback address. A
@@ -69,7 +87,7 @@ between the two engines. Every chapter runs; every answer is graded live.
 - Your progress, workspaces, courses, and runs are scoped to your account. The
   app resolves the owner from the session, never from the request body.
 
-## Build a course with AI
+## Build a course with AI (hosted build)
 
 - **Start from a goal.** Describe what you want to get good at. The model writes
   an outline, then the chapters.

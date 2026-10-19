@@ -22,7 +22,8 @@ import ChallengeLabScreen from './components/screens/ChallengeLabScreen';
 import AppearanceScreen from './components/screens/AppearanceScreen';
 import AuthScreen from './components/screens/AuthScreen';
 import { useStore } from './state/store';
-import { AUTHORING_SCREENS } from './lib/route';
+import { SIMPLE_MODE } from './lib/mode';
+import { screenAllowed } from './lib/route';
 
 const SCREENS = {
   home: HomeScreen,
@@ -45,7 +46,7 @@ export default function App() {
   /* Authoring lives behind the admin role; a learner landing on one of those
      routes (stale nav, deep link) is sent back to Home rather than shown it.
      The router applies the same list to the fragment. */
-  const Active = s.role !== 'admin' && AUTHORING_SCREENS.includes(s.screen) ? HomeScreen : SCREENS[s.screen] || HomeScreen;
+  const Active = screenAllowed(s.screen, s.role) ? SCREENS[s.screen] || HomeScreen : HomeScreen;
 
   useEffect(() => {
     function onKey(e: KeyboardEvent) {
@@ -109,7 +110,7 @@ export default function App() {
         </main>
       </div>
       <TablesDrawer />
-      <TutorDrawer />
+      {!SIMPLE_MODE && <TutorDrawer />}
       <ChaptersDrawer />
       <NavDrawer />
       <Modals />

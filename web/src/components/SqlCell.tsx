@@ -8,6 +8,7 @@ import { gradePlan, type PlanBundle, type PlanCheck } from '../api/planContract'
 import { datasetFor } from '../lib/dataset';
 import { dialectLabel } from '../lib/dialect';
 import { servedDialects } from '../lib/dialectChoice';
+import { SIMPLE_MODE } from '../lib/mode';
 import type { Block, CheckResult, Course, CourseModule, QueryResult, TutorRunState } from '../types';
 
 type Feedback =
@@ -371,7 +372,7 @@ export default function SqlCell({ block, module: mod, course, onPassed }: { bloc
               <span className="celldesktop-extra">
                 <button className="small ghost" onClick={hint}>Hint</button>
                 <button className="small ghost" onClick={solution}>Show solution</button>
-                <button className="small ghost" onClick={openTutor}><Icon name="sparkles" />Ask tutor</button>
+                {!SIMPLE_MODE && <button className="small ghost" onClick={openTutor}><Icon name="sparkles" />Ask tutor</button>}
                 <button className="small ghost" onClick={() => keep(code)}>Keep query</button>
                 <button className="small ghost" onClick={reset}><Icon name="refresh" />Reset</button>
               </span>
@@ -382,7 +383,7 @@ export default function SqlCell({ block, module: mod, course, onPassed }: { bloc
                 <div className="cellmoremenu">
                   <button className="small ghost" onClick={hint}>Hint</button>
                   <button className="small ghost" onClick={solution}>Show solution</button>
-                  <button className="small ghost" onClick={openTutor}><Icon name="sparkles" />Ask tutor</button>
+                  {!SIMPLE_MODE && <button className="small ghost" onClick={openTutor}><Icon name="sparkles" />Ask tutor</button>}
                   <button className="small ghost" onClick={() => keep(code)}>Keep query</button>
                   <button className="small ghost" onClick={reset}><Icon name="refresh" />Reset</button>
                 </div>
@@ -438,7 +439,9 @@ export default function SqlCell({ block, module: mod, course, onPassed }: { bloc
               title={
                 planBlockedReason ??
                 (!planWritable
-                  ? 'Analyze executes the statement, which needs a writable environment (sign in on the gateway).'
+                  ? SIMPLE_MODE
+                    ? 'Analyze needs the in-browser workspace to finish opening. Try again in a moment.'
+                    : 'Analyze executes the statement, which needs a writable environment (sign in on the gateway).'
                   : 'Run EXPLAIN ANALYZE: the statement is executed so the plan reports measured times.')
               }
             >

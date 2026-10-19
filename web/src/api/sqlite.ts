@@ -34,7 +34,8 @@ import {
   sqliteCapabilities,
   sqliteColumnTypeLabel,
 } from './sqliteProfile';
-import { SQLITE_MAX_BYTES, SQLITE_MAX_ROWS, type EngineFailure, type EngineRows, type EngineTable } from './sqliteEngine';
+import { SQLITE_MAX_BYTES, SQLITE_MAX_ROWS } from './sqliteLimits';
+import type { EngineFailure, EngineRows, EngineTable } from './sqliteEngine';
 import type { WorkerRequest } from './sqlite.worker';
 import { stripComments } from './sql';
 

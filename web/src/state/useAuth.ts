@@ -19,6 +19,7 @@
 
 import { useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState } from 'react';
 import type { MutableRefObject } from 'react';
+import { SIMPLE_MODE } from '../lib/mode';
 import type { AuthSession, ExecutionApi, LoginInput, SignupInput, UserRole } from '../types';
 
 /**
@@ -31,9 +32,11 @@ import type { AuthSession, ExecutionApi, LoginInput, SignupInput, UserRole } fro
 const LOCAL_SESSION: AuthSession = {
   user: {
     id: 'local',
-    email: 'local@querycraft',
-    name: 'Local workspace',
-    role: 'admin',
+    email: SIMPLE_MODE ? 'No account needed' : 'local@querycraft',
+    name: SIMPLE_MODE ? 'This browser' : 'Local workspace',
+    /* The public sample has no authoring surface. A learner role keeps the
+       create, review, manage and runs routes out of reach even by fragment. */
+    role: SIMPLE_MODE ? 'learner' : 'admin',
     createdAt: '',
   },
   token: '',

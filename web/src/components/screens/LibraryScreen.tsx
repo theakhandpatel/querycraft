@@ -4,6 +4,7 @@ import DialectBadge from '../ui/DialectBadge';
 import { useStore } from '../../state/store';
 import { COURSES } from '../../data/curriculum';
 import { effectiveDialect } from '../../lib/dialect';
+import { SIMPLE_MODE } from '../../lib/mode';
 import { courseExerciseTotal } from '../../lib/model';
 import type { Course } from '../../types';
 
@@ -19,8 +20,11 @@ const FILTERS = [
 export default function LibraryScreen() {
   const s = useStore();
   const f = s.uiState.libraryFilter || 'all';
-  /* Authoring is the admin surface; learners can browse and enroll only. */
+  /* Authoring is the admin surface; learners can browse and enroll only. The
+     browser-only build has no generated courses, so it does not offer a filter
+     that can never match. */
   const isAdmin = s.role === 'admin';
+  const filters = SIMPLE_MODE ? FILTERS.filter((x) => x.key !== 'mine') : FILTERS;
   const courses = COURSES.filter((c) => {
     if (f === 'enrolled' && !c.enrolled) return false;
     /* "Created by you" is the learner's own courses, which now live on the
@@ -44,7 +48,7 @@ export default function LibraryScreen() {
       </PageHead>
 
       <div className="filterbar">
-        {FILTERS.map((x) => (
+        {filters.map((x) => (
           <button
             key={x.key}
             className={`filt${x.key === f ? ' active' : ''}`}
@@ -101,7 +105,9 @@ export default function LibraryScreen() {
       </div>
 
       <div className="callout mt-16">
-        A library course is a starting point. When you enroll, you get your own copy — prompts, datasets and exercises are yours to change, and fixes are proposed by AI but only applied with your approval.
+        {SIMPLE_MODE
+          ? 'Every course in this library ships with the app and runs in your browser. Enroll to add one to your workbook; progress stays on this device.'
+          : 'A library course is a starting point. When you enroll, you get your own copy — prompts, datasets and exercises are yours to change, and fixes are proposed by AI but only applied with your approval.'}
       </div>
     </div>
   );

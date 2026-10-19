@@ -28,6 +28,11 @@
   }
 
   * { box-sizing: border-box; }
+  /* One landing serves the hosted product and the browser-only sample. The
+     static build sets data-build="static"; the hosted build leaves it off. */
+  [data-static-only] { display: none; }
+  html[data-build="static"] [data-gateway-only] { display: none !important; }
+  html[data-build="static"] [data-static-only] { display: revert !important; }
   html { scroll-behavior: smooth; }
   body {
     margin: 0;
@@ -63,6 +68,11 @@
   .brand .mark {
     display: inline-block; width: 7px; height: 7px; background: var(--pine);
     transform: translateY(-2px);
+  }
+  .buildmark {
+    font-family: var(--mono); font-size: 9px; letter-spacing: .12em;
+    text-transform: uppercase; color: var(--ink-3);
+    border: 1px solid var(--rule); padding: 4px 7px;
   }
   .nav { display: flex; gap: 26px; margin-left: auto; }
   .nav a {
@@ -413,6 +423,7 @@
 <header class="top">
   <div class="wrap top-inner">
     <a class="brand" href="/"><span class="mark"></span>Querycraft</a>
+    <span class="buildmark" data-static-only>Browser sample</span>
     <nav class="nav" aria-label="Primary">
       <a href="#contract">The contract</a>
       <a href="#lesson">Lessons</a>
@@ -450,7 +461,7 @@
 
       <div class="hero-actions">
         <a class="btn" href="/app/">Start a lesson<span class="arrow">→</span></a>
-        <p class="fine">Start with SQLite in the browser · Sign in to keep your progress</p>
+        <p class="fine"><span data-gateway-only>Start with SQLite in the browser · Sign in to keep your progress</span><span data-static-only>Start with SQLite in the browser · No account needed</span></p>
       </div>
 
       <div class="proof" id="proof" style="margin-top:34px">
@@ -543,22 +554,44 @@
       <p>Your own workspace. Writable, resettable, private.</p>
     </aside>
     <div class="content">
-      <p class="kicker">A database you can break</p>
-      <h2>Sign in. Get your own copy.</h2>
-      <div class="plates-split">
-        <div>
-          <p class="body">A signed-in learner gets a private copy of the sample database. Writes, schema changes, and transactions work. Reset restores the original data in one click. Signed out, queries run read-only against the shared dataset.</p>
-          <table class="ledger" style="margin-top:26px">
-            <tbody>
-              <tr><td class="name">Signed out</td><td class="rule-text">Read-only on the shared dataset.</td></tr>
-              <tr><td class="name">Signed in</td><td class="rule-text">Your own copy, writable, with reset.</td></tr>
-              <tr><td class="name">Every answer</td><td class="rule-text">Graded by the rows it returns.</td></tr>
-            </tbody>
-          </table>
+      <div data-gateway-only>
+        <p class="kicker">A database you can break</p>
+        <h2>Sign in. Get your own copy.</h2>
+        <div class="plates-split">
+          <div>
+            <p class="body">A signed-in learner gets a private copy of the sample database. Writes, schema changes, and transactions work. Reset restores the original data in one click. Signed out, queries run read-only against the shared dataset.</p>
+            <table class="ledger" style="margin-top:26px">
+              <tbody>
+                <tr><td class="name">Signed out</td><td class="rule-text">Read-only on the shared dataset.</td></tr>
+                <tr><td class="name">Signed in</td><td class="rule-text">Your own copy, writable, with reset.</td></tr>
+                <tr><td class="name">Every answer</td><td class="rule-text">Graded by the rows it returns.</td></tr>
+              </tbody>
+            </table>
+          </div>
+          <div class="plate-tall">
+            <div class="plate"><img src="/landing/assets/tables-drawer.png" alt="The tables drawer showing table names, columns, types, and sample rows" width="440" height="900"></div>
+            <p class="caption">The tables drawer: schema, sample rows, reset.</p>
+          </div>
         </div>
-        <div class="plate-tall">
-          <div class="plate"><img src="/landing/assets/tables-drawer.png" alt="The tables drawer showing table names, columns, types, and sample rows" width="440" height="900"></div>
-          <p class="caption">The tables drawer: schema, sample rows, reset.</p>
+      </div>
+      <div data-static-only>
+        <p class="kicker">A database you can break</p>
+        <h2>Your own copy, in this browser.</h2>
+        <div class="plates-split">
+          <div>
+            <p class="body">The browser sample gives every learner a private copy of the sample database in the page. Writes, schema changes, and transactions work. Reset restores the original data in one click. Nothing leaves this browser.</p>
+            <table class="ledger" style="margin-top:26px">
+              <tbody>
+                <tr><td class="name">Every learner</td><td class="rule-text">A writable copy in this browser.</td></tr>
+                <tr><td class="name">No account</td><td class="rule-text">Progress stays on this device.</td></tr>
+                <tr><td class="name">Every answer</td><td class="rule-text">Graded by the rows it returns.</td></tr>
+              </tbody>
+            </table>
+          </div>
+          <div class="plate-tall">
+            <div class="plate"><img src="/landing/assets/tables-drawer.png" alt="The tables drawer showing table names, columns, types, and sample rows" width="440" height="900"></div>
+            <p class="caption">The tables drawer: schema, sample rows, reset.</p>
+          </div>
         </div>
       </div>
     </div>
@@ -588,7 +621,7 @@
     <div class="content">
       <p class="kicker">The look</p>
       <h2>Choose a theme, or make one.</h2>
-      <p class="body">Start from eighteen presets, from light and dark to terminal and familiar palettes. Or build a theme from a single accent color: the inks tune themselves, and the theme follows your account.</p>
+      <p class="body">Start from eighteen presets, from light and dark to terminal and familiar palettes. Or build a theme from a single accent color: the inks tune themselves, and the theme follows <span data-gateway-only>your account</span><span data-static-only>you on this device</span>.</p>
       <div class="plate look-plate" style="margin-top:30px"><img src="/landing/assets/appearance.png" alt="The appearance screen with a theme grid and a custom accent picker" width="720" height="700"></div>
       <p class="caption">The appearance screen: presets, contrast, and a custom accent.</p>
     </div>
@@ -602,7 +635,7 @@
     <div class="content">
       <p class="kicker">The library</p>
       <h2>Start from a chapter.</h2>
-      <p class="body">Start with SQLite Essentials, then the PostgreSQL foundations. The library goes on to joins, subqueries, CTEs, plans, and the courses that show where the two engines diverge. Or describe the course you need and build it.</p>
+      <p class="body">Start with SQLite Essentials, then the PostgreSQL foundations. The library goes on to joins, subqueries, CTEs, plans, and the courses that show where the two engines diverge.<span data-gateway-only> Or describe the course you need and build it.</span></p>
       <table class="index">
         <thead><tr><th></th><th>Course</th><th></th><th>Dialect</th><th class="num">Ch.</th></tr></thead>
         <tbody>
@@ -617,7 +650,7 @@
         </tbody>
       </table>
 
-      <div class="create">
+      <div class="create" data-gateway-only>
         <div>
           <p class="kicker">Your course</p>
           <h3>Describe the course you want.</h3>
@@ -628,6 +661,7 @@
           <p class="caption">Create a course from a goal; every exercise is verified first.</p>
         </div>
       </div>
+      <p class="body" data-static-only style="margin-top:32px;padding-top:20px;border-top:1px solid var(--rule)">Every built-in course ships with the app. Enroll to add one to your workbook; progress stays in this browser.</p>
 
       <div class="engines">
         <p class="kicker">Two engines, one grammar</p>
@@ -657,21 +691,28 @@
   <section class="spread" id="machine">
     <aside class="margin">
       <span class="folio">07</span>
-      <p>One binary when you host it.</p>
+      <p><span data-gateway-only>One binary when you host it.</span><span data-static-only>Static files when you host it.</span></p>
     </aside>
     <div class="content">
       <p class="kicker">The machine</p>
       <h2>No server. No setup.</h2>
       <div class="machine">
         <div>
-          <p class="body">The browser build starts with SQLite, so lessons and results work offline. PostgreSQL is the next step in the browser. The hosted build runs the Go gateway for accounts and stored courses on PostgreSQL or SQLite.</p>
-          <p class="body" style="font-size:15px;color:var(--ink-3)">One binary when you host it: the landing, the app, the API, and its documentation on one port.</p>
+          <p class="body">The browser build starts with SQLite, so lessons and results work offline. PostgreSQL is the next step in the browser.<span data-gateway-only> The hosted build runs the Go gateway for accounts and stored courses on PostgreSQL or SQLite.</span></p>
+          <p class="body" style="font-size:15px;color:var(--ink-3)" data-gateway-only>One binary when you host it: the landing, the app, the API, and its documentation on one port.</p>
+          <p class="body" style="font-size:15px;color:var(--ink-3)" data-static-only>The sample is a folder of static files. The library ships with the page, and your progress stays in this browser.</p>
         </div>
         <div>
-          <div class="gif-plate">
-            <img src="/landing/assets/walkthrough.gif" alt="A short walkthrough: signing in, opening a lesson, running a query, and passing the checks" width="960" height="540">
+          <div data-gateway-only>
+            <div class="gif-plate">
+              <img src="/landing/assets/walkthrough.gif" alt="A short walkthrough: signing in, opening a lesson, running a query, and passing the checks" width="960" height="540">
+            </div>
+            <p class="caption">Fifteen seconds in the real app.</p>
           </div>
-          <p class="caption">Fifteen seconds in the real app.</p>
+          <div data-static-only>
+            <div class="plate"><img src="/landing/assets/lesson.png" alt="A Querycraft lesson with the reading column, a SQL cell, and a result grid" width="1280" height="720"></div>
+            <p class="caption">The lesson: reading, query, result.</p>
+          </div>
         </div>
       </div>
     </div>
@@ -685,7 +726,7 @@
       <div>
         <p>Start with SQLite, pick a course, or write your own. The database will tell you the truth.</p>
         <a class="btn" href="/app/">Start a lesson<span class="arrow">→</span></a>
-        <p class="fine">Free · Sign in to keep your progress</p>
+        <p class="fine"><span data-gateway-only>Free · Sign in to keep your progress</span><span data-static-only>Free · No account needed</span></p>
         <p class="colophon">Querycraft · A working notebook for SQL</p>
       </div>
     </div>
@@ -698,7 +739,7 @@
     <div class="links">
       <a href="https://github.com/theakhandpatel/querycraft/tree/main/docs">Documentation</a>
       <a href="https://github.com/theakhandpatel/querycraft">GitHub</a>
-      <a href="/docs">API</a>
+      <a href="/docs" data-gateway-only>API</a>
     </div>
     <span class="set">Set in Source Serif 4 and Geist Mono</span>
   </div>

@@ -9,6 +9,7 @@
   "scripts": {
     "dev": "vite",
     "build": "vite build",
+    "build:simple": "VITE_APP_MODE=simple VITE_API_MODE=pglite vite build --base=./",
     "preview": "vite preview --port 4173",
     "typecheck": "tsc --noEmit",
     "lint": "oxlint src",

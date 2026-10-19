@@ -184,22 +184,6 @@ function openDatabase(sqlite3: Sqlite3): OpenedDatabase {
   return { db, version };
 }
 
-/**
- * The number of rows a statement is allowed to hand back and the number of bytes
- * their JSON takes, mirroring the gateway's `engine.DefaultLimits` so that a
- * capped result is described the same way in both adapters: hitting the row cap
- * is a successful, truncated result, and hitting the byte cap is
- * `RESULT_LIMIT_EXCEEDED` with the rows already collected.
- *
- * `./pglite.ts` keeps its own 200-row guard, which is deliberately stricter —
- * it exists to keep a 10 000-row `SELECT *` out of the DOM, not to define the
- * contract. The two numbers are stated here rather than shared because they
- * answer different questions; a parity case that crosses either limit is what
- * would tell us they need to be one number.
- */
-export const SQLITE_MAX_ROWS = 500;
-export const SQLITE_MAX_BYTES = 1 << 20;
-
 export async function openWorkspace(): Promise<SqliteWorkspace> {
   const sqlite3 = await getSqlite3();
   let current = openDatabase(sqlite3);

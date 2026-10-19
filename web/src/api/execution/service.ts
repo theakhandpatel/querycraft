@@ -1,7 +1,6 @@
 import { Effect } from 'effect';
 import { unavailableAvailability } from '../ai';
 import type { AiAvailability } from '../aiContract';
-import { warmUpDataset } from '../pglite';
 import { STORE_DRAFTS, idbGet, idbPut } from '../idb';
 import type { ApiConfig, ApiLogEntry, ExecutionApi } from '../../types';
 import { ExecutionService, readAuthUser } from './shared';
@@ -50,11 +49,10 @@ export function createExecutionApi(opts: {
       ? httpLayer({ baseUrl: config.baseUrl, note, onUnauthorized: opts.onUnauthorized })
       : pgliteLayer(config, note);
 
-  /* The first query against a workspace pays for the WASM download, initdb and
-     the seed, so start the default one now. `plans` starts its own when the
-     course opens (see the store), because warming the 10 000-row fixture for a
-     learner who is on `foundations` would be pure waste. */
-  if (opts.mode === 'pglite') warmUpDataset();
+  /* Nothing is warmed here. The selected course's dialect decides which engine
+     to start, and the store owns that decision (`warmUpCourse`). Booting PGlite
+     on every pglite-mode page was spending the 6 MB Postgres download on a
+     SQLite chapter that would never use it. */
 
   const run = <A>(effect: Effect.Effect<A, unknown, ExecutionService>): Promise<A> =>
     Effect.runPromise(Effect.provide(effect, layer));

@@ -30,7 +30,8 @@
  */
 
 import { activeModules, courseById } from './model';
-import type { Course, Screen } from '../types';
+import { SIMPLE_MODE } from './mode';
+import type { Course, Screen, UserRole } from '../types';
 
 /** The routes, as a fragment spells them. */
 type Route =
@@ -88,6 +89,17 @@ export const HOME_HASH = '#/';
 /** Screens that belong to the admin authoring flow rather than to learning.
     Kept here so the store's router and App's render gate agree on one list. */
 export const AUTHORING_SCREENS: Screen[] = ['create', 'building', 'review', 'manage'];
+
+/** Screens that depend on the gateway in the hosted product. The browser-only
+    sample does not mount them at all, including through a deep link. */
+export const SIMPLE_HIDDEN_SCREENS: Screen[] = ['challenge-lab', 'runs'];
+
+/** One rule for the renderer and the router, so a deep link cannot open a
+    surface that the navigation hides. */
+export function screenAllowed(screen: Screen, role: UserRole): boolean {
+  if (SIMPLE_MODE && SIMPLE_HIDDEN_SCREENS.includes(screen)) return false;
+  return role === 'admin' || !AUTHORING_SCREENS.includes(screen);
+}
 
 function segment(raw: string): string {
   try {

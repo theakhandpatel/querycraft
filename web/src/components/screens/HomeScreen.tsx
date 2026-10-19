@@ -4,6 +4,7 @@ import DialectBadge from '../ui/DialectBadge';
 import { useStore } from '../../state/store';
 import { COURSES } from '../../data/curriculum';
 import { effectiveDialect } from '../../lib/dialect';
+import { SIMPLE_MODE } from '../../lib/mode';
 import {
   activeModules,
   courseDoneCount,
@@ -142,7 +143,7 @@ export default function HomeScreen() {
             <div className="ledger-links">
               <button className="linklike" onClick={() => s.showScreen('course')}>Course home</button>
               <button className="linklike" onClick={() => s.showScreen('workbook')}>Open workbook</button>
-              <button className="linklike" onClick={() => s.showScreen('challenge-lab')}>Challenge lab</button>
+              {!SIMPLE_MODE && <button className="linklike" onClick={() => s.showScreen('challenge-lab')}>Challenge lab</button>}
               {isAdmin && <button className="linklike" onClick={() => s.showScreen('create')}>Create a course</button>}
             </div>
           </section>

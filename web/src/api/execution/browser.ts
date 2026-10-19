@@ -8,11 +8,11 @@ import {
   engineCapabilities,
   executeSql,
   explainSql,
-  fetchModuleContent,
   fetchTables,
   resetEnvironment as resetPgliteEnvironment,
   warmUpDataset,
 } from '../pglite';
+import { BUNDLED_CONTENT } from '../content';
 import {
   executeSqlite,
   fetchSqliteTables,
@@ -402,12 +402,14 @@ export function pgliteLayer(config: ApiConfig = PGLITE_CONFIG, note: NoteFn = ()
        `gateway` course never reaches this adapter. */
     prepareEnvironment: () => Effect.succeed<EnvironmentPrepare>({ ok: true, setup_statements: 0 }),
     ...localMethods(config, note),
-    /* Chapter content comes out of the database, not the bundled markdown the
-       gateway adapter serves: this layer has a real Postgres to read it from. */
+    /* Chapter content is the bundled markdown. The database copy exists for
+       SQL against `app.content_docs`, but a lesson must not boot PostgreSQL to
+       read a file that already shipped in the page. This is what lets SQLite
+       Essentials start without downloading the PGlite bundle. */
     getContent: (moduleId) =>
-      Effect.gen(function* () {
+      Effect.sync(() => {
         const t0 = nowMs();
-        const docs = yield* Effect.tryPromise({ try: () => fetchModuleContent(moduleId), catch: engineFailure });
+        const docs = BUNDLED_CONTENT[moduleId] ?? [];
         note('GET', `/content/${moduleId}`, 200, nowMs() - t0);
         return docs;
       }),

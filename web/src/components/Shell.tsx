@@ -4,6 +4,8 @@ import SearchBox from './SearchBox';
 import { useStore } from '../state/store';
 import { SCREEN_CRUMBS, SCREEN_NAV } from '../state/screens';
 import { courseShort, findExercise, activeModules, lessonPercent, nextChapterIndex, coursePassed } from '../lib/model';
+import { effectiveDialect } from '../lib/dialect';
+import { SIMPLE_MODE } from '../lib/mode';
 import { formatDuration } from '../lib/progress';
 import type { FoundExercise } from '../lib/model';
 import { useDrawerFocus } from './ui/useDrawerFocus';
@@ -60,6 +62,7 @@ export function TopBar() {
   const isAdmin = role === 'admin';
   const nav = SCREEN_NAV[screen];
   const mods = activeModules(course);
+  const courseDialect = effectiveDialect(undefined, course);
   const onCourseTrack = screen === 'lesson' || screen === 'course';
 
   /* The lesson's own segment of the bar: where you are in the course, and the
@@ -102,14 +105,16 @@ export function TopBar() {
           <NavLink variant="top" icon="search" label="Library" active={nav === 'library'} onClick={() => s.showScreen('library')} />
           <NavLink variant="top" icon="book" label="Workbook" active={nav === 'workbook'} badge={`${s.pct}%`} onClick={() => s.showScreen('workbook')} />
           <NavLink variant="top" icon="clock" label="Progress" active={nav === 'progress'} onClick={() => s.showScreen('workbook-progress')} />
-          <NavLink variant="top" icon="flask" label="Challenge lab" active={nav === 'lab'} onClick={() => s.showScreen('challenge-lab')} />
+          {!SIMPLE_MODE && <NavLink variant="top" icon="flask" label="Challenge lab" active={nav === 'lab'} onClick={() => s.showScreen('challenge-lab')} />}
           {isAdmin && <NavLink variant="top" icon="sparkles" label="Manage" active={nav === 'manage'} onClick={() => s.showScreen('manage')} />}
         </nav>
 
         <div className="spine-foot">
           <span className="enginestate">
             <span className="dot"></span>{' '}
-            {s.api.mode === 'http' ? 'gateway · live' : 'postgres 18 · in-browser'}
+            {s.api.mode === 'http'
+              ? 'gateway · live'
+              : `${courseDialect === 'sqlite' ? 'sqlite' : 'postgres'} · in-browser`}
           </span>
           {session && (
             <div className="spine-profile">
@@ -158,8 +163,8 @@ export function TopBar() {
           <button
             className="avatar avatarbtn"
             onClick={() => s.showScreen('appearance-settings')}
-            aria-label="Appearance and account"
-            title="Appearance and account"
+            aria-label={SIMPLE_MODE ? 'Appearance' : 'Appearance and account'}
+            title={SIMPLE_MODE ? 'Appearance' : 'Appearance and account'}
           >
             {(session?.user.name || 'Q').slice(0, 1).toUpperCase()}
           </button>
@@ -257,7 +262,7 @@ export function NavDrawer() {
           <div className="navgroup">
             <NavLink variant="drawer" icon="book" label="Workbook" active={nav === 'workbook'} badge={`${s.pct}%`} onClick={go(() => s.showScreen('workbook'))} />
             <NavLink variant="drawer" icon="clock" label="Progress" active={nav === 'progress'} onClick={go(() => s.showScreen('workbook-progress'))} />
-            <NavLink variant="drawer" icon="flask" label="Challenge lab" active={nav === 'lab'} onClick={go(() => s.showScreen('challenge-lab'))} />
+            {!SIMPLE_MODE && <NavLink variant="drawer" icon="flask" label="Challenge lab" active={nav === 'lab'} onClick={go(() => s.showScreen('challenge-lab'))} />}
           </div>
           {isAdmin && (
             <div className="navgroup">

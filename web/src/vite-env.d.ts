@@ -6,6 +6,8 @@ interface ImportMetaEnv {
   readonly VITE_API_MODE?: 'pglite' | 'http';
   /** Base URL of the Go gateway when VITE_API_MODE=http. */
   readonly VITE_API_BASE?: string;
+  /** "simple" is the browser-only build; unset (or "full") is the gateway. */
+  readonly VITE_APP_MODE?: 'simple' | 'full';
 }
 
 interface ImportMeta {

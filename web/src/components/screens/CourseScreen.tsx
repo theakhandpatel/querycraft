@@ -2,6 +2,7 @@ import Icon from '../ui/Icon';
 import Ring from '../ui/Ring';
 import DialectBadge, { useChapterDialect } from '../ui/DialectBadge';
 import { useStore } from '../../state/store';
+import { SIMPLE_MODE } from '../../lib/mode';
 import {
   activeModules, courseAttempts, courseDoneCount, courseExerciseTotal, coursePassed,
   enrolledCourses, exerciseIdsOfModule, lessonPercent, nextChapterIndex,
@@ -103,10 +104,10 @@ export default function CourseScreen() {
           <div className="reportrow mt-8"><span>Grading</span><span>Result contract, not SQL text</span></div>
           <div className="reportrow"><span>Practice</span><span>Runnable SQL on a live dataset</span></div>
           <div className="reportrow"><span>Notes &amp; bookmarks</span><span>Kept per course</span></div>
-          <div className="reportrow"><span>Challenge lab</span><span>AI-generated drills</span></div>
+          {!SIMPLE_MODE && <div className="reportrow"><span>Challenge lab</span><span>AI-generated drills</span></div>}
           <div className="actions mt-14">
             <button onClick={() => s.showScreen('workbook')}><Icon name="book" />Workbook</button>
-            <button onClick={() => s.showScreen('challenge-lab')}><Icon name="flask" />Challenge lab</button>
+            {!SIMPLE_MODE && <button onClick={() => s.showScreen('challenge-lab')}><Icon name="flask" />Challenge lab</button>}
           </div>
           <h3 className="mt-18">Switch course</h3>
           <div className="switcher">

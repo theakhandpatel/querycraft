@@ -14,7 +14,7 @@
 import { useCallback, useEffect } from 'react';
 import type { Dispatch, MutableRefObject, SetStateAction } from 'react';
 import { courseById, nextChapterIndex as nextChapterIndexOf } from '../lib/model';
-import { AUTHORING_SCREENS, HOME_HASH, hashForState, isRouteHash, routeTarget } from '../lib/route';
+import { HOME_HASH, hashForState, isRouteHash, routeTarget, screenAllowed } from '../lib/route';
 import type { RouteTarget } from '../lib/route';
 import type { Course, Progress, Screen, UiState, UserRole } from '../types';
 
@@ -93,7 +93,7 @@ export function useHashRouter({
      screens, and the fragment follows the same rule so it never names a screen
      nobody is looking at. */
   const gated = useCallback(
-    (target: RouteTarget): RouteTarget => (role !== 'admin' && AUTHORING_SCREENS.includes(target.screen) ? routeTarget(HOME_HASH) : target),
+    (target: RouteTarget): RouteTarget => (screenAllowed(target.screen, role) ? target : routeTarget(HOME_HASH)),
     [role]
   );
 

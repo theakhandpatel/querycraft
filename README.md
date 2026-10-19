@@ -33,6 +33,15 @@ Your notes, saved queries, bookmarks, and progress stay in the workbook, and sea
 | <img src="docs/assets/screens/04-lesson.png" width="400" alt="A lesson with a SQL cell"> | <img src="docs/assets/screens/12-create-course.png" width="400" alt="Create a course"> |
 | A chapter is a page you can run. | Describe a course; every exercise is verified before you see it. |
 
+## Try the browser sample
+
+[Open the browser sample](https://theakhandpatel.github.io/querycraft/). It
+carries the built-in library and runs SQLite and PostgreSQL in the page. There
+is no account, and progress stays in your browser.
+
+The hosted build adds accounts, AI course generation, the tutor, and stored
+courses.
+
 ## Run it
 
 You need Go 1.26 or later and Node 20.19 or later.

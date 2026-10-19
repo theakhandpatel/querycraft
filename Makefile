@@ -34,7 +34,7 @@ SMOKE_PG_DIR  ?= $(BACKEND_DIR)/.data/smoke
 # cache but keep the smoke cluster's data and runtime dirs isolated.
 PG_BINARIES_DIR ?= $(BACKEND_DIR)/.data/pg/binaries
 
-.PHONY: help install web typecheck check-cgo embed backend build test test-all gotest verify verify-mock serve run dev docs dataset audit-lessons audit-content audit-storage audit-search audit-courses audit-progress audit-export audit-import audit-fixtures audit-evaluate-wire audit-themes audit-metrics audit-metrics-live audit-adversarial audit-adversarial-live audit-load audit-parity audit-ai audit-ai-adapters audit-course-store audit-ai-live audit-perf audit-perf-content audit-perf-seam audit-perf-fixtures audit-dataset-map audit-shell audit-a11y audit-sqlite-errors audit-boot audit-course-gen db-reset clean disk
+.PHONY: help install web static static-check typecheck check-cgo embed backend build test test-all gotest verify verify-mock serve run dev docs dataset audit-lessons audit-content audit-storage audit-search audit-courses audit-progress audit-export audit-import audit-fixtures audit-evaluate-wire audit-themes audit-metrics audit-metrics-live audit-adversarial audit-adversarial-live audit-load audit-parity audit-ai audit-ai-adapters audit-course-store audit-ai-live audit-perf audit-perf-content audit-perf-seam audit-perf-fixtures audit-dataset-map audit-shell audit-a11y audit-sqlite-errors audit-boot audit-course-gen db-reset clean disk
 
 help: ## List the available targets with a one-line description.
 	@echo "Querycraft — make targets"
@@ -51,6 +51,12 @@ web: ## Build the frontend into web/dist.
 	cd $(WEB_DIR) && npm run build
 	@rm -rf $(WEB_DIR)/dist/landing
 	@cp -R $(WEB_DIR)/landing $(WEB_DIR)/dist/landing
+
+static: ## Build the public browser-only site (landing + app) for GitHub Pages.
+	node scripts/build-static.mjs
+
+static-check: static ## Build the browser-only site and drive it under a project subpath (needs Chrome).
+	node scripts/check-static.mjs
 
 typecheck: ## Type-check the frontend (tsc --noEmit, strict).
 	cd $(WEB_DIR) && npx tsc --noEmit
@@ -462,8 +468,8 @@ docs: ## Print the Swagger UI and OpenAPI URLs.
 	@echo "Swagger UI: http://localhost:8080/docs"
 	@echo "OpenAPI:    http://localhost:8080/openapi.json"
 
-clean: ## Remove web/dist, the binary, and embedded assets (keeps .gitkeep).
-	rm -rf $(WEB_DIR)/dist $(BACKEND_DIR)/bin
+clean: ## Remove web/dist, web/dist-static, the binary, and embedded assets (keeps .gitkeep).
+	rm -rf $(WEB_DIR)/dist $(WEB_DIR)/dist-static $(BACKEND_DIR)/bin
 	@mkdir -p $(EMBED_DIR)
 	@find $(EMBED_DIR) -mindepth 1 ! -name .gitkeep -exec rm -rf {} +
 	@touch $(EMBED_DIR)/.gitkeep

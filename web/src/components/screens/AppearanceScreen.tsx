@@ -1,6 +1,7 @@
 import Icon from '../ui/Icon';
 import { useState } from 'react';
 import { THEMES } from '../../lib/themes';
+import { SIMPLE_MODE } from '../../lib/mode';
 import { buildUserTheme, deriveUserTokens, type UserTheme } from '../../lib/userThemes';
 import type { ThemePreference } from '../../types';
 import { useStore } from '../../state/store';
@@ -80,7 +81,7 @@ export default function AppearanceScreen() {
         <p className="mt-8">
           Choose the palette. System follows your OS setting. Every preset —
           and every theme you make — clears 4.5:1 on its key text pairs; the
-          derivation tunes the inks itself. Your theme follows your account.
+          derivation tunes the inks itself. Your theme follows {SIMPLE_MODE ? 'you on this device' : 'your account'}.
         </p>
         <div className="themecreator card pad">
           <h3>{editing ? 'Edit your theme' : 'Make your own'}</h3>
