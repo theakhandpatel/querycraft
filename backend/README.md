@@ -58,7 +58,8 @@ A route marked public accepts an anonymous caller. Every other route answers
 | `GET` | `/admin/ai` | Admin | Read the live AI provider and where its configuration came from. |
 | `GET` | `/admin/ai/models` | Admin | List the embedded chat-model catalog. |
 | `PUT` | `/admin/ai` | Admin | Validate, store, and swap the live AI provider without a restart. |
-| `GET` | `/` | Public | Serve the embedded SPA. |
+| `GET` | `/` | Public | Serve the landing page. |
+| `GET` | `/app/` | Public | Serve the embedded SPA shell. |
 
 Both generation routes answer synchronously by default. A script reads the whole
 outcome from one request. A run can take minutes, so a client that cannot hold a

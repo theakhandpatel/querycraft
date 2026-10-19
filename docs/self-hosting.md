@@ -15,7 +15,8 @@ make build
 ./backend/bin/querycraft
 ```
 
-The gateway listens on `http://127.0.0.1:8080`. On the first start it downloads
+The gateway listens on `http://127.0.0.1:8080`. The landing page is at `/` and the
+app at `/app/`. On the first start it downloads
 PostgreSQL into `.data/pg/binaries`, creates a cluster under `.data/pg/data`, and
 applies the commerce dataset. Later starts reuse that cluster and are immediate.
 

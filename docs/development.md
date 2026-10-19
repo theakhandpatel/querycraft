@@ -15,6 +15,7 @@ web/                            React app
   src/api/idb.ts                IndexedDB store for offline progress and events
   src/api/compare.ts            Result comparison, mirrors the Go evaluator
   src/data/content/*.md         Chapter markdown, the content_docs seeder
+web/landing/                    Landing page, served at / and copied into the build
 backend/                        Go module github.com/querycraft/sqlquery/backend
   cmd/api/                      Entrypoint and the cobra CLI
   internal/config/              Settings: defaults, querycraft.json, flags
@@ -84,6 +85,8 @@ go build ./...
 go vet ./...
 go test ./...          # passes without a database
 go run ./cmd/api       # 127.0.0.1:8080, override with the addr key or --addr
+# The built binary serves the landing at / and the app at /app/. make web copies
+# web/landing into web/dist/landing before the embed step.
 ```
 
 Settings resolve in three layers: shipped defaults, then the config file, then

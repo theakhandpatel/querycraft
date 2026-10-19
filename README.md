@@ -72,9 +72,9 @@ PostgreSQL or SQLite on the server, serves the same app, and adds accounts,
 stored courses, and the tutor. In a production build, the app uses the gateway
 when it answers on its own origin.
 
-`make build` produces one binary, `backend/bin/querycraft`, that serves the app,
-the API, and the API documentation on one port. It starts its own PostgreSQL
-when no database is configured.
+`make build` produces one binary, `backend/bin/querycraft`, that serves the
+landing page at `/`, the app at `/app/`, the API, and the API documentation on
+one port. It starts its own PostgreSQL when no database is configured.
 
 Read [Architecture](docs/architecture.md) for the components, the data model,
 and the request path.

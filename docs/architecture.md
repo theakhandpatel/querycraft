@@ -2,8 +2,8 @@
 
 Querycraft is a React app and a Go gateway. The two parts meet at the JSON
 Schemas in `contracts/` and never import each other. The gateway also embeds the
-built app, so one process can serve the page, the API, and the API
-documentation.
+built landing page and app, so one process serves the landing at `/`, the app at
+`/app/`, the API, and the API documentation.
 
 The decisions behind this layout are in [`adr/`](adr/).
 
@@ -61,8 +61,13 @@ graph TB
 
 `make build` compiles the app, embeds it in the gateway, and writes
 `backend/bin/querycraft`. That binary starts its own PostgreSQL when no database
-is configured and serves the app, the API, and the documentation on one port.
-No flow needs Docker.
+is configured and serves the landing page, the app, the API, and the
+documentation on one port. No flow needs Docker.
+
+`web/landing/` is a plain HTML page with its own assets. `make web` copies it into
+`web/dist/landing` before the embed step, so the binary serves it at `/`. The app
+shell is served at `/app/`; its hash routes are unchanged, and its assets stay
+under `/assets/`.
 
 Client preferences are per account. A theme is one of the shipped presets or a
 theme derived from an accent color. It persists through `GET /preferences` and
