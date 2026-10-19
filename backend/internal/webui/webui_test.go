@@ -53,6 +53,43 @@ func TestHandlerRoot(t *testing.T) {
 	}
 }
 
+// TestHandlerAppRoute serves the SPA at /app/ so the landing page can own the
+// root. Both paths exist only when a build is embedded.
+func TestHandlerAppRoute(t *testing.T) {
+	w := get(Handler(), "/app/")
+	if Available() {
+		if w.Code != http.StatusOK {
+			t.Fatalf("GET /app/ with embedded dist: status = %d, want 200", w.Code)
+		}
+		if body := w.Body.String(); !strings.Contains(body, `id="root"`) {
+			t.Fatalf("GET /app/ did not serve the SPA shell")
+		}
+		return
+	}
+	if w.Code != http.StatusNotFound {
+		t.Fatalf("GET /app/ without embedded dist: status = %d, want 404", w.Code)
+	}
+}
+
+// TestHandlerLanding checks the root serves the landing when the build carries
+// one, and the app shell otherwise.
+func TestHandlerLanding(t *testing.T) {
+	w := get(Handler(), "/")
+	if w.Code != http.StatusOK {
+		t.Fatalf("GET / status = %d, want 200", w.Code)
+	}
+	body := w.Body.String()
+	if fileExists(landingIndexFile) {
+		if !strings.Contains(body, "Learn SQL") {
+			t.Fatalf("GET / did not serve the landing page")
+		}
+		return
+	}
+	if !strings.Contains(body, `id="root"`) {
+		t.Fatalf("GET / without a landing did not serve the SPA shell")
+	}
+}
+
 // A deep client route should also serve index.html so the SPA router can
 // resolve it, but only when a build is embedded.
 func TestHandlerHistoryFallback(t *testing.T) {

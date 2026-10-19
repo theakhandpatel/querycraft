@@ -1,13 +1,13 @@
 # Architecture
 
-This document describes how the parts fit together and why. The decisions of
-record are in [`adr/`](adr/). Each section points to the
-code that proves the claim.
+Querycraft is a React app and a Go gateway. The two parts meet at the JSON
+Schemas in `contracts/` and never import each other. The gateway also embeds the
+built app, so one process can serve the page, the API, and the API
+documentation.
 
-## 1. One repository, two parts, one contract
+The decisions behind this layout are in [`adr/`](adr/).
 
-Querycraft is one Go binary that serves its own React app. The two parts never
-import each other. They meet only at the JSON contracts in `contracts/`.
+## One repository, two parts, one contract
 
 ```mermaid
 graph TB
@@ -24,7 +24,7 @@ graph TB
     SEAM --> HTTP
   end
 
-  subgraph Contracts["contracts/<br/>the seam (JSON Schema, one source of truth)"]
+  subgraph Contracts["contracts/<br/>JSON Schema, one source of truth"]
     QRS["query-result"]
     EXS["exercise"]
     EVS["evaluation"]
@@ -33,23 +33,23 @@ graph TB
     RUNS["run"]
   end
 
-  subgraph Backend["backend/<br/>Go 1.26 gateway (one binary)"]
+  subgraph Backend["backend/<br/>Go gateway (one binary)"]
     HAPI["httpapi<br/>JSON API + OpenAPI + /docs"]
     ENG["engine<br/>one Execute path"]
     EVAL["eval + perf<br/>grading"]
     AI["ai<br/>generation pipeline"]
     STOREP["store<br/>accounts, progress, runs"]
     ENV["envdb + localdb<br/>PostgreSQL environments"]
-    WEBUI["webui<br/>//go:embed of the SPA"]
+    WEBUI["webui<br/>embedded SPA"]
   end
 
-  PG[("PostgreSQL 18.3<br/>learned SQL runs here")]
+  PG[("PostgreSQL<br/>learner SQL runs here")]
   SQLF[("SQLite file<br/>second dialect")]
   META[("PostgreSQL or SQLite<br/>app metadata")]
 
   SEAM -.->|decoded by| Contracts
   Contracts -.->|enforced by| HAPI
-  HTTP -->|POST /query etc| HAPI
+  HTTP -->|POST /query and others| HAPI
   HAPI --> ENG --> EVAL
   HAPI --> AI --> ENG
   HAPI --> STOREP --> META
@@ -59,22 +59,21 @@ graph TB
   HAPI --> WEBUI
 ```
 
-`make build` compiles the app, embeds it in the gateway, and writes one binary at
-`backend/bin/querycraft`. That binary starts its own PostgreSQL and serves the
-app, the API, and the documentation on one port. No flow needs Docker.
+`make build` compiles the app, embeds it in the gateway, and writes
+`backend/bin/querycraft`. That binary starts its own PostgreSQL when no database
+is configured and serves the app, the API, and the documentation on one port.
+No flow needs Docker.
 
-Client preferences are per account: the theme — one of 18 shipped presets or a
-theme the learner derived from an accent — persists through `GET/PUT
-/preferences` and follows the account across devices. The derivation tunes the
-ink tokens to the 4.5:1 gate the shipped presets clear
-(`web/src/lib/userThemes.ts`; `scripts/theme-contrast.mjs` audits all of
-them).
+Client preferences are per account. A theme is one of the shipped presets or a
+theme derived from an accent color. It persists through `GET /preferences` and
+`PUT /preferences` and follows the account across devices. The derivation tunes
+the foreground tokens to the 4.5:1 contrast ratio the shipped presets clear.
 
-## 2. The execution seam
+## The execution seam
 
-Every statement the learner runs goes through one function, `engine.Execute` in
+Every statement a learner runs goes through one function, `engine.Execute` in
 `backend/internal/engine/execute.go`. That function is the only place that
-applies the row, byte, and deadline caps, and both dialects use it.
+applies the row, byte, and deadline caps. Both dialects use it.
 
 ```mermaid
 sequenceDiagram
@@ -88,7 +87,7 @@ sequenceDiagram
   G->>X: engine.Execute(sql, limits)
   X-->>G: QueryResult (rows, columns, error, dialect, engine)
   G-->>S: 200 QueryResult
-  S-->>L: render grid / refusal
+  S-->>L: render grid or refusal
 ```
 
 The adapters behind `ExecutionService` must agree. `VITE_API_MODE` selects
@@ -98,42 +97,41 @@ That is how the single binary works with no configuration.
 
 | Adapter | Engine | Where it runs | What it reports about itself |
 | --- | --- | --- | --- |
-| `pglite` | Real PostgreSQL, compiled to WebAssembly | A Web Worker in the tab | A runaway statement stops when the worker is terminated. |
-| `sqlite` | Real SQLite, compiled to WebAssembly | A Web Worker in the tab | Declared types are affinities, not constraints. |
+| `pglite` | PostgreSQL compiled to WebAssembly | A Web Worker in the tab | A runaway statement stops when the worker is terminated. |
+| `sqlite` | SQLite compiled to WebAssembly | A Web Worker in the tab | Declared types are affinities, not constraints. |
 | `http` | PostgreSQL or SQLite | The gateway | The gateway owns the caps, the workspace, and the deadline. |
 
-## 3. Where learner data lives
+## Where learner data lives
 
-There are two stores, and they are separate by design (ADR 0003, ADR 0006). The
-metadata of the app and the practice environment of the learner are different
-things with different needs.
+The app uses two stores. They are separate because the metadata of the app and
+the practice environment of the learner have different needs.
 
 ```mermaid
 graph LR
   subgraph Meta["App metadata<br/>what the app knows"]
     direction TB
-    M1["accounts, sessions"]
-    M2["progress, events"]
-    M3["courses, challenges, patches"]
-    M4["run transcripts (audit trail)"]
+    MD1["accounts, sessions"]
+    MD2["progress, events"]
+    MD3["courses, challenges, patches"]
+    MD4["run transcripts"]
   end
   subgraph Practice["Practice environment<br/>what the learner practises on"]
     direction TB
-    P1["sealed dataset (commerce / perf)"]
+    P1["sealed dataset"]
     P2["per-account writable workspace"]
-    P3["per-learner SQLite file (2nd dialect)"]
+    P3["per-learner SQLite file"]
   end
-  Meta -->|"PostgreSQL (default)<br/>or metadata=sqlite"| MDB[("one file / one database")]
-  Practice -->|"always PostgreSQL"| PDB[("real PostgreSQL<br/>roles, templates, copies")]
+  Meta -->|"PostgreSQL by default<br/>or SQLite with metadata=sqlite"| MDB[("one file or one database")]
+  Practice -->|"a real engine, never the metadata store"| PDB[("PostgreSQL with roles, templates, copies<br/>or one SQLite file per learner")]
 ```
 
 The boundary comes from the product. The app teaches PostgreSQL, and per-account
-writable databases, template copies, and roles are PostgreSQL features. So the
-metadata may live in a SQLite file, which is opt-in through the `metadata`
-key set to `sqlite`,
-but the practice environment never does.
+writable databases, template copies, and roles are PostgreSQL features. The
+metadata can live in a SQLite file when you set `metadata` to `sqlite`. The
+practice environment stays on a real engine: PostgreSQL for the main courses and
+a per-learner SQLite file for the SQLite courses.
 
-## 4. One query, end to end
+## One query, end to end
 
 ```mermaid
 flowchart TD
@@ -144,40 +142,43 @@ flowchart TD
   E -->|yes| F["shared, read-only dataset<br/>restricted role"]
   E -->|no| G["per-account writable workspace<br/>copied from sealed template"]
   D --> H{"anonymous?"}
-  H -->|yes| I["shared commerce.db (mode=ro)"]
+  H -->|yes| I["shared commerce.db<br/>read-only"]
   H -->|no| J["the learner's own file"]
-  F --> K["engine.Execute<br/>caps + deadline"]
+  F --> K["engine.Execute<br/>caps and deadline"]
   G --> K
   I --> K
   J --> K
   K --> L{"status"}
   L -->|succeeded| M["compare against the result contract"]
   L -->|failed| N["classify the error, name the code"]
-  M --> O["passed / not yet + feedback codes"]
-  N --> P["QUERY_TIMEOUT / SYNTAX / DIALECT_MISMATCH …"]
+  M --> O["passed or not yet, with feedback codes"]
+  N --> P["QUERY_TIMEOUT, QUERY_SYNTAX_ERROR, DIALECT_MISMATCH, and others"]
 ```
 
 Grading compares results against an explicit contract. It never compares SQL
-text (design sections 1.1 and 3.1).
+text, so any query that returns the right rows passes.
 
-## 5. Course generation
+## Course generation
 
-The model is reached through one two-method seam
-(`internal/ai/provider`): `Descriptor()` and `Complete(ctx, req)`. Three
-implementations ship: the deterministic **fake** provider (CI proves the whole
-pipeline offline), an **OpenAI-compatible** HTTP client, and a **pi-ai**
-adapter over `github.com/sky-valley/pi/ai` — pi's unified multi-provider LLM
-API — which adds Anthropic, OpenAI responses and Gemini wire formats, SSE
-parsing, Retry-After-aware retries, an embedded model catalog (1,529 chat
-models across 41 providers, sourced from models.dev) and token accounting.
-The pipeline stays the policy: the model is an untrusted generator, every
-artifact is schema-checked, executed in a scratch environment, cross-checked
-and adversarially probed before it is stored. Administrators swap the live
-provider from the manage surface (`GET/PUT /admin/ai`) without a restart.
+The model is reached through one two-method seam in `backend/internal/ai/provider`:
+`Descriptor()` and `Complete(ctx, req)`. Three implementations ship:
 
-The model is an untrusted generator. The gateway is the policy. A run holds one
-conversation, and the model hands in one chapter for each call. The gateway
-verifies each chapter before it asks for the next one.
+- A deterministic fake provider, which proves the whole pipeline offline and
+  powers the audits.
+- An OpenAI-compatible HTTP client.
+- A pi-ai adapter over `github.com/sky-valley/pi/ai`. It adds the Anthropic, OpenAI
+  responses, and Gemini wire formats, SSE parsing, retries that respect
+  `Retry-After`, an embedded model catalog sourced from models.dev, and token
+  accounting.
+
+The pipeline stays the policy. The model is an untrusted generator. The gateway
+schema-checks every artifact, runs it in a scratch environment, cross-checks it,
+and probes it before storing it. An administrator can swap the live provider
+from the manage surface through `GET /admin/ai` and `PUT /admin/ai` without a
+restart.
+
+A run holds one conversation, and the model hands in one chapter for each call.
+The gateway verifies each chapter before it asks for the next one.
 
 ```mermaid
 sequenceDiagram
@@ -188,21 +189,21 @@ sequenceDiagram
   L->>G: POST /courses/generate (require_approval?)
   G->>M: ask for the outline only
   M-->>G: title, level, chapters[]
-  G->>G: validate + store as `building`
+  G->>G: validate and store as building
   alt require_approval
-    G-->>L: awaiting_approval (the index)
-    L->>G: POST /courses/{id}/build  (approve)
+    G-->>L: awaiting_approval (the outline)
+    L->>G: POST /courses/{id}/build (approve)
   end
   loop one chapter per call
-    G->>M: "save_chapter with the next chapter"
-    M-->>G: sections + exercises
+    G->>M: save_chapter with the next chapter
+    M-->>G: sections and exercises
     G->>DB: run every reference, cross-check, adversarial fixture
-    DB-->>G: measured rows / the engine's own error
-    G->>G: verify + persist the chapter
+    DB-->>G: measured rows or the engine's own error
+    G->>G: verify and persist the chapter
     G-->>M: tool result (engine verdict)
   end
   M->>G: finish_course
-  G->>G: course moves `building` → `active`
+  G->>G: course moves from building to active
 ```
 
 These properties each have a test:
@@ -211,17 +212,16 @@ These properties each have a test:
   run shows what has passed verification so far.
 - A chapter that fails is repaired with the message from the engine. If it still
   fails, the gateway drops it.
-- A run in which nothing passed verification is refused, and it stores nothing
-  (ADR 0002, ADR 0005).
+- A run in which nothing passed verification is refused, and it stores nothing.
 
-## 6. Layers and their contracts
+## Layers and their contracts
 
 ```mermaid
 graph TD
   subgraph FE["web/src"]
     C1["components/**<br/>presentational, no fetch"]
     C2["state/store.tsx<br/>the provider"]
-    C3["api/**<br/>ExecutionService (the only network seam)"]
+    C3["api/**<br/>ExecutionService, the only network seam"]
     C4["lib/**<br/>pure derivations"]
   end
   subgraph BE["backend/internal"]
@@ -232,7 +232,7 @@ graph TD
     B5["store<br/>persistence behind one interface"]
     B6["envdb + dataset + localdb<br/>environments"]
   end
-  C3 -->|"HTTP + JSON Schema"| B1
+  C3 -->|"HTTP and JSON Schema"| B1
   B1 --> B2
   B1 --> B3
   B1 --> B4
@@ -243,24 +243,24 @@ graph TD
 ```
 
 Every layer obeys one rule. Data access goes through the seam. A screen never
-calls `fetch`, and the gateway never invents a row. With no database, the gateway
-answers `ENVIRONMENT_UNAVAILABLE` instead of making up a result.
+calls `fetch`, and the gateway never invents a row. With no database, the
+gateway answers `ENVIRONMENT_UNAVAILABLE` instead of making up a result.
 
-## 7. Trust boundaries
+## Trust boundaries
 
 ```mermaid
 graph TB
   subgraph Untrusted["Untrusted"]
     U1["learner SQL"]
-    U2["model output (artifact content)"]
+    U2["model output"]
     U3["request bodies"]
   end
   subgraph Policy["The gateway is the policy"]
     P1["validate before activate"]
     P2["execute in a restricted role"]
-    P3["caps + deadline on every statement"]
-    P4["redact secrets before persist / log"]
-    P5["owner-scope: another account is 404, never 403"]
+    P3["caps and deadline on every statement"]
+    P4["redact secrets before persist or log"]
+    P5["owner scope: another account is 404, never 403"]
   end
   U1 --> P2
   U2 --> P1
@@ -269,17 +269,17 @@ graph TB
   P2 --> P5
 ```
 
-Learner SQL never runs on an administrative connection. `httpapi/adminpath_test.go`
-proves this by behaviour: `SELECT current_user` answers the learner role, and the
-gateway refuses `CREATE ROLE`, `pg_read_file`, `COPY … TO PROGRAM`, and
-`DROP DATABASE` with `QUERY_RUNTIME_ERROR`.
+Learner SQL never runs on an administrative connection. The gateway proves this
+by behaviour: `SELECT current_user` answers the learner role, and the gateway
+refuses `CREATE ROLE`, `pg_read_file`, `COPY ... TO PROGRAM`, and `DROP DATABASE`
+with `QUERY_RUNTIME_ERROR`.
 
-The gateway verifies generated content by execution before it stores the content.
-A challenge or a chapter that does not run never reaches a learner.
+The gateway verifies generated content by execution before it stores it. A
+challenge or a chapter that does not run never reaches a learner.
 
 The gateway redacts and bounds the `/runs` transcripts before it writes them.
 
-## 8. Repository map
+## Repository map
 
 | Path | Contents |
 | --- | --- |
@@ -287,28 +287,28 @@ The gateway redacts and bounds the `/runs` transcripts before it writes them.
 | `backend/` | The Go gateway. `internal/engine` is the one execution path. |
 | `contracts/` | JSON Schemas shared by both languages, plus `fixtures/`. |
 | `scripts/` | The audit suites the build targets run. |
-| `docs/` | The design, the ADRs, and the notes for each area. |
+| `docs/` | The architecture notes and the ADRs. |
 | `Makefile` | Every build, check, and audit target. Run `make help`. |
 
 Where to read next, by question:
 
-| Question | File |
+| Question | Document |
 | --- | --- |
-| Why Go, and not Bun? | `docs/adr/0001-backend-runtime-go-not-bun.md` |
-| How are environments isolated? | `docs/adr/0002`, `0003`, `0006` |
-| Why PostgreSQL first, and SQLite second? | `docs/adr/0004-postgresql-not-sqlite.md` |
-| How does the model seam work? | `docs/adr/0005-ai-provider-and-sdk.md` |
-| Where is the schema? | `docs/database-layout.md` |
-| How does grading work? | `contracts/fixtures/` and `backend/internal/eval/` |
+| Why Go, and not Bun? | [`adr/0001-backend-runtime-go-not-bun.md`](adr/0001-backend-runtime-go-not-bun.md) |
+| How are environments isolated? | [`adr/0002-challenge-environments.md`](adr/0002-challenge-environments.md), [`adr/0003-writable-learner-workspaces.md`](adr/0003-writable-learner-workspaces.md), [`adr/0006-sqlite-learner-isolation.md`](adr/0006-sqlite-learner-isolation.md) |
+| Why PostgreSQL first, and SQLite second? | [`adr/0004-postgresql-not-sqlite.md`](adr/0004-postgresql-not-sqlite.md) |
+| How does the model seam work? | [`adr/0005-ai-provider-and-sdk.md`](adr/0005-ai-provider-and-sdk.md) |
+| Where is the schema? | [`database-layout.md`](database-layout.md) |
+| How does grading work? | [`../contracts/fixtures/`](../contracts/fixtures/) and `backend/internal/eval/` |
 | Where is the backend layout, and why? | [`../backend/README.md`](../backend/README.md) |
-| How do I write a lesson? | `docs/content-authoring.md` |
+| How do I write a lesson? | [`content-authoring.md`](content-authoring.md) |
 
-## 9. How the gateway starts
+## How the gateway starts
 
-The binary is a cobra CLI (`cmd/api/cli.go`). Serving is the root command's
-own behavior, so a bare `querycraft` and `querycraft serve` take the same
-path. Before anything binds a port, `internal/config` resolves one `Settings`
-value, and `run()` in `cmd/api/main.go` wires the gateway from it.
+The binary is a cobra CLI. Serving is the root command's own behavior, so a bare
+`querycraft` and `querycraft serve` take the same path. Before anything binds a
+port, `internal/config` resolves one `Settings` value. Then `run()` in
+`cmd/api/main.go` wires the gateway from it.
 
 ```mermaid
 flowchart LR
@@ -318,32 +318,33 @@ flowchart LR
     DEC -->|yes| EXT["External PostgreSQL<br/>DSN used as given"]
     DEC -->|no| LDB["localdb starts an embedded<br/>PostgreSQL from .data/pg"]
     LDB --> DSN
-    EXT --> DSN["learner DSN + admin DSN"]
+    EXT --> DSN["learner DSN and admin DSN"]
     DSN --> EXEC["engine executor"]
     DSN --> STORE["store: postgres,<br/>or sqlite, or memory"]
     DSN --> ENVDB["envdb manager<br/>learner environments"]
     RUN --> SQLITE["SQLite dialect<br/>file-backed, always available"]
     RUN --> AIS["ai.Config: provider,<br/>limits, depot, runner"]
-    RUN --> HTTP["http.Server<br/>httpapi handler + webui embed"]
+    RUN --> HTTP["http.Server<br/>httpapi handler and webui embed"]
 ```
 
-Two honest paths matter. With no DSN and `no_local_db` unset, the gateway
-starts its own PostgreSQL and the lab works with no setup. With `no_local_db`
-set, or when the local server cannot start, execution answers
-`ENVIRONMENT_UNAVAILABLE` and progress falls back to memory; the gateway still
-serves, and never invents rows.
+Two paths matter:
 
-The two knobs that gate environment capacity, `max_environments` (default 8)
-and `idle_ttl` (default 15m), reach `envdb.Options` here. Before the config
-layer existed they had environment names but no reader.
+- With no DSN and `no_local_db` unset, the gateway starts its own PostgreSQL and
+  the lab works with no setup.
+- With `no_local_db` set, or when the local server cannot start, execution
+  answers `ENVIRONMENT_UNAVAILABLE` and progress falls back to memory. The
+  gateway still serves, and it never invents rows.
 
-| Command | What it does | Code |
-| --- | --- | --- |
-| `querycraft` / `querycraft serve` | Resolve settings and start the gateway | `cmd/api/cli.go` `serve`, `cmd/api/main.go` `run` |
-| `querycraft db reset` | Delete the configured local cluster's data directory | `cmd/api/cli.go` `dbReset`; `make db-reset` calls it |
-| `querycraft db status` | Print the resolved configuration and what exists on disk | `cmd/api/cli.go` `dbStatus` |
-| `querycraft version` | Print the gateway version | `cmd/api/cli.go` `gatewayVersion` |
+Two settings gate environment capacity: `max_environments` (default 8) and
+`idle_ttl` (default 15m). They reach `envdb.Options` through the config layer.
 
-The precedence order (defaults, file, flags) is documented with
-an example file in `backend/README.md`, section "Configuration", and proven by
-`internal/config/config_test.go`.
+| Command | What it does |
+| --- | --- |
+| `querycraft` or `querycraft serve` | Resolve settings and start the gateway. |
+| `querycraft db reset` | Delete the configured local cluster's data directory. `make db-reset` calls it. |
+| `querycraft db status` | Print the resolved configuration and what exists on disk. |
+| `querycraft version` | Print the gateway version. |
+
+Settings resolve in this order: shipped defaults, then the config file, then the
+`--addr` flag on `serve`. [`../backend/README.md`](../backend/README.md) lists
+every key and shows an example file.

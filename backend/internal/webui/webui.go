@@ -24,8 +24,14 @@ var dist embed.FS
 // has no index.html, which Available reports as "no SPA".
 var sub, _ = fs.Sub(dist, "dist")
 
-// indexFile is the SPA entry point inside the embedded tree.
-const indexFile = "index.html"
+// indexFile is the SPA entry point inside the embedded tree. The landing page
+// lives beside it at landing/index.html; the app is served at /app/ so the
+// landing can own the root without changing the SPA's hash routes.
+const (
+	indexFile        = "index.html"
+	landingIndexFile = "landing/index.html"
+	appPath          = "/app"
+)
 
 // Available reports whether a real frontend build was embedded. It is true iff
 // dist/index.html exists in the embedded filesystem; with only the .gitkeep
@@ -53,6 +59,16 @@ func Handler() http.Handler {
 			return
 		}
 		if clean == "/" {
+			// The landing page owns the root when the build carries one; a
+			// binary built before the landing existed still serves the app.
+			if fileExists(landingIndexFile) {
+				serveLanding(w, r)
+				return
+			}
+			serveIndex(w, r)
+			return
+		}
+		if clean == appPath || strings.HasPrefix(clean, appPath+"/") {
 			serveIndex(w, r)
 			return
 		}
@@ -88,6 +104,30 @@ func Placeholder() http.Handler {
 // distFS returns the embedded subtree rooted at dist/.
 func distFS() fs.FS {
 	return sub
+}
+
+// fileExists reports whether a path is part of the embedded frontend.
+func fileExists(name string) bool {
+	f, err := distFS().Open(name)
+	if err != nil {
+		return false
+	}
+	_ = f.Close()
+	return true
+}
+
+// serveLanding serves the marketing page at "/". It has the same no-cache rule
+// as the app shell: the file is unhashed and changes with every deploy.
+func serveLanding(w http.ResponseWriter, r *http.Request) {
+	data, err := fs.ReadFile(distFS(), landingIndexFile)
+	if err != nil {
+		serveIndex(w, r)
+		return
+	}
+	w.Header().Set("Content-Type", "text/html; charset=utf-8")
+	w.Header().Set("Cache-Control", "no-cache")
+	w.WriteHeader(http.StatusOK)
+	_, _ = w.Write(data)
 }
 
 func serveIndex(w http.ResponseWriter, r *http.Request) {

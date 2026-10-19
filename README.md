@@ -18,7 +18,8 @@ make build
 make serve
 ```
 
-Open <http://localhost:8080> and start a lesson.
+Open <http://localhost:8080>. The landing page links to the app at
+<http://localhost:8080/app/>.
 
 The first start prepares a local PostgreSQL database with sample data. It takes
 about 10 seconds. Later starts are immediate. To use your own PostgreSQL, create

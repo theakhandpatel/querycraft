@@ -1,0 +1,603 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Querycraft — Learn SQL by writing it</title>
+<meta name="description" content="Querycraft teaches SQL by running what you write against a real PostgreSQL database and grading the rows that come back. Any correct query passes.">
+<link rel="icon" href="/landing/assets/icon.svg" type="image/svg+xml">
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link href="https://fonts.googleapis.com/css2?family=Geist:wght@400;500;600&family=Geist+Mono:wght@400;500&family=Space+Grotesk:wght@500;600;700&display=swap" rel="stylesheet">
+<style>
+  :root {
+    --paper: #f4f5f7;
+    --raised: #ffffff;
+    --sunken: #f7f8fa;
+    --fill: #eef0f3;
+    --line: #e3e6eb;
+    --line-strong: #cbd1da;
+    --ink: #14161a;
+    --ink-2: #494f5a;
+    --ink-3: #636a75;
+    --pine: #0b6b59;
+    --pine-hover: #0a5c4d;
+    --pine-wash: rgba(12, 111, 92, .10);
+    --pine-line: rgba(12, 111, 92, .26);
+    --pass: #1a7f4f;
+    --amber: #8a5a10;
+    --code: #fbfcfd;
+    --code-ink: #20303f;
+    --sans: "Geist", ui-sans-serif, system-ui, -apple-system, "Segoe UI", Roboto, sans-serif;
+    --display: "Space Grotesk", "Geist", ui-sans-serif, system-ui, sans-serif;
+    --mono: "Geist Mono", ui-monospace, SFMono-Regular, Menlo, "Cascadia Code", monospace;
+    --wrap: 1200px;
+  }
+
+  * { box-sizing: border-box; }
+  html { scroll-behavior: smooth; }
+  body {
+    margin: 0;
+    background: var(--paper);
+    color: var(--ink);
+    font-family: var(--sans);
+    font-size: 16px;
+    line-height: 1.6;
+    -webkit-font-smoothing: antialiased;
+    text-rendering: optimizeLegibility;
+  }
+  ::selection { background: var(--pine-wash); color: var(--ink); }
+  a { color: inherit; }
+  img { max-width: 100%; }
+  .wrap { max-width: var(--wrap); margin: 0 auto; padding: 0 40px; }
+
+  /* ---------- top bar ---------- */
+  .top { border-bottom: 1px solid var(--line); background: var(--paper); }
+  .top .wrap { height: 68px; display: flex; align-items: center; gap: 34px; }
+  .brand {
+    display: inline-flex; align-items: center; gap: 9px;
+    font-family: var(--display); font-size: 20px; font-weight: 600;
+    letter-spacing: -.03em; text-decoration: none; color: var(--ink);
+  }
+  .brand .mark { width: 8px; height: 8px; border-radius: 2px; background: var(--pine); }
+  .nav { display: flex; gap: 26px; margin-left: auto; }
+  .nav a { font-size: 14px; color: var(--ink-2); text-decoration: none; }
+  .nav a:hover { color: var(--ink); }
+  .btn {
+    display: inline-flex; align-items: center; justify-content: center; gap: 8px;
+    background: var(--pine); color: #fff; border: 1px solid var(--pine);
+    border-radius: 9px; padding: 12px 18px;
+    font-family: var(--sans); font-size: 14px; font-weight: 500;
+    text-decoration: none; cursor: pointer;
+    transition: background .15s ease, border-color .15s ease;
+  }
+  .btn:hover { background: var(--pine-hover); border-color: var(--pine-hover); }
+  .btn:focus-visible { outline: 2px solid var(--pine); outline-offset: 3px; }
+  .btn.small { padding: 9px 14px; font-size: 13px; }
+  .btn.ghost { background: transparent; color: var(--ink); border-color: var(--line-strong); }
+  .btn.ghost:hover { background: var(--fill); border-color: var(--line-strong); }
+
+  /* ---------- hero ---------- */
+  .hero { padding: 86px 0 70px; }
+  .hero .wrap { display: grid; grid-template-columns: 1.02fr .98fr; gap: 62px; align-items: center; }
+  h1 {
+    margin: 0 0 24px;
+    font-family: var(--display);
+    font-size: clamp(52px, 6.5vw, 94px);
+    line-height: .97;
+    letter-spacing: -.035em;
+    font-weight: 600;
+  }
+  h1 em { font-style: normal; color: var(--pine); }
+  .lede {
+    margin: 0 0 28px; max-width: 46ch;
+    font-size: 19px; line-height: 1.55; color: var(--ink-2);
+  }
+  .actions { display: flex; align-items: center; gap: 22px; flex-wrap: wrap; }
+  .textlink {
+    font-size: 14px; color: var(--ink); text-decoration: none;
+    border-bottom: 1px solid var(--line-strong); padding-bottom: 2px;
+  }
+  .textlink:hover { border-color: var(--ink); }
+  .note {
+    display: flex; align-items: center; gap: 9px; margin-top: 28px;
+    font-family: var(--mono); font-size: 10.5px; letter-spacing: .05em;
+    text-transform: uppercase; color: var(--ink-3);
+  }
+  .note .dot { width: 6px; height: 6px; border-radius: 50%; background: var(--pass); }
+
+  /* ---------- the exercise cell ---------- */
+  .cell {
+    background: var(--raised);
+    border: 1px solid var(--line);
+    border-radius: 12px;
+    box-shadow: 0 1px 2px rgba(20, 22, 26, .05), 0 24px 48px -30px rgba(20, 22, 26, .28);
+    overflow: hidden;
+  }
+  .cell-head {
+    display: flex; align-items: center; gap: 10px;
+    padding: 12px 16px; border-bottom: 1px solid var(--line);
+  }
+  .cell-name { font-family: var(--mono); font-size: 11px; letter-spacing: .03em; color: var(--ink-2); }
+  .badge {
+    margin-left: auto; padding: 3px 8px; border-radius: 999px;
+    border: 1px solid var(--pine-line); background: var(--pine-wash);
+    font-family: var(--mono); font-size: 9.5px; letter-spacing: .07em;
+    text-transform: uppercase; color: var(--pine);
+  }
+  .sample { font-family: var(--mono); font-size: 9.5px; color: var(--ink-3); letter-spacing: .03em; }
+  pre.code {
+    margin: 0; padding: 18px 18px 16px; overflow-x: auto;
+    background: var(--code); border-bottom: 1px solid var(--line);
+    font-family: var(--mono); font-size: 12.5px; line-height: 1.75; color: var(--code-ink);
+    tab-size: 2;
+  }
+  .k { color: var(--pine); }
+  .s { color: var(--amber); }
+  .c { color: var(--ink-3); }
+  .cell-bar {
+    display: flex; align-items: center; gap: 12px;
+    padding: 11px 16px; border-bottom: 1px solid var(--line);
+  }
+  .run {
+    display: inline-flex; align-items: center; gap: 7px;
+    padding: 6px 11px; border: 1px solid var(--line-strong); border-radius: 7px;
+    background: var(--raised); color: var(--ink);
+    font-family: var(--sans); font-size: 12px; font-weight: 500; cursor: pointer;
+  }
+  .run:hover { background: var(--fill); }
+  .run:focus-visible { outline: 2px solid var(--pine); outline-offset: 2px; }
+  .key { font-family: var(--mono); font-size: 9.5px; color: var(--ink-3); }
+  .cell-bar .sample { margin-left: auto; }
+  table.result { width: 100%; border-collapse: collapse; font-family: var(--mono); font-size: 12px; }
+  .result th {
+    padding: 10px 16px 6px; text-align: left;
+    font-size: 9px; font-weight: 500; letter-spacing: .09em; text-transform: uppercase;
+    color: var(--ink-3);
+  }
+  .result td { padding: 7px 16px; border-top: 1px solid var(--line); }
+  .result td.num { text-align: right; font-variant-numeric: tabular-nums; }
+  .result th.num { text-align: right; }
+  .verdict {
+    display: grid; grid-template-columns: minmax(0, 1fr) auto; align-items: center; gap: 16px;
+    padding: 13px 16px; border-top: 1px solid var(--line); background: var(--sunken);
+  }
+  .checks { display: grid; grid-template-columns: 1fr 1fr; gap: 6px 18px; min-width: 0; }
+  .check { display: flex; align-items: center; gap: 7px; font-size: 11.5px; color: var(--ink-2); white-space: nowrap; }
+  .check svg { width: 13px; height: 13px; color: var(--pass); flex: none; }
+  .stamp {
+    justify-self: end; padding: 4px 9px; border: 2px solid var(--pass); border-radius: 3px;
+    font-family: var(--mono); font-size: 10.5px; letter-spacing: .12em;
+    text-transform: uppercase; color: var(--pass); transform: rotate(-5deg);
+  }
+
+  /* hero animation: visible by default, replayed when the cell runs */
+  @keyframes rowIn { from { opacity: 0; transform: translateY(4px); } to { opacity: 1; transform: none; } }
+  @keyframes checkIn { from { opacity: 0; transform: scale(.7); } to { opacity: 1; transform: none; } }
+  @keyframes stampIn { from { opacity: 0; transform: rotate(-14deg) scale(1.15); } to { opacity: 1; transform: rotate(-5deg) scale(1); } }
+  .cell.is-running .result tbody tr { animation: rowIn .42s cubic-bezier(.2, .7, .2, 1) both; }
+  .cell.is-running .result tbody tr:nth-child(1) { animation-delay: .10s; }
+  .cell.is-running .result tbody tr:nth-child(2) { animation-delay: .17s; }
+  .cell.is-running .result tbody tr:nth-child(3) { animation-delay: .24s; }
+  .cell.is-running .check { animation: checkIn .30s cubic-bezier(.2, .7, .2, 1) both; }
+  .cell.is-running .check:nth-child(1) { animation-delay: .34s; }
+  .cell.is-running .check:nth-child(2) { animation-delay: .41s; }
+  .cell.is-running .check:nth-child(3) { animation-delay: .48s; }
+  .cell.is-running .check:nth-child(4) { animation-delay: .55s; }
+  .cell.is-running .stamp { animation: stampIn .34s cubic-bezier(.2, .7, .2, 1) both; animation-delay: .64s; }
+
+  /* ---------- proof strip ---------- */
+  .proof { border-top: 1px solid var(--line); border-bottom: 1px solid var(--line); }
+  .proof .wrap { display: flex; }
+  .proof span {
+    flex: 1; padding: 15px 0; text-align: center;
+    border-left: 1px solid var(--line);
+    font-family: var(--mono); font-size: 10px; letter-spacing: .07em;
+    text-transform: uppercase; color: var(--ink-2);
+  }
+  .proof span:first-child { border-left: 0; }
+
+  /* ---------- sections ---------- */
+  section { padding: 92px 0; border-top: 1px solid var(--line); }
+  h2 {
+    margin: 0 0 18px; font-family: var(--display);
+    font-size: clamp(34px, 4.2vw, 56px); line-height: 1.02;
+    letter-spacing: -.03em; font-weight: 600; max-width: 20ch;
+  }
+  .body { margin: 0; max-width: 62ch; font-size: 16.5px; line-height: 1.7; color: var(--ink-2); }
+  .split { display: grid; grid-template-columns: .85fr 1.15fr; gap: 64px; align-items: start; }
+
+  /* contract panel */
+  .panel { border: 1px solid var(--line); border-radius: 12px; background: var(--raised); overflow: hidden; }
+  .panel-head {
+    padding: 12px 18px; border-bottom: 1px solid var(--line);
+    font-family: var(--mono); font-size: 9.5px; letter-spacing: .09em;
+    text-transform: uppercase; color: var(--ink-3);
+  }
+  .rule { display: grid; grid-template-columns: 178px 1fr 16px; gap: 18px; padding: 15px 18px; border-top: 1px solid var(--line); align-items: start; }
+  .rule:first-of-type { border-top: 0; }
+  .rule h3 { margin: 0; font-size: 13.5px; font-weight: 600; letter-spacing: -.01em; }
+  .rule p { margin: 0; font-size: 13px; line-height: 1.55; color: var(--ink-2); }
+  .rule svg { width: 14px; height: 14px; color: var(--pass); margin-top: 3px; }
+  .panel-foot {
+    padding: 12px 18px; border-top: 1px solid var(--line); background: var(--sunken);
+    font-size: 12.5px; color: var(--ink-2);
+  }
+
+  /* screenshots */
+  .shot { border: 1px solid var(--line); border-radius: 12px; overflow: hidden; background: var(--raised); box-shadow: 0 24px 48px -34px rgba(20, 22, 26, .30); }
+  .drawer-shot {
+    max-width: 360px; margin: 0 auto; overflow: hidden;
+    border: 1px solid var(--line); border-radius: 10px; background: var(--raised);
+    box-shadow: 0 24px 48px -34px rgba(20, 22, 26, .30);
+  }
+  .drawer-shot img { display: block; width: 100%; height: auto; }
+  .shot img { display: block; width: 100%; height: auto; }
+  .caption { margin: 12px 0 0; font-family: var(--mono); font-size: 10px; letter-spacing: .04em; color: var(--ink-3); }
+  .annotations { display: grid; grid-template-columns: repeat(3, 1fr); gap: 26px; margin-top: 38px; }
+  .annotation { border-top: 1px solid var(--line-strong); padding-top: 12px; }
+  .annotation .n { font-family: var(--mono); font-size: 10px; color: var(--pine); letter-spacing: .06em; }
+  .annotation h3 { margin: 6px 0 4px; font-size: 14px; font-weight: 600; }
+  .annotation p { margin: 0; font-size: 13px; line-height: 1.55; color: var(--ink-2); }
+
+  /* workspace */
+  .workspace { display: grid; grid-template-columns: 1fr 1fr; gap: 56px; align-items: center; }
+  .facts { margin: 26px 0 0; padding: 0; list-style: none; border-top: 1px solid var(--line); }
+  .facts li { display: flex; justify-content: space-between; gap: 24px; padding: 12px 0; border-bottom: 1px solid var(--line); font-size: 13.5px; }
+  .facts span:first-child { color: var(--ink-3); font-family: var(--mono); font-size: 10px; letter-spacing: .06em; text-transform: uppercase; padding-top: 2px; }
+  .facts span:last-child { text-align: right; color: var(--ink-2); }
+
+  /* courses */
+  .courses { width: 100%; border-collapse: collapse; margin-top: 34px; }
+  .courses th {
+    padding: 0 0 10px; text-align: left; border-bottom: 1px solid var(--line-strong);
+    font-family: var(--mono); font-size: 9px; font-weight: 500; letter-spacing: .09em;
+    text-transform: uppercase; color: var(--ink-3);
+  }
+  .courses td { padding: 15px 0; border-bottom: 1px solid var(--line); vertical-align: baseline; }
+  .courses tr:hover td { background: var(--pine-wash); }
+  .courses .title { font-family: var(--display); font-size: 19px; letter-spacing: -.02em; }
+  .courses .meta { font-family: var(--mono); font-size: 10.5px; color: var(--ink-2); letter-spacing: .02em; }
+  .courses .pg { color: var(--pine); }
+  .courses .lite { color: var(--ink-3); }
+  .courses th:nth-child(2), .courses td:nth-child(2) { width: 130px; }
+  .courses th:nth-child(3), .courses td:nth-child(3) { width: 90px; text-align: right; }
+  .courses th:nth-child(4), .courses td:nth-child(4) { width: 220px; padding-left: 32px; }
+
+  /* dialect codes */
+  .codes { display: grid; grid-template-columns: 1fr; gap: 12px; margin-top: 30px; }
+  .code-card { border: 1px solid var(--line); border-radius: 10px; overflow: hidden; background: var(--raised); }
+  .code-card .label {
+    display: flex; align-items: center; gap: 8px; padding: 9px 14px;
+    border-bottom: 1px solid var(--line); font-family: var(--mono); font-size: 9.5px;
+    letter-spacing: .08em; text-transform: uppercase; color: var(--ink-3);
+  }
+  .code-card .label .dot { width: 6px; height: 6px; border-radius: 50%; background: var(--pine); }
+  .code-card .label .dot.grey { background: var(--line-strong); }
+  .code-card pre {
+    margin: 0; padding: 14px; background: var(--code); overflow-x: auto;
+    font-family: var(--mono); font-size: 11.5px; line-height: 1.7; color: var(--code-ink);
+  }
+
+  /* runs */
+  .runs { display: grid; grid-template-columns: .85fr 1.15fr; gap: 56px; align-items: start; }
+  .gif { border: 1px solid var(--line); border-radius: 12px; display: block; width: 100%; aspect-ratio: 4 / 5; object-fit: cover; object-position: center; background: var(--raised); }
+
+  /* closing field */
+  .close { background: var(--pine); border-top: 1px solid var(--pine); padding: 96px 0 104px; }
+  .close h2 { color: #fff; max-width: 16ch; margin-bottom: 20px; font-size: clamp(42px, 5.8vw, 80px); }
+  .close p { color: rgba(255, 255, 255, .78); max-width: 44ch; font-size: 17px; line-height: 1.6; margin: 0 0 30px; }
+  .close .btn { background: #f4f5f7; border-color: #f4f5f7; color: var(--pine); }
+  .close .btn:hover { background: #fff; border-color: #fff; }
+  .close .tiny { margin-top: 18px; font-family: var(--mono); font-size: 10px; letter-spacing: .06em; text-transform: uppercase; color: rgba(255, 255, 255, .62); }
+
+  /* footer */
+  footer { padding: 26px 0 40px; }
+  .foot { display: flex; align-items: center; gap: 24px; justify-content: space-between; font-size: 12.5px; color: var(--ink-3); }
+  .foot .links { display: flex; gap: 20px; }
+  .foot a { color: var(--ink-2); text-decoration: none; }
+  .foot a:hover { color: var(--ink); }
+
+  @media (max-width: 1000px) {
+    .hero .wrap, .split, .workspace, .runs { grid-template-columns: 1fr; gap: 42px; }
+    .hero { padding-top: 60px; }
+    .nav { display: none; }
+    .top .wrap { justify-content: space-between; }
+    .annotations { grid-template-columns: 1fr; gap: 18px; }
+    .codes { grid-template-columns: 1fr; }
+    .rule { grid-template-columns: 150px 1fr 16px; }
+    .proof .wrap { flex-wrap: wrap; }
+    .proof span { flex: 1 1 50%; border-top: 1px solid var(--line); }
+    .proof span:nth-child(-n+2) { border-top: 0; }
+    .proof span:nth-child(odd) { border-left: 0; }
+  }
+  @media (max-width: 640px) {
+    .wrap { padding: 0 20px; }
+    h1 { font-size: 48px; }
+    .lede { font-size: 17px; }
+    section { padding: 68px 0; }
+    .hero { padding: 48px 0 52px; }
+    .cell-head .sample { display: none; }
+    pre.code { font-size: 11px; padding: 14px; }
+    .result th, .result td { padding-left: 12px; padding-right: 12px; }
+    .checks { grid-template-columns: 1fr; }
+    .verdict { grid-template-columns: 1fr; gap: 10px; }
+    .stamp { display: inline-block; justify-self: start; }
+    .rule { grid-template-columns: 1fr 16px; }
+    .rule h3 { grid-column: 1 / -1; }
+    .courses .level { display: none; }
+    .courses .title { font-size: 16px; }
+    .foot { flex-direction: column; align-items: flex-start; gap: 14px; }
+    .close { padding: 68px 0 76px; }
+  }
+  @media (prefers-reduced-motion: reduce) {
+    * { animation: none !important; transition: none !important; }
+    html { scroll-behavior: auto; }
+  }
+</style>
+</head>
+<body>
+
+<header class="top">
+  <div class="wrap">
+    <a class="brand" href="/"><span class="mark"></span>querycraft</a>
+    <nav class="nav" aria-label="Primary">
+      <a href="#grading">How grading works</a>
+      <a href="#lesson">Lessons</a>
+      <a href="#courses">Courses</a>
+      <a href="https://github.com/theakhandpatel/querycraft/tree/main/docs">Docs</a>
+    </nav>
+    <a class="btn small" href="/app/">Start learning</a>
+  </div>
+</header>
+
+<main>
+  <section class="hero" style="border-top:0">
+    <div class="wrap">
+      <div>
+        <h1>Learn SQL by <em>writing it.</em></h1>
+        <p class="lede">Querycraft runs what you write against a real PostgreSQL database and grades the rows that come back. Write it your way. If the result is right, you pass.</p>
+        <div class="actions">
+          <a class="btn" href="/app/">Start a lesson</a>
+          <a class="textlink" href="#grading">See how grading works</a>
+        </div>
+        <p class="note"><span class="dot"></span>No account needed · Runs in your browser</p>
+      </div>
+
+      <div class="cell" id="demo-cell">
+        <div class="cell-head">
+          <span class="cell-name">exercise.sql</span>
+          <span class="badge">PostgreSQL</span>
+          <span class="sample">Sample data</span>
+        </div>
+        <pre class="code"><code><span class="k">select</span> c.name,
+       <span class="k">count</span>(<span class="k">distinct</span> o.id) <span class="k">as</span> orders,
+       <span class="k">round</span>(<span class="k">sum</span>(oi.quantity * oi.unit_price), 2) <span class="k">as</span> revenue
+<span class="k">from</span> customers c
+<span class="k">join</span> orders o <span class="k">on</span> o.customer_id = c.id
+<span class="k">join</span> order_items oi <span class="k">on</span> oi.order_id = o.id
+<span class="k">group by</span> c.name
+<span class="k">order by</span> revenue <span class="k">desc</span>
+<span class="k">limit</span> 3;</code></pre>
+        <div class="cell-bar">
+          <button class="run" type="button" data-run>Run example</button>
+          <span class="key">⌘↵</span>
+          <span class="sample">Recorded on the commerce dataset</span>
+        </div>
+        <table class="result">
+          <thead>
+            <tr><th>name</th><th class="num">orders</th><th class="num">revenue</th></tr>
+          </thead>
+          <tbody>
+            <tr><td>Ada Whitfield</td><td class="num">5</td><td class="num">1666.40</td></tr>
+            <tr><td>Emi Tanaka</td><td class="num">4</td><td class="num">1651.65</td></tr>
+            <tr><td>Omar Park</td><td class="num">3</td><td class="num">1397.40</td></tr>
+          </tbody>
+        </table>
+        <div class="verdict">
+          <div class="checks">
+            <span class="check"><svg viewBox="0 0 16 16" fill="none" aria-hidden="true"><path d="M3 8.5 6.2 12 13 4.5" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"/></svg>Columns and order</span>
+            <span class="check"><svg viewBox="0 0 16 16" fill="none" aria-hidden="true"><path d="M3 8.5 6.2 12 13 4.5" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"/></svg>Rows</span>
+            <span class="check"><svg viewBox="0 0 16 16" fill="none" aria-hidden="true"><path d="M3 8.5 6.2 12 13 4.5" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"/></svg>Row order</span>
+            <span class="check"><svg viewBox="0 0 16 16" fill="none" aria-hidden="true"><path d="M3 8.5 6.2 12 13 4.5" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"/></svg>Values</span>
+          </div>
+          <span class="stamp">Passed</span>
+        </div>
+      </div>
+    </div>
+  </section>
+
+  <div class="proof">
+    <div class="wrap">
+      <span>8 courses</span>
+      <span>52 chapters</span>
+      <span>PostgreSQL + SQLite</span>
+      <span>Runs in your browser</span>
+    </div>
+  </div>
+
+  <section id="grading">
+    <div class="wrap split">
+      <div>
+        <h2>The result is the answer.</h2>
+        <p class="body">An exercise declares the columns, the row order, and the values that count as correct. Any query that produces them passes: a join, a subquery, a window function. A query that returns the wrong rows fails, however tidy it looks.</p>
+      </div>
+      <div class="panel" aria-label="What the result contract checks">
+        <div class="panel-head">What the contract checks</div>
+        <div class="rule">
+          <h3>Columns and order</h3>
+          <p>The result has the expected columns, in the expected order.</p>
+          <svg viewBox="0 0 16 16" fill="none" aria-hidden="true"><path d="M3 8.5 6.2 12 13 4.5" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"/></svg>
+        </div>
+        <div class="rule">
+          <h3>Rows</h3>
+          <p>The right rows, with no extras and none missing.</p>
+          <svg viewBox="0 0 16 16" fill="none" aria-hidden="true"><path d="M3 8.5 6.2 12 13 4.5" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"/></svg>
+        </div>
+        <div class="rule">
+          <h3>Row order</h3>
+          <p>When the exercise asks for an order, the rows arrive in it.</p>
+          <svg viewBox="0 0 16 16" fill="none" aria-hidden="true"><path d="M3 8.5 6.2 12 13 4.5" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"/></svg>
+        </div>
+        <div class="rule">
+          <h3>Values</h3>
+          <p>Each value matches, with the comparison the exercise declares.</p>
+          <svg viewBox="0 0 16 16" fill="none" aria-hidden="true"><path d="M3 8.5 6.2 12 13 4.5" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"/></svg>
+        </div>
+        <div class="panel-foot">The app never compares your SQL text. Two different queries can both be right.</div>
+      </div>
+    </div>
+  </section>
+
+  <section id="lesson">
+    <div class="wrap">
+      <div class="split" style="margin-bottom:34px">
+        <div>
+          <h2>Read a little. Then write.</h2>
+          <p class="body">A chapter mixes a short reading with a worked example and one or two exercises. The editor sits beside the question, the result sits under the query, and the feedback names the check that failed.</p>
+        </div>
+        <div>
+          <div class="shot"><img src="/landing/assets/lesson.png" alt="A Querycraft lesson with the reading column, a SQL cell, and a result grid" width="1440" height="900"></div>
+          <p class="caption">A chapter from SQL Analytics in the Real World.</p>
+        </div>
+      </div>
+      <div class="annotations">
+        <div class="annotation"><div class="n">01</div><h3>The reading column</h3><p>Short prose, diagrams, and syntax you can copy. Chapter content is seeded from the course.</p></div>
+        <div class="annotation"><div class="n">02</div><h3>The cell</h3><p>Run, check, hint, solution, keep, reset. The editor stays next to the question.</p></div>
+        <div class="annotation"><div class="n">03</div><h3>The result</h3><p>Rows and checks return together. When a check fails, the feedback says which one and why.</p></div>
+      </div>
+    </div>
+  </section>
+
+  <section id="workbook">
+    <div class="wrap split">
+      <div>
+        <h2>The work between lessons.</h2>
+        <p class="body">Every bookmarked exercise, saved query, note, and attempt stays in your workbook. Search across lessons and your own material with <kbd>Cmd</kbd>+<kbd>K</kbd> or <kbd>Ctrl</kbd>+<kbd>K</kbd>. Export a copy as JSON, or import it on another machine without overwriting what you have.</p>
+      </div>
+      <div>
+        <div class="shot"><img src="/landing/assets/workbook.png" alt="The workbook: progress, course content, notes, and saved queries" width="1280" height="720"></div>
+        <p class="caption">The workbook: progress, course content, notes, and saved queries.</p>
+      </div>
+    </div>
+  </section>
+
+  <section id="workspace">
+    <div class="wrap workspace">
+      <div>
+        <h2>A database you can break.</h2>
+        <p class="body">Sign in and you get a private copy of the sample database. Writes, schema changes, and transactions all work. Reset restores the original data in one click. Signed out, queries run read-only against the shared data.</p>
+        <ul class="facts">
+          <li><span>Signed out</span><span>Read-only on the shared dataset</span></li>
+          <li><span>Signed in</span><span>Your own copy, writable, with reset</span></li>
+          <li><span>Every answer</span><span>Graded by the rows it returns</span></li>
+        </ul>
+      </div>
+      <div>
+        <div class="drawer-shot"><img src="/landing/assets/tables-drawer.png" alt="The tables drawer showing table names, columns, types, and sample rows" width="440" height="900"></div>
+        <p class="caption">The tables drawer: the live schema, sample rows, and reset.</p>
+      </div>
+    </div>
+  </section>
+
+  <section id="courses">
+    <div class="wrap">
+      <h2>Eight courses. One habit.</h2>
+      <p class="body">Start with the clauses, then move to joins, subqueries, plans, and the parts of SQLite that surprise PostgreSQL developers.</p>
+      <table class="courses">
+        <thead><tr><th>Course</th><th>Dialect</th><th class="num">Chapters</th><th class="level">Level</th></tr></thead>
+        <tbody>
+          <tr><td class="title">SQL Analytics in the Real World</td><td class="meta pg">PostgreSQL</td><td class="meta num">9</td><td class="meta level">Intermediate</td></tr>
+          <tr><td class="title">Joins without guesswork</td><td class="meta pg">PostgreSQL</td><td class="meta num">3</td><td class="meta level">Beginner → intermediate</td></tr>
+          <tr><td class="title">PostgreSQL query plans</td><td class="meta pg">PostgreSQL</td><td class="meta num">8</td><td class="meta level">Intermediate</td></tr>
+          <tr><td class="title">Subqueries and set operations</td><td class="meta pg">PostgreSQL</td><td class="meta num">4</td><td class="meta level">Intermediate</td></tr>
+          <tr><td class="title">SQL Foundations</td><td class="meta pg">PostgreSQL</td><td class="meta num">7</td><td class="meta level">Beginner</td></tr>
+          <tr><td class="title">SQLite Essentials</td><td class="meta lite">SQLite</td><td class="meta num">7</td><td class="meta level">Beginner → intermediate</td></tr>
+          <tr><td class="title">SQLite in Production</td><td class="meta lite">SQLite</td><td class="meta num">7</td><td class="meta level">Intermediate → advanced</td></tr>
+          <tr><td class="title">Postgres to SQLite</td><td class="meta lite">SQLite</td><td class="meta num">7</td><td class="meta level">Intermediate → advanced</td></tr>
+        </tbody>
+      </table>
+    </div>
+  </section>
+
+  <section>
+    <div class="wrap split">
+      <div>
+        <h2>PostgreSQL first. SQLite too.</h2>
+        <p class="body">PostgreSQL is the main engine. Three SQLite courses teach where the two diverge: types, dates, the rowid, and the queries that have no direct port. The same grading rules apply to both.</p>
+      </div>
+      <div class="codes">
+        <div class="code-card">
+          <div class="label"><span class="dot"></span>PostgreSQL</div>
+          <pre><code><span class="k">select</span> date_trunc(<span class="s">'month'</span>, ordered_at) <span class="k">as</span> month,
+       <span class="k">count</span>(*) <span class="k">as</span> orders
+<span class="k">from</span> orders
+<span class="k">group by</span> 1
+<span class="k">order by</span> 1;</code></pre>
+        </div>
+        <div class="code-card">
+          <div class="label"><span class="dot grey"></span>SQLite</div>
+          <pre><code><span class="k">select</span> strftime(<span class="s">'%Y-%m'</span>, ordered_at) <span class="k">as</span> month,
+       <span class="k">count</span>(*) <span class="k">as</span> orders
+<span class="k">from</span> orders
+<span class="k">group by</span> 1
+<span class="k">order by</span> 1;</code></pre>
+        </div>
+      </div>
+    </div>
+  </section>
+
+  <section id="runs">
+    <div class="wrap runs">
+      <div>
+        <h2>No server. No setup.</h2>
+        <p class="body">The default experience runs PostgreSQL in a Web Worker, compiled to WebAssembly. Lessons, results, and your progress work without a network. Run the Go gateway when you want accounts, stored courses, or SQLite on the server.</p>
+        <p class="body" style="margin-top:14px;font-size:14.5px;color:var(--ink-3)">One binary when you host it: the app, the API, and its documentation on one port.</p>
+      </div>
+      <div>
+        <img class="gif" src="/landing/assets/walkthrough.gif" alt="A short walkthrough: signing in, opening a lesson, running a query, and passing the checks" width="1440" height="810">
+        <p class="caption">Fifteen seconds in the real app: sign in, a lesson, a graded answer, the tables drawer.</p>
+      </div>
+    </div>
+  </section>
+
+  <section class="close">
+    <div class="wrap">
+      <h2>Write your first query.</h2>
+      <p>Pick a course, open a chapter, and run something. The database will tell you the truth.</p>
+      <a class="btn" href="/app/">Start a lesson</a>
+      <p class="tiny">Free · No account needed</p>
+    </div>
+  </section>
+</main>
+
+<footer>
+  <div class="wrap foot">
+    <a class="brand" href="/"><span class="mark"></span>querycraft</a>
+    <div class="links">
+      <a href="https://github.com/theakhandpatel/querycraft/tree/main/docs">Documentation</a>
+      <a href="https://github.com/theakhandpatel/querycraft">GitHub</a>
+      <a href="/docs">API</a>
+    </div>
+    <span>PostgreSQL · SQLite · React · Go</span>
+  </div>
+</footer>
+
+<script>
+  (() => {
+    const cell = document.getElementById('demo-cell');
+    const run = document.querySelector('[data-run]');
+    if (!cell || !run) return;
+    const reduce = window.matchMedia('(prefers-reduced-motion: reduce)').matches;
+    const play = () => {
+      if (reduce) return;
+      cell.classList.remove('is-running');
+      void cell.offsetWidth;
+      cell.classList.add('is-running');
+    };
+    run.addEventListener('click', play);
+    if (!reduce) requestAnimationFrame(play);
+  })();
+</script>
+</body>
+</html>

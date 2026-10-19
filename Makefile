@@ -49,6 +49,8 @@ install: ## Install frontend dependencies (npm ci, falling back to npm install).
 
 web: ## Build the frontend into web/dist.
 	cd $(WEB_DIR) && npm run build
+	@rm -rf $(WEB_DIR)/dist/landing
+	@cp -R $(WEB_DIR)/landing $(WEB_DIR)/dist/landing
 
 typecheck: ## Type-check the frontend (tsc --noEmit, strict).
 	cd $(WEB_DIR) && npx tsc --noEmit
@@ -218,10 +220,16 @@ verify: build test ## build + test + smoke-test the binary on an isolated embedd
 	code=$$(curl -sS -o "$$root" -w '%{http_code}' "http://$$addr/"); \
 	echo "verify: GET / -> HTTP $$code"; \
 	if [ "$$code" != "200" ]; then echo "verify: GET / expected 200, got $$code" >&2; exit 1; fi; \
-	if ! grep -qE 'Querycraft|make build' "$$root"; then \
-		echo "verify: GET / did not contain the app title or the placeholder" >&2; head -20 "$$root" >&2; exit 1; \
+	if ! grep -q 'Learn SQL' "$$root"; then \
+		echo "verify: GET / did not serve the landing page" >&2; head -20 "$$root" >&2; exit 1; \
 	fi; \
-	echo "verify: SPA response OK"; \
+	appcode=$$(curl -sS -o "$$root" -w '%{http_code}' "http://$$addr/app/"); \
+	echo "verify: GET /app/ -> HTTP $$appcode"; \
+	if [ "$$appcode" != "200" ]; then echo "verify: GET /app/ expected 200, got $$appcode" >&2; exit 1; fi; \
+	if ! grep -q 'id="root"' "$$root"; then \
+		echo "verify: GET /app/ did not serve the SPA shell" >&2; head -20 "$$root" >&2; exit 1; \
+	fi; \
+	echo "verify: landing and SPA responses OK"; \
 	echo "verify: OK (embedded PostgreSQL :$$port, SPA + API + auth on $$addr)"
 
 verify-mock: build test ## Smoke-test the binary with no embedded database (degraded mode).
