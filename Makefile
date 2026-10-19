@@ -292,6 +292,7 @@ serve: ## Run the built binary (warns if you still need to 'make build').
 		echo "serve: $(BIN) not found — run 'make build' first" >&2; \
 		exit 1; \
 	fi
+	@echo "Querycraft: open the URL printed by the gateway below."
 	$(BIN)
 
 run: ## Run the gateway with 'go run' (API only, no embedded SPA).
