@@ -1,7 +1,7 @@
 # Features
 
 This page tells you what Querycraft does. Each entry points to the code that
-proves it. The status is `v0.9.0`.
+proves it. The status is `v0.10.0`.
 
 The app ships 8 courses, 52 chapters, 53 examples, and 53 exercises. It runs two
 SQL dialects: PostgreSQL and SQLite.
