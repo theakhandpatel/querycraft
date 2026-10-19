@@ -99,9 +99,8 @@ The app ships eight courses and 52 chapters across PostgreSQL and SQLite.
   adds accounts, stored courses, and the tutor. The app switches to it when it
   answers on the same origin.
 - **One binary.** `make build` embeds the landing page and the app in the
-  gateway, which serves them at `/` and `/app/` with the API and its
-  documentation on one port. It starts its own PostgreSQL when no database is
-  configured.
+  gateway, which serves both with the API and its documentation on one port. It
+  starts its own PostgreSQL when no database is configured.
 - **Your database.** Set `database_url` in `querycraft.json` to use a container
   or a managed PostgreSQL server.
 - **Operator endpoints.** `/health`, `/capabilities`, `/metrics`, `/diagnostics`,

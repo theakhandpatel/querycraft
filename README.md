@@ -18,8 +18,7 @@ make build
 make serve
 ```
 
-Open <http://localhost:8080>. The landing page links to the app at
-<http://localhost:8080/app/>.
+Open <http://localhost:8080> and start a lesson.
 
 The first start prepares a local PostgreSQL database with sample data. It takes
 about 10 seconds. Later starts are immediate. To use your own PostgreSQL, create
@@ -73,8 +72,8 @@ stored courses, and the tutor. In a production build, the app uses the gateway
 when it answers on its own origin.
 
 `make build` produces one binary, `backend/bin/querycraft`, that serves the
-landing page at `/`, the app at `/app/`, the API, and the API documentation on
-one port. It starts its own PostgreSQL when no database is configured.
+landing page, the app, the API, and the API documentation on one port. It starts
+its own PostgreSQL when no database is configured.
 
 Read [Architecture](docs/architecture.md) for the components, the data model,
 and the request path.
