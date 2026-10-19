@@ -14,6 +14,8 @@ web/                            React app
   src/api/sqlite.ts             SQLite in the page, in a Web Worker
   src/api/idb.ts                IndexedDB store for offline progress and events
   src/api/compare.ts            Result comparison, mirrors the Go evaluator
+  src/components/editor/        CodeMirror editor and its lazy runtime
+  src/data/courses/             One module per built-in course
   src/data/content/*.md         Chapter markdown, the content_docs seeder
 web/landing/                    Landing page, served at / and copied into the build
 backend/                        Go module github.com/querycraft/sqlquery/backend
@@ -40,7 +42,8 @@ tests on.
 cd web
 npm install
 npm run dev            # http://localhost:5173 with PostgreSQL in the browser
-npm run build          # production bundle in web/dist
+npm run build          # full build bundle in web/dist
+npm run build:simple   # browser-only bundle with a relative base
 npm run typecheck      # tsc --noEmit, strict
 npm run lint           # oxlint with the vendored anti-slop rules
 npm run doctor         # React Doctor diagnostics for src/
@@ -60,8 +63,14 @@ VITE_API_MODE=http VITE_API_BASE=http://localhost:8080 npm run dev
 
 A production build with no mode set probes `/health` on its own origin and
 switches to the `http` adapter when the gateway answers. That is why the single
-binary works with no configuration. The header shows the active mode:
-`postgres 18 · in-browser` for PGlite and `gateway · live` for the gateway.
+binary works with no configuration. The header shows the active engine:
+`sqlite · in-browser` or `postgres · in-browser` for the page engine, and
+`gateway · live` for the gateway.
+
+`VITE_APP_MODE` selects the product surface. Leave it unset or set `full` for
+the gateway build with accounts, AI, stored courses, runs, and admin. Set
+`simple` for the public browser sample. The static build sets it together with
+`VITE_API_MODE=pglite`.
 
 `npm run lint` runs oxlint with the anti-slop rules vendored at
 `web/tools/oxlint/anti-slop/`. The rules reject TypeScript that compiles but

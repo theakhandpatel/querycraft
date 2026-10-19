@@ -14,7 +14,7 @@ You get a chapter, a real database, and a question. You write the SQL. The datab
 
 No videos. No multiple choice. No "close enough."
 
-![A graded exercise: the query runs, the contract checks pass, and the answer is accepted](docs/assets/walkthrough-grade.gif)
+![A graded exercise: the query runs, the contract checks pass, and the answer is accepted](docs/assets/walkthrough-grade.png)
 
 ## Start with a chapter. Or write your own.
 

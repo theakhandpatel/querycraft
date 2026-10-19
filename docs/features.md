@@ -43,6 +43,9 @@ same way in both builds.
 - **Help when you need it.** Every exercise offers a hint and a solution. In the
   hosted build, Ask tutor sends your query and the error to the configured model
   and talks you through it without revealing the reference query.
+- **A real SQL editor.** Syntax highlighting, line numbers, bracket matching,
+  and schema-aware completion for the chapter's dialect. The editor loads on
+  demand and reads the app's theme tokens, so it follows every preset.
 - **Run and check.** A cell runs with <kbd>Ctrl</kbd>+<kbd>Enter</kbd> or
   <kbd>Cmd</kbd>+<kbd>Enter</kbd>. You can run, check, reveal a hint or the
   solution, keep the query, reset the cell, or bookmark the exercise.

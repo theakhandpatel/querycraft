@@ -213,13 +213,16 @@ async function main() {
     /* Drive the engine and the grader, not just the first paint. The home cell
        is the first SQLite exercise; its authored solution must pass on the
        in-browser engine with no server. */
-    const editor = page.locator('main.workspace textarea').first();
+    const editor = page.locator('.sql-editor-host .cm-content').first();
+    await editor.waitFor();
     await page.getByRole('button', { name: 'Show solution' }).first().click();
     const reference = page.locator('.fb').filter({ hasText: 'Reference solution' });
     await reference.waitFor();
     const solution = (await reference.locator('pre').innerText()).trim();
     assert(solution.length > 0, 'the reference solution was empty');
-    await editor.fill(solution);
+    await editor.click();
+    await page.keyboard.press('Control+A');
+    await page.keyboard.insertText(solution);
     await page.getByRole('button', { name: 'Check answer' }).first().click();
     await page.waitForFunction(() => document.querySelector('.verdict-stamp') || document.querySelector('.fb.failed'));
     if ((await page.locator('.verdict-stamp').count()) === 0) {
@@ -228,21 +231,6 @@ async function main() {
     }
     const verdict = (await page.locator('.verdict-stamp').innerText()).trim();
     assert(/passed/i.test(verdict), `the first SQLite exercise did not pass (verdict: ${verdict})`);
-
-    /* The sample's promise is that progress stays in this browser. Reload the
-       app and read the stored progress back; an in-memory pass would be a
-       different, weaker product. */
-    await page.waitForTimeout(700);
-    await page.reload({ waitUntil: 'domcontentloaded' });
-    await page.waitForSelector('main.workspace .screen.active');
-    await page.waitForFunction(() => !document.querySelector('.authwrap .spin'));
-    await page.waitForFunction(() => /1 passed/i.test(document.body.innerText));
-
-    const pgliteData = requests.filter((url) => /pglite.*\.(data|wasm)(\?|$)/i.test(url) || /pglite\.data/i.test(url));
-    assert(pgliteData.length === 0, `the first load requested the PGlite engine: ${pgliteData.join(', ')}`);
-    assert(failures.length === 0, `static assets failed: ${failures.join('; ')}`);
-    assert(errors.length === 0, `the page logged an error: ${errors.join('; ')}`);
-
     if (screenshot) {
       fs.mkdirSync(SHOTS, { recursive: true });
       /* Let the stamp and the result rows finish their entrance. */
@@ -251,6 +239,65 @@ async function main() {
       await page.locator('.verdict-stamp').scrollIntoViewIfNeeded();
       await page.waitForTimeout(300);
       await page.screenshot({ path: path.join(SHOTS, 'app-1440-simple-pass.png'), fullPage: false });
+    }
+
+    /* The sample's promise is that progress stays in this browser. Reload the
+       app and read the stored progress back; an in-memory pass would be a
+       different, weaker product. */
+    await page.waitForTimeout(700);
+    await page.reload({ waitUntil: 'domcontentloaded' });
+    await page.waitForSelector('main.workspace .screen.active');
+    await page.waitForFunction(() => !document.querySelector('.authwrap .spin'));
+    await page.locator('.sql-editor-host .cm-content').first().waitFor();
+    await page.waitForFunction(() => /1 passed/i.test(document.body.innerText));
+
+    const pgliteData = requests.filter((url) => /pglite.*\.(data|wasm)(\?|$)/i.test(url) || /pglite\.data/i.test(url));
+    assert(pgliteData.length === 0, `the first load requested the PGlite engine: ${pgliteData.join(', ')}`);
+    assert(failures.length === 0, `static assets failed: ${failures.join('; ')}`);
+    assert(errors.length === 0, `the page logged an error: ${errors.join('; ')}`);
+
+    /* The editor must be usable at phone width, not merely present. Type into
+       it and check that CodeMirror has a real content box. The on-screen
+       keyboard itself is outside a headless browser's reach; layout, focus,
+       input and the fallback are not. */
+    const mobileContext = await browser.newContext({ viewport: { width: 390, height: 844 } });
+    const mobile = await mobileContext.newPage();
+    mobile.on('request', (request) => requests.push(request.url()));
+    mobile.on('requestfailed', (request) => failures.push(`${request.url()} ${request.failure()?.errorText ?? ''}`));
+    mobile.on('pageerror', (error) => errors.push(error.message));
+    mobile.on('console', (message) => {
+      if (message.type() === 'error') errors.push(message.text());
+    });
+    try {
+      await mobile.goto(`${base}${PREFIX}app/`, { waitUntil: 'domcontentloaded' });
+      await mobile.waitForSelector('main.workspace .screen.active');
+      await mobile.waitForFunction(() => !document.querySelector('.authwrap .spin'));
+      const mobileEditor = mobile.locator('.sql-editor-host .cm-content').first();
+      await mobileEditor.waitFor();
+      await mobileEditor.scrollIntoViewIfNeeded();
+      await mobileEditor.click();
+      await mobile.keyboard.press('Control+A');
+      await mobile.keyboard.insertText('select 1 as n;');
+      assert(/select 1 as n/i.test(await mobileEditor.innerText()), 'the editor did not accept typed SQL at 390px');
+      const box = await mobileEditor.boundingBox();
+      assert(box !== null && box.width > 200, 'the editor content box is missing at 390px');
+      /* Tab must leave the editor, not insert an indent and trap a keyboard
+         learner inside it. */
+      await mobile.keyboard.press('Tab');
+      const focusClass = await mobile.evaluate(() => {
+        const element = document.activeElement;
+        return element instanceof HTMLElement ? element.className : '';
+      });
+      assert(!focusClass.includes('cm-content'), 'Tab stayed trapped inside the SQL editor');
+      if (screenshot) {
+        await mobile.waitForTimeout(300);
+        await mobile.screenshot({ path: path.join(SHOTS, 'app-390-simple.png'), fullPage: false });
+      }
+    } finally {
+      await mobileContext.close();
+    }
+
+    if (screenshot) {
       await page.goto(`${base}${PREFIX}`, { waitUntil: 'domcontentloaded' });
       await page.waitForSelector('h1');
       await page.screenshot({ path: path.join(SHOTS, 'landing-1440-static.png'), fullPage: true });

@@ -1,7 +1,8 @@
-import React, { useEffect, useRef, useState } from 'react';
+import { useCallback, useEffect, useRef, useState } from 'react';
 import Icon from './ui/Icon';
 import ResultGrid from './ResultGrid';
 import PlanView from './PlanView';
+import SqlEditor from './editor/SqlEditor';
 import { DialectRefusal, useChapterDialect, useDialectSupport } from './ui/DialectBadge';
 import { useStore } from '../state/store';
 import { gradePlan, type PlanBundle, type PlanCheck } from '../api/planContract';
@@ -9,6 +10,8 @@ import { datasetFor } from '../lib/dataset';
 import { dialectLabel } from '../lib/dialect';
 import { servedDialects } from '../lib/dialectChoice';
 import { SIMPLE_MODE } from '../lib/mode';
+import { cachedSqlSchema, loadSqlSchema } from '../lib/sqlSchema';
+import type { SqlSchema } from '../lib/sqlSchema';
 import type { Block, CheckResult, Course, CourseModule, QueryResult, TutorRunState } from '../types';
 
 type Feedback =
@@ -81,6 +84,8 @@ export default function SqlCell({ block, module: mod, course, onPassed }: { bloc
   const starter = isExercise ? block.starter || 'SELECT ...' : (block.sql as string);
 
   const [code, setCode] = useState(starter);
+  const [schema, setSchema] = useState<SqlSchema | null>(() => cachedSqlSchema(dataset, dialect));
+  const schemaRequested = useRef(false);
   const [running, setRunning] = useState(false);
   const [qr, setQr] = useState<QueryResult | null>(null);
   const [fb, setFb] = useState<Feedback | null>(null);
@@ -89,7 +94,6 @@ export default function SqlCell({ block, module: mod, course, onPassed }: { bloc
   const [planChecks, setPlanChecks] = useState<PlanCheck[] | null>(null);
   const [planBusy, setPlanBusy] = useState(false);
   const [tutorBusy, setTutorBusy] = useState(false);
-  const taRef = useRef<HTMLTextAreaElement>(null);
   const feedbackRef = useRef<HTMLDivElement>(null);
 
   useEffect(() => {
@@ -114,13 +118,28 @@ export default function SqlCell({ block, module: mod, course, onPassed }: { bloc
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [id, starter]);
 
-  function autogrow() {
-    const ta = taRef.current;
-    if (!ta) return;
-    ta.style.height = 'auto';
-    ta.style.height = Math.max(96, ta.scrollHeight) + 'px';
-  }
-  useEffect(autogrow, [code]);
+  /* Completion reads the same workspace the Tables drawer describes, but only
+     after the learner touches the editor. A lesson must not boot an engine to
+     offer a completion list, and a SQLite chapter must never boot PGlite. */
+  const requestSchema = useCallback(() => {
+    if (schemaRequested.current) return;
+    const ready = cachedSqlSchema(dataset, dialect);
+    if (ready) {
+      setSchema(ready);
+      return;
+    }
+    schemaRequested.current = true;
+    loadSqlSchema(s.api, dataset, dialect)
+      .then((next) => setSchema(next))
+      .catch(() => {
+        schemaRequested.current = false;
+      });
+  }, [s.api, dataset, dialect]);
+
+  useEffect(() => {
+    schemaRequested.current = false;
+    setSchema(cachedSqlSchema(dataset, dialect));
+  }, [dataset, dialect, id]);
 
   /* The verdict is the moment. When it lands, bring it into view without
      hiding the result above it; the reduced-motion setting makes the move
@@ -130,9 +149,9 @@ export default function SqlCell({ block, module: mod, course, onPassed }: { bloc
     feedbackRef.current?.scrollIntoView({ block: 'nearest', behavior: s.motion ? 'auto' : 'smooth' });
   }, [fb, s.motion]);
 
-  function onChange(e: React.ChangeEvent<HTMLTextAreaElement>) {
-    setCode(e.target.value);
-    s.api.saveDraft(id, e.target.value);
+  function onCode(next: string) {
+    setCode(next);
+    s.api.saveDraft(id, next);
   }
 
   async function run() {
@@ -291,9 +310,6 @@ export default function SqlCell({ block, module: mod, course, onPassed }: { bloc
     s.openTutor({ block, module: mod, course, sql: code, run });
   }
 
-  const lineCount = Math.max(String(starter).split('\n').length, 6);
-  const gutter = Array.from({ length: lineCount }, (_, i) => i + 1).join('\n');
-
   /* One status line for assistive technology, and the only live region in the
      cell — so a run and a verdict are each announced exactly once instead of
      racing the result grid and the feedback panel to be read. The words are the
@@ -334,20 +350,15 @@ export default function SqlCell({ block, module: mod, course, onPassed }: { bloc
         {isExercise && block.prompt ? <p className="cellprompt">{block.prompt}</p> : null}
         <div className="visually-hidden" role="status" aria-live="polite">{liveStatus()}</div>
         <div className="editorwrap">
-          <div className="gutter" aria-hidden="true">{gutter}</div>
-          <textarea
-            ref={taRef}
-            className="editor"
-            spellCheck="false"
-            aria-label={isExercise ? `SQL editor for exercise ${id.replace('ex.', '')}` : 'SQL editor for this example'}
+          <SqlEditor
             value={code}
-            onChange={onChange}
-            onKeyDown={(e) => {
-              if ((e.ctrlKey || e.metaKey) && e.key === 'Enter') {
-                e.preventDefault();
-                run();
-              }
-            }}
+            dialect={dialect}
+            schema={schema}
+            ariaLabel={isExercise ? `SQL editor for exercise ${id.replace('ex.', '')}` : 'SQL editor for this example'}
+            describedBy={dialectRefused ? refusalId : undefined}
+            onChange={onCode}
+            onRun={run}
+            onFirstInteraction={requestSchema}
           />
         </div>
         <div className="runrow">

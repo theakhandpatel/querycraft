@@ -11,6 +11,7 @@ guides cover installation, the architecture, content authoring, and operations.
 | Build, test, and extend | [development.md](development.md) |
 | Run on a server, configure, and back up | [self-hosting.md](self-hosting.md) |
 | Feature reference | [features.md](features.md) |
+| Build and publish the browser sample | [static-deploy.md](static-deploy.md) |
 
 ## Understand the system
 

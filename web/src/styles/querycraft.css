@@ -377,14 +377,16 @@ button.small .ico{width:14px;height:14px}
    because `.cell` clips with `overflow: hidden`. Without this the one control a
    learner cannot avoid using is the one control with no visible focus. */
 .editorwrap:focus-within{box-shadow:inset 0 0 0 2px var(--accent)}
-/* The gutter is a line-number column, so its line box must be the editor's
-   line box exactly. The editor's computed `line-height` is `22.75px` (13px ×
-   1.75), which cannot be written as a unitless ratio for a 12px gutter: 1.75
-   gives 21px and the numbers drift ~1.75px per line, so by line 8 they are
-   pointing at the wrong statement. A hard 22.75px keeps them locked together. */
-.editorwrap .gutter{position:absolute;left:0;top:0;bottom:0;width:38px;border-right:1px solid var(--code-line);background:var(--surface-2);font-family:var(--mono);font-size:12px;line-height:22.75px;color:var(--text-3);padding:14px 8px 14px 0;text-align:right;user-select:none;overflow:hidden}
+/* The CodeMirror host keeps the cell's height from the first frame; the plain
+   textarea covers it until the editor chunk resolves. The editor's own gutter
+   replaces the hand-built one, and its line box is its own. */
+.sql-editor-host{position:relative;min-height:120px;background:var(--code-bg)}
+.sql-editor-host .cm-editor{min-height:120px;max-height:420px}
+.sql-editor-host .cm-scroller{overflow:auto}
+.sql-editor-host .cm-content{min-height:92px}
 .editor{width:100%;min-height:120px;border:0;border-radius:0;outline:none;resize:vertical;box-shadow:none;background:transparent;color:var(--code-text);font-family:var(--mono);font-size:13px;line-height:1.75;padding:14px 14px 14px 52px;tab-size:4;display:block}
 .editor:focus{box-shadow:none}
+.editor.sql-editor-fallback{position:absolute;inset:0;z-index:1;width:100%;min-height:120px;max-height:420px;padding:14px;resize:none;background:var(--code-bg);tab-size:4}
 .runrow{display:flex;align-items:center;gap:8px;flex-wrap:wrap;padding:10px 14px;border-top:1px solid var(--line);background:transparent}
 .runrow .kb{margin-left:auto;font-family:var(--mono);font-size:11px;color:var(--text-3)}
 .kbd{font-family:var(--mono);font-size:10px;border:1px solid var(--line-strong);border-bottom-width:2px;border-radius:4px;padding:1px 5px;background:var(--surface);color:var(--text-2)}
