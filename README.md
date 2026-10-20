@@ -71,6 +71,10 @@ The first start prepares the database and the sample data. Later starts are inst
 
 Read [Development](docs/development.md) for the repository layout, the test suite, and the conventions. Before you open a pull request, run `make test` and `make verify`.
 
+## License
+
+Querycraft is available under the [MIT License](LICENSE).
+
 ---
 
 **The database does not care how you wrote the query. It cares what comes back.**

@@ -37,6 +37,7 @@ guides cover installation, the architecture, content authoring, and operations.
 | Topic | Document |
 | --- | --- |
 | Why the system is built this way | [adr/](adr/) |
+| License | [../LICENSE](../LICENSE) |
 
 ## API
 
