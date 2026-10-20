@@ -4,6 +4,9 @@
 
 **Learn SQL by writing it.**
 
+**[Open the browser sample](https://theakhandpatel.github.io/querycraft/)** ·
+[Documentation](docs/README.md)
+
 You cannot learn SQL by watching someone else write it.
 
 You can read the chapter, follow the diagram, and still freeze at the blank line where the query goes. The skill lives in the writing. The only way to build it is to write the query, run it, and see what comes back.
