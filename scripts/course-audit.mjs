@@ -139,6 +139,17 @@ try {
       row.self = graded.json && graded.json.passed;
     }
 
+    /* A learner often presses Run before reading the whole page. The starter
+       must be a syntactically valid query that returns a visibly wrong result;
+       a parse error is the wrong first reply. */
+    const starter = String(block.starter || '');
+    if (starter.trim()) {
+      const started = await postJSON(`${BASE}/query`, { sql: starter, dialect, dataset }, REQUEST_TIMEOUT_MS, auth);
+      if (started.json?.status === 'failed' && started.json?.error?.code === 'QUERY_SYNTAX_ERROR') {
+        row.starterError = started.json.error.message;
+      }
+    }
+
     row.broken = !row.ok || row.colsOk === false || row.self === false;
     rows.push(row);
   }
@@ -152,6 +163,21 @@ try {
     if (x.colsOk === false) console.log(`           want ${JSON.stringify(x.want)} got ${JSON.stringify(x.cols)}`);
   }
   r.check(`all ${rows.length} exercise solutions ran, matched their contract columns and passed their own grading`, bad.length === 0, bad.map((x) => x.id));
+
+  /* The first course is the one a new learner meets. Its starters are gated
+     because a parse error there is a failed first Run. Other courses are
+     reported but not gated until their authors replace the old fill-in
+     placeholders; see docs/content-authoring.md. */
+  const firstRun = 'sqlite-essentials';
+  const starterBad = rows.filter((x) => x.starterError);
+  const firstRunBad = starterBad.filter((x) => x.course === firstRun);
+  const firstRunRows = rows.filter((x) => x.course === firstRun);
+  r.section('the first-run course starters run without a syntax error');
+  for (const x of firstRunBad) console.log(`         ${x.course}/${x.id}: ${x.starterError}`);
+  r.check(`all ${firstRunRows.length} ${firstRun} starters are syntactically valid`, firstRunBad.length === 0, firstRunBad.map((x) => x.id));
+  if (starterBad.length > firstRunBad.length) {
+    console.log(`  note   ${starterBad.length - firstRunBad.length} starter(s) in other courses still use fill-in placeholders; not gating`);
+  }
 
   r.section('the audit is not vacuous');
   r.check('the catalog produced exercises to run', rows.length > 0, rows.length);

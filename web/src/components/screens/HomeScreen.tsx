@@ -47,7 +47,6 @@ export default function HomeScreen() {
   const allDone = heldIdx === null && ms.length > 0 && doneN >= ms.length;
   const nextM = heldIdx !== null ? ms[heldIdx] : allDone ? undefined : ms[liveIdx];
   const exercise = nextM ? moduleExerciseBlocks(nextM)[0] : undefined;
-  const exerciseLabel = exercise?.id ? String(exercise.id).replace('ex.', '') : null;
 
   const enrolled = enrolledCourses() as ViewCourse[];
   const notes = (progress.notes || []).slice().sort((a, b) => (b.ts || 0) - (a.ts || 0));
@@ -74,7 +73,7 @@ export default function HomeScreen() {
                 <p className="worklede">{nextM.summary}</p>
                 <div className="workmeta">
                   <span>Chapter {nextM.n} of {ms.length}</span>
-                  <span>{exercise ? `Exercise ${exerciseLabel}` : `${nextM.minutes} min read`}</span>
+                  <span>{exercise ? 'One exercise' : `${nextM.minutes} min read`}</span>
                   <DialectBadge dialect={effectiveDialect(nextM, course)} />
                   <button className="linklike worklink" onClick={openNext}>
                     Read the chapter<Icon name="arrow-right" />

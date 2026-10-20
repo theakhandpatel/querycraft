@@ -514,7 +514,7 @@ function CheckList({ checks }: { checks: CheckResult[] }) {
 function executionHelp(code: string): string {
   switch (code) {
     case 'QUERY_SYNTAX_ERROR':
-      return 'The database rejected the syntax. Fix the statement and run again.';
+      return 'The database could not parse the statement. If you have not filled in the starter yet, look for a clause followed by a comment, such as SELECT -- or WHERE --, and add the missing expression.';
     case 'QUERY_RUNTIME_ERROR':
       return 'The statement failed at runtime. Check the names and the data, then run again.';
     case 'QUERY_TIMEOUT':

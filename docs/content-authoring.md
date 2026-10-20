@@ -85,6 +85,25 @@ Answer prose.
   `<summary>`, and `<span class="kbd-inline">...</span>`.
 - Prose written in the curriculum uses the same inline HTML conventions.
 
+## Starters
+
+A learner often presses Run before reading the whole page. Make the starter run.
+It should return a result that is visibly wrong for the exercise, so the learner
+can see what to change. A syntax error is the wrong first reply.
+
+Leave the missing expression as a comment after a complete clause:
+
+```sql
+SELECT name
+FROM sqlite_master
+-- Add the filter and the sort.
+;
+```
+
+Do not write `SELECT --`, `WHERE --`, or `ORDER BY --`. Those comments leave an
+empty clause and SQLite rejects the statement before the learner can learn from
+the result. Run every starter against its dialect before committing.
+
 ## Add a module
 
 1. Add the module to the course's file under `web/src/data/courses/`: id, title,

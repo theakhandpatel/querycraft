@@ -211,25 +211,31 @@ async function main() {
     assert(!/Create your own|Create a course/i.test(app.body), 'the simple build still offers course generation');
 
     /* Drive the engine and the grader, not just the first paint. The home cell
-       is the first SQLite exercise; its authored solution must pass on the
-       in-browser engine with no server. */
-    const editor = page.locator('.sql-editor-host .cm-content').first();
+       is the first SQLite exercise. The starter must run and fail the contract;
+       a learner who presses Run first must not get a syntax error. Then the
+       authored solution must pass. */
+    const cell = page.locator('.cell.exercise').first();
+    const editor = cell.locator('.sql-editor-host .cm-content').first();
     await editor.waitFor();
-    await page.getByRole('button', { name: 'Show solution' }).first().click();
-    const reference = page.locator('.fb').filter({ hasText: 'Reference solution' });
+    await cell.getByRole('button', { name: 'Run', exact: true }).click();
+    await cell.locator('.resultfoot').waitFor();
+    assert((await cell.locator('.fb.error').count()) === 0, 'the first-run starter returned a syntax error');
+    await cell.getByRole('button', { name: 'Check answer' }).click();
+    await cell.locator('.fb.failed').waitFor();
+    const starterFailure = await cell.locator('.fb.failed').innerText();
+    assert(!/Execution error/.test(starterFailure), 'the first-run starter failed to execute');
+    assert(/row count/i.test(starterFailure), `the starter did not fail on the contract: ${starterFailure}`);
+    await cell.getByRole('button', { name: 'Show solution' }).first().click();
+    const reference = cell.locator('.fb').filter({ hasText: 'Reference solution' });
     await reference.waitFor();
     const solution = (await reference.locator('pre').innerText()).trim();
     assert(solution.length > 0, 'the reference solution was empty');
     await editor.click();
     await page.keyboard.press('Control+A');
     await page.keyboard.insertText(solution);
-    await page.getByRole('button', { name: 'Check answer' }).first().click();
-    await page.waitForFunction(() => document.querySelector('.verdict-stamp') || document.querySelector('.fb.failed'));
-    if ((await page.locator('.verdict-stamp').count()) === 0) {
-      const failure = await page.locator('.fb.failed').innerText();
-      throw new Error(`the first SQLite exercise did not pass:\n${failure}`);
-    }
-    const verdict = (await page.locator('.verdict-stamp').innerText()).trim();
+    await cell.getByRole('button', { name: 'Check answer' }).click();
+    await cell.locator('.verdict-stamp').waitFor();
+    const verdict = (await cell.locator('.verdict-stamp').innerText()).trim();
     assert(/passed/i.test(verdict), `the first SQLite exercise did not pass (verdict: ${verdict})`);
     if (screenshot) {
       fs.mkdirSync(SHOTS, { recursive: true });
