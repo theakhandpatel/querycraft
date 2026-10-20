@@ -448,6 +448,9 @@ tbody tr:hover td{background:var(--surface-2);color:var(--text)}
 .type{color:var(--text-3)}
 .tag{font-family:var(--mono);font-size:10px;padding:1px 5px;border-radius:4px;background:var(--accent-soft);color:var(--accent-ink);border:0}
 .tabledef table{font-size:12px}
+.schema .tablewrap{scrollbar-width:thin;scrollbar-color:var(--rule-strong) transparent}
+.schema .tablewrap::-webkit-scrollbar{height:8px}
+.schema .tablewrap::-webkit-scrollbar-thumb{background:var(--rule-strong);border-radius:4px}
 .tabledef td,.tabledef th{padding:6px 10px}
 
 /* Hints */
