@@ -30,7 +30,7 @@ web/dist-static/
   build-info.json     mode, version, commit, build time
 ```
 
-The output is ignored by git. Rebuild it; do not edit it.
+The output is ignored by git. Rebuild it. Do not edit it.
 
 Check it where it will live:
 

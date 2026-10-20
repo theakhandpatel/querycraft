@@ -1,24 +1,22 @@
 # Features
 
-Querycraft teaches SQL by having you write it. Lessons combine short readings
-with exercises you run against a real database, and each answer is graded by the
-rows it returns.
+Querycraft is a SQL workbook. Each chapter gives you a short reading and a
+question, then runs the query you write against a real database. You get rows
+back, and a check that says whether those rows answer the question.
 
-The library starts with SQLite, then moves to PostgreSQL. It covers the clauses,
-joins, subqueries, CTEs, window functions, query plans, and the differences
-between the two engines. Every chapter runs; every answer is graded live.
+The library begins with SQLite because it needs no server. PostgreSQL comes
+next, with the analytics, window functions, and query plans. Every chapter runs.
+Every answer is graded.
 
 ## Two ways to run
 
-The browser sample runs entirely in the page. It carries the built-in library,
-runs SQLite and PostgreSQL in the browser, and keeps progress, notes, and themes
-on this device. It needs no account and no server. It is the build published on
-GitHub Pages.
+The browser sample is a folder of static files. It includes all eight courses
+and runs SQLite or PostgreSQL in the page. Progress, notes, and themes stay in
+your browser. No account.
 
-The hosted build runs the Go gateway. It adds accounts, private server
-workspaces, AI course generation, the tutor, stored courses, generation runs,
-and administration. The library, grading, workbook, themes, and export work the
-same way in both builds.
+The hosted build puts the Go gateway behind the same app. It adds accounts,
+private server workspaces, AI course generation, the tutor, stored courses,
+generation runs, and administration.
 
 ## Courses and lessons
 

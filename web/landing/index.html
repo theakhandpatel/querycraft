@@ -3,8 +3,8 @@
 <head>
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
-<title>Querycraft — Learn SQL by writing it</title>
-<meta name="description" content="Querycraft teaches SQL by running what you write against a real database and grading the rows that come back. Start with SQLite in the browser, then move to PostgreSQL. A query is a claim; the database returns the evidence.">
+<title>Querycraft: learn SQL by writing it</title>
+<meta name="description" content="Querycraft runs the SQL you write against a real database and grades the rows that come back. Start with SQLite in the browser, then move to PostgreSQL. A query is a claim. The database tells you if it is true.">
 <link rel="icon" href="/landing/assets/icon.svg" type="image/svg+xml">
 <link rel="preconnect" href="https://fonts.googleapis.com">
 <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
@@ -454,8 +454,9 @@
           <h1>Learn SQL by <em>writing it.</em></h1>
         </div>
         <div class="hero-note">
-          <strong>A query is a claim.</strong> The database returns the evidence.
-          Querycraft grades what the rows say, not how you wrote the statement.
+          <strong>A query is a claim.</strong> The database tells you if it is true.
+          Querycraft grades the rows you get back, not whether your SQL looks like
+          the answer key.
         </div>
       </div>
 
@@ -513,7 +514,7 @@
     <div class="content">
       <p class="kicker">The claim and the evidence</p>
       <h2>The result is the answer.</h2>
-      <p class="body">An exercise declares its columns, the order of the rows, and the values that count as correct. A join, a subquery, or a window function all pass if the evidence matches. A query that returns the wrong rows fails, however tidy it looks.</p>
+      <p class="body">Every exercise says what the answer should look like: these columns, this many rows, this order, these values. If your query returns that, it passes. If it returns the right shape with the wrong numbers, it does not. A query can be tidy and still be wrong. The rows decide.</p>
       <table class="ledger">
         <thead><tr><th>Check</th><th>What it means</th><th class="num"></th></tr></thead>
         <tbody>
@@ -535,15 +536,15 @@
     <div class="content">
       <p class="kicker">Read, then do</p>
       <h2>Read a little. Then write.</h2>
-      <p class="body">A chapter pairs a short reading with a worked example and one or two exercises. The library covers SELECT and FROM, joins, subqueries, CTEs, window functions, and query plans. The editor sits beside the question, the rows sit under the query, and the feedback names the check that failed.</p>
+      <p class="body">A chapter gives you a page to read, a query to try, and an exercise or two to do yourself. The example uses the same tables as the exercise, so you are not translating between two fake datasets. The editor sits beside the question. It highlights SQL and suggests table and column names as you type. Run the query, and the rows land underneath. If a check fails, it names the one that failed.</p>
       <div class="plate" style="margin-top:32px">
         <img src="/landing/assets/lesson.png" alt="A Querycraft lesson with the reading column, a SQL cell, and a result grid" width="1280" height="720">
       </div>
       <p class="caption">A chapter from SQL Analytics in the Real World.</p>
       <div class="notes">
-        <div class="note"><span class="n">01</span><h3>The reading</h3><p>Short prose, diagrams, and syntax you can copy. The chapter content is seeded from the course.</p></div>
-        <div class="note"><span class="n">02</span><h3>The cell</h3><p>Run, check, hint, solution, keep, reset. The editor stays next to the question.</p></div>
-        <div class="note"><span class="n">03</span><h3>The evidence</h3><p>Rows and checks return together. When a check fails, the feedback says which one and why.</p></div>
+        <div class="note"><span class="n">01</span><h3>The reading</h3><p>One idea at a time, with a query you can run. Short prose, a diagram where it helps, and syntax you can copy.</p></div>
+        <div class="note"><span class="n">02</span><h3>The cell</h3><p>Run, check, hint, solution, keep, reset. The editor knows the table names and stays next to the question.</p></div>
+        <div class="note"><span class="n">03</span><h3>The evidence</h3><p>You see the rows and the checks in the same place. When a check fails, the feedback says which one and why.</p></div>
       </div>
     </div>
   </section>
@@ -559,7 +560,7 @@
         <h2>Sign in. Get your own copy.</h2>
         <div class="plates-split">
           <div>
-            <p class="body">A signed-in learner gets a private copy of the sample database. Writes, schema changes, and transactions work. Reset restores the original data in one click. Signed out, queries run read-only against the shared dataset.</p>
+            <p class="body">Sign in and you get your own copy of the sample database. Insert rows, change a table, open a transaction. Reset puts the original data back. If you are signed out, your queries can read the shared sample but cannot change it.</p>
             <table class="ledger" style="margin-top:26px">
               <tbody>
                 <tr><td class="name">Signed out</td><td class="rule-text">Read-only on the shared dataset.</td></tr>
@@ -579,7 +580,7 @@
         <h2>Your own copy, in this browser.</h2>
         <div class="plates-split">
           <div>
-            <p class="body">The browser sample gives every learner a private copy of the sample database in the page. Writes, schema changes, and transactions work. Reset restores the original data in one click. Nothing leaves this browser.</p>
+            <p class="body">The sample runs a full copy of the database in this tab. Insert rows, change a table, open a transaction. Reset puts the original data back. Nothing is sent to a server.</p>
             <table class="ledger" style="margin-top:26px">
               <tbody>
                 <tr><td class="name">Every learner</td><td class="rule-text">A writable copy in this browser.</td></tr>
@@ -605,7 +606,7 @@
     <div class="content">
       <p class="kicker">The record</p>
       <h2>What you keep.</h2>
-      <p class="body">Bookmarks, saved queries, notes, and the history of every exercise stay in the workbook. Search covers the lessons and your own material. Export a copy as JSON, or import it elsewhere without overwriting what you have.</p>
+      <p class="body">The workbook keeps your bookmarks, saved queries, notes, and every attempt. Search looks through all of it. Export the whole record as JSON, or import it on another machine without overwriting the work already there.</p>
       <div class="plate" style="margin-top:32px">
         <img src="/landing/assets/workbook.png" alt="The workbook: progress, course content, notes, and saved queries" width="1280" height="720">
       </div>
@@ -621,7 +622,7 @@
     <div class="content">
       <p class="kicker">The look</p>
       <h2>Choose a theme, or make one.</h2>
-      <p class="body">Start from eighteen presets, from light and dark to terminal and familiar palettes. Or build a theme from a single accent color: the inks tune themselves, and the theme follows <span data-gateway-only>your account</span><span data-static-only>you on this device</span>.</p>
+      <p class="body">There are 19 themes, including a dark one, a terminal one, and a few palettes borrowed from editors you already know. Or pick an accent and a base and let the app derive the rest. <span data-gateway-only>Your choice follows your account.</span><span data-static-only>Your choice stays on this device.</span></p>
       <div class="plate look-plate" style="margin-top:30px"><img src="/landing/assets/appearance.png" alt="The appearance screen with a theme grid and a custom accent picker" width="720" height="700"></div>
       <p class="caption">The appearance screen: presets, contrast, and a custom accent.</p>
     </div>
@@ -635,7 +636,7 @@
     <div class="content">
       <p class="kicker">The library</p>
       <h2>Start from a chapter.</h2>
-      <p class="body">Start with SQLite Essentials, then the PostgreSQL foundations. The library goes on to joins, subqueries, CTEs, plans, and the courses that show where the two engines diverge.<span data-gateway-only> Or describe the course you need and build it.</span></p>
+      <p class="body">There are eight courses and 52 chapters. Start with SQLite Essentials if you want the shortest path to a query that runs. Move to SQL Foundations when you want PostgreSQL. After that, take joins, subqueries, CTEs, query plans, or the two deeper SQLite courses.<span data-gateway-only> If none of them fit, describe the course you need and build it.</span></p>
       <table class="index">
         <thead><tr><th></th><th>Course</th><th></th><th>Dialect</th><th class="num">Ch.</th></tr></thead>
         <tbody>
@@ -654,18 +655,18 @@
         <div>
           <p class="kicker">Your course</p>
           <h3>Describe the course you want.</h3>
-          <p class="body">Describe what you want to get good at. Querycraft drafts an outline and chapters, runs every exercise against the engine before it is stored, and lets you edit the result. Your course gets the same live grading as the built-in ones.</p>
+          <p class="body">Describe the skill you want to build. Querycraft drafts an outline and writes the chapters, but it runs every exercise against the database before you see it. If a reference query fails, the chapter goes back for repair or does not ship. You can edit anything afterward.</p>
         </div>
         <div>
           <div class="plate"><img src="/landing/assets/create-course.png" alt="Create a course from a goal" width="760" height="660"></div>
           <p class="caption">Create a course from a goal; every exercise is verified first.</p>
         </div>
       </div>
-      <p class="body" data-static-only style="margin-top:32px;padding-top:20px;border-top:1px solid var(--rule)">Every built-in course ships with the app. Enroll to add one to your workbook; progress stays in this browser.</p>
+      <p class="body" data-static-only style="margin-top:32px;padding-top:20px;border-top:1px solid var(--rule)">Every built-in course ships with the app. Enroll to add one to your workbook. Progress stays in this browser.</p>
 
       <div class="engines">
         <p class="kicker">Two engines, one grammar</p>
-        <p class="body" style="font-size:16.5px;margin-bottom:18px">SQLite is the first path: it runs in the browser with no server. PostgreSQL is the deeper path, where analytics, query plans, and the job-oriented material live.</p>
+        <p class="body" style="font-size:16.5px;margin-bottom:18px">SQLite comes first because the database is a file and needs no server. PostgreSQL comes next, when you want window functions, query plans, and the kind of SQL that shows up in analytics work.</p>
         <div class="codes">
           <div class="code-plate">
             <div class="code-label"><span class="dot"></span>SQLite</div>
@@ -698,8 +699,8 @@
       <h2>No server. No setup.</h2>
       <div class="machine">
         <div>
-          <p class="body">The browser build starts with SQLite, so lessons and results work offline. PostgreSQL is the next step in the browser.<span data-gateway-only> The hosted build runs the Go gateway for accounts and stored courses on PostgreSQL or SQLite.</span></p>
-          <p class="body" style="font-size:15px;color:var(--ink-3)" data-gateway-only>One binary when you host it: the landing, the app, the API, and its documentation on one port.</p>
+          <p class="body">The browser build starts with SQLite and keeps the whole library on the page, so lessons and results need no server. PostgreSQL runs in the browser too, when a chapter needs it.<span data-gateway-only> The hosted build puts the Go gateway behind the app for accounts and stored courses.</span></p>
+          <p class="body" style="font-size:15px;color:var(--ink-3)" data-gateway-only>The hosted build is one binary: landing, app, API, and docs on one port.</p>
           <p class="body" style="font-size:15px;color:var(--ink-3)" data-static-only>The sample is a folder of static files. The library ships with the page, and your progress stays in this browser.</p>
         </div>
         <div>
@@ -724,7 +725,7 @@
         <h2>Write your first query.</h2>
       </div>
       <div>
-        <p>Start with SQLite, pick a course, or write your own. The database will tell you the truth.</p>
+        <p>Start with SQLite. Pick a course. Or write one of your own. Then run the query and see what the database says.</p>
         <a class="btn" href="/app/">Start a lesson<span class="arrow">→</span></a>
         <p class="fine"><span data-gateway-only>Free · Sign in to keep your progress</span><span data-static-only>Free · No account needed</span></p>
         <p class="colophon">Querycraft · A working notebook for SQL</p>

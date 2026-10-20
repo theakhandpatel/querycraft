@@ -9,38 +9,40 @@
 
 You cannot learn SQL by watching someone else write it.
 
-You can read the chapter, follow the diagram, and still freeze at the blank line where the query goes. The skill lives in the writing. The only way to build it is to write the query, run it, and see what comes back.
+You can read the chapter, follow the diagram, and still freeze at the blank line where the query goes. You know the feeling. SQL looks like a set of rules until you have to write something yourself.
 
-Querycraft is built around that moment.
+The skill is in the writing. The only way to build it is to write the query, run it, and see what comes back.
 
-You get a chapter, a real database, and a question. You write the SQL. The database runs it. Querycraft grades the result: the columns, the rows, the order, the values. If the rows are right, you pass. It never compares your SQL to a model answer, because there is more than one right answer.
+That moment is the product.
+
+You get a chapter, a real database, and a question. You write `SELECT name, price FROM products WHERE category = 'Electronics' ORDER BY price;`. Five rows come back. Querycraft checks the columns, the rows, the order, and the values. If they match, you pass. It never compares your SQL to a model answer, because more than one query can be right.
 
 No videos. No multiple choice. No "close enough."
 
 ![A graded exercise: the query runs, the contract checks pass, and the answer is accepted](docs/assets/walkthrough-grade.png)
 
-## Start with a chapter. Or write your own.
+## Start with a chapter
 
-The library starts with SQLite Essentials, then the PostgreSQL foundations. From there it covers `SELECT` and `FROM`, joins, subqueries, CTEs, and window functions. PostgreSQL is the deeper path, where analytics, query plans, and the job-oriented material live. The translation course covers the places where the two engines disagree, because the differences are where the learning lives.
+The library starts with SQLite Essentials because SQLite is one file and needs no server. The first query runs in the browser. SQL Foundations moves to PostgreSQL. Later courses cover joins, subqueries, CTEs, window functions, query plans, and the two SQLite courses that go deeper.
 
-When the course you need does not exist, describe it. Querycraft builds the outline, writes the chapters, and runs every exercise against the engine before you see it. Edit anything. The course you build is graded live, like every other chapter.
+If the course you need does not exist, describe it. Querycraft drafts an outline, writes the chapters, and runs every exercise against the database before you see it. You can edit the result. It grades the same way as the built-in chapters.
 
-## Your database. Your workbook. Your look.
+## A database you can break
 
-Sign in and you get a private copy of the data. Write to it. Change the schema. Break it. Reset puts it back.
+In the browser sample, the database runs in your tab. Sign in to the hosted build and it belongs to your account. Either way you can insert rows, change a table, open a transaction, and reset when you make a mess.
 
-Your notes, saved queries, bookmarks, and progress stay in the workbook, and search finds all of it. Pick one of the themes, or make one from a single color.
+The workbook keeps your notes, saved queries, bookmarks, and every attempt. Search finds them. Choose one of 19 themes, or build one from an accent.
 
 | | |
 | --- | --- |
 | <img src="docs/assets/screens/04-lesson.png" width="400" alt="A lesson with a SQL cell"> | <img src="docs/assets/screens/12-create-course.png" width="400" alt="Create a course"> |
-| A chapter is a page you can run. | Describe a course; every exercise is verified before you see it. |
+| A chapter is a page you can run. | Describe a course. Every exercise is verified before you see it. |
 
 ## Try the browser sample
 
 [Open the browser sample](https://theakhandpatel.github.io/querycraft/). It
-carries the built-in library and runs SQLite and PostgreSQL in the page. There
-is no account, and progress stays in your browser.
+carries all eight courses and runs SQLite or PostgreSQL in the page. No account
+is needed, and progress stays in your browser.
 
 The hosted build adds accounts, AI course generation, the tutor, and stored
 courses.
