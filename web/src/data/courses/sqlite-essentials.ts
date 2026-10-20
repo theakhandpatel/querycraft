@@ -59,8 +59,8 @@ export const SQLITE_ESSENTIALS_MODULES: CourseModule[] = [
     {type:'exercise', id:'ex.s4.1',
       prompt:'Return the number of customers who signed up in each month of 2026 as month (YYYY-MM) and signups, months ascending.',
       starter:"SELECT strftime('%Y-%m', signup_date) AS month,\n       COUNT(*) AS signups\nFROM customers\nWHERE signup_date >= '2025-01-01'\nGROUP BY month\nORDER BY month;",
-      solution:"SELECT strftime('%Y-%m', signup_date) AS month,\n       COUNT(*) AS signups\nFROM customers\nWHERE signup_date >= '2026-01-01'\nGROUP BY month\nORDER BY month;",
-      hints:['A date stored as text compares as text: <span class="kbd-inline">signup_date &gt;= \'2026-01-01\'</span> works because the format is fixed.','<span class="kbd-inline">strftime(\'%Y-%m\', ...)</span> gives the year and month; group by the alias.'],
+      solution:"SELECT strftime('%Y-%m', signup_date) AS month,\n       COUNT(*) AS signups\nFROM customers\nWHERE signup_date >= '2026-01-01'\n  AND signup_date < '2027-01-01'\nGROUP BY month\nORDER BY month;",
+      hints:['A date stored as text compares as text: <span class="kbd-inline">signup_date &gt;= \'2026-01-01\' AND signup_date &lt; \'2027-01-01\'</span> works because the format is fixed.','<span class="kbd-inline">strftime(\'%Y-%m\', ...)</span> gives the year and month; group by the alias.'],
       contract:{columns:['month','signups'], column_order:'exact', row_order:'exact'},
       result:{columns:['month','signups'], rows:[['2026-01',2],['2026-02',3],['2026-03',3],['2026-04',2],['2026-05',3],['2026-06',3],['2026-07',3]]}}
   ]},

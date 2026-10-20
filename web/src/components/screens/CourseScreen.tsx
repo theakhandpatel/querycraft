@@ -25,6 +25,7 @@ export default function CourseScreen() {
   const pct = lessonPercent(course, progress);
   const ms = activeModules(course);
   const nextIdx = nextChapterIndex(course, progress);
+  const complete = ms.length > 0 && ms.every((m) => !!progress.done[m.id]);
   const enrolled = enrolledCourses();
 
   return (
@@ -41,7 +42,11 @@ export default function CourseScreen() {
           </div>
         </div>
         <div className="actions">
-          <button className="primary" onClick={s.resumeCourse}><Icon name="play" />Continue chapter {nextIdx + 1}</button>
+          {complete ? (
+            <button className="primary" onClick={s.resumeCourse}><Icon name="eye" />Review chapter 1</button>
+          ) : (
+            <button className="primary" onClick={s.resumeCourse}><Icon name="play" />Continue chapter {nextIdx + 1}</button>
+          )}
         </div>
       </div>
 
