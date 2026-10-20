@@ -178,7 +178,10 @@ export default function SqlCell({ block, module: mod, course, onPassed }: { bloc
   async function check() {
     if (dialectRefused) return;
     if (/^\s*EXPLAIN\b/i.test(code)) {
-      s.toast('EXPLAIN returns a plan, not a graded answer. Remove EXPLAIN before Check answer.');
+      /* EXPLAIN is a plan, not a query result to grade. Show the plan rather
+         than comparing its columns to the exercise contract, and say why. */
+      s.toast('EXPLAIN shows a plan, not a graded answer. Showing the plan; remove EXPLAIN to check.');
+      await run();
       return;
     }
     setFb({ kind: 'pending' });
