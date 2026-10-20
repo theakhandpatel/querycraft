@@ -752,12 +752,13 @@ export function StoreProvider({ children }: { children: React.ReactNode }) {
       const n = activeLesson + d;
       if (n < 0) return;
       if (n >= modules.length) {
-        toast('End of the course. Nice work.');
+        toast('Course complete. Nice work.');
+        showScreen('course');
         return;
       }
       openLessonIn(uiState.selectedCourseId, n);
     },
-    [activeLesson, modules.length, openLessonIn, uiState.selectedCourseId, toast]
+    [activeLesson, modules.length, openLessonIn, showScreen, uiState.selectedCourseId, toast]
   );
 
   const openBookmark = useCallback(

@@ -74,6 +74,7 @@ export function TopBar() {
   const nextIdx = nextChapterIndex(course, progress);
   const here = screen === 'lesson' ? mods[activeLesson] : mods[nextIdx];
   const passed = coursePassed(course, progress);
+  const allDone = mods.length > 0 && mods.every((m) => !!progress.done[m.id]);
   const study = formatDuration(progress.timeMs?.[course.id] || 0);
 
   return (
@@ -93,7 +94,7 @@ export function TopBar() {
           <div className="spine-kicker">SQL workbook</div>
           <div className="spine-course" title={course.title}>{courseShort(course)}</div>
           <div className="spine-position">
-            {screen === 'lesson' ? 'Chapter' : 'Next · chapter'} {here ? here.n : '—'} of {mods.length} · {pct}%
+            {allDone ? 'Course complete' : `${screen === 'lesson' ? 'Chapter' : 'Next · chapter'} ${here ? here.n : '—'} of ${mods.length}`} · {pct}%
           </div>
           <div className="spine-ledgerline">
             {passed} passed · {study} · {pct}%

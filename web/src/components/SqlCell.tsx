@@ -24,7 +24,7 @@ type Feedback =
   | { kind: 'solution' }
   | { kind: 'accepted' }
   | { kind: 'passed'; checks: CheckResult[] }
-  | { kind: 'failed'; checks: CheckResult[]; cause: CheckResult | { label: string } };
+  | { kind: 'failed'; checks: CheckResult[]; cause: CheckResult | { label: string }; note?: string };
 
 interface FeedbackCtx {
   block: Block;
@@ -145,7 +145,9 @@ export default function SqlCell({ block, module: mod, course, onPassed }: { bloc
      hiding the result above it; the reduced-motion setting makes the move
      instant. */
   useEffect(() => {
-    if (!fb || (fb.kind !== 'passed' && fb.kind !== 'failed' && fb.kind !== 'error')) return;
+    if (!fb) return;
+    const panel = ['passed', 'failed', 'error', 'hint', 'solution', 'tutor', 'tutorUnavailable'];
+    if (!panel.includes(fb.kind)) return;
     feedbackRef.current?.scrollIntoView({ block: 'nearest', behavior: s.motion ? 'auto' : 'smooth' });
   }, [fb, s.motion]);
 
@@ -175,6 +177,10 @@ export default function SqlCell({ block, module: mod, course, onPassed }: { bloc
 
   async function check() {
     if (dialectRefused) return;
+    if (/^\s*EXPLAIN\b/i.test(code)) {
+      s.toast('EXPLAIN returns a plan, not a graded answer. Remove EXPLAIN before Check answer.');
+      return;
+    }
     setFb({ kind: 'pending' });
     const out = await s.api.checkAnswer(code, { item: block, module: mod, course, dialect });
     setQr(out.qr);
@@ -191,7 +197,7 @@ export default function SqlCell({ block, module: mod, course, onPassed }: { bloc
     } else {
       const cause = out.checks.find((r) => !r.ok) || { label: 'the result contract' };
       s.recordEvent(id, 'failed', undefined);
-      setFb({ kind: 'failed', checks: out.checks, cause });
+      setFb({ kind: 'failed', checks: out.checks, cause, note: mismatchNote(block, out.qr) ?? undefined });
     }
   }
 
@@ -532,6 +538,28 @@ function executionHelp(code: string): string {
   }
 }
 
+/** The first concrete difference a learner can act on. The checklist names
+    the failed rule; this names the count, the columns, or the row. */
+function mismatchNote(block: Block, qr: QueryResult): string | null {
+  const expected = block.result;
+  if (!expected) return null;
+  const gotColumns = qr.columns.map((column) => column.name);
+  if (gotColumns.join('|') !== expected.columns.join('|')) {
+    return `Expected columns: ${expected.columns.join(', ')}. Got: ${gotColumns.join(', ') || '(none)'}.`;
+  }
+  if (qr.row_count !== expected.rows.length) {
+    return `Expected ${expected.rows.length} ${expected.rows.length === 1 ? 'row' : 'rows'}. Got ${qr.row_count}.`;
+  }
+  for (let i = 0; i < expected.rows.length; i++) {
+    const want = expected.rows[i].map((value) => (value === null ? 'NULL' : String(value)));
+    const got = (qr.rows[i] || []).map((value) => (value === null ? 'NULL' : String(value)));
+    if (want.some((value, j) => value !== got[j])) {
+      return `First difference is row ${i + 1}. Expected ${want.join(' | ')}. Got ${got.join(' | ')}.`;
+    }
+  }
+  return null;
+}
+
 function renderFeedback(fb: Feedback | null, ctx: FeedbackCtx) {
   if (!fb) return null;
   const { block, hint, solution, accept, run, keep, nextChapter, explain } = ctx;
@@ -644,6 +672,7 @@ function renderFeedback(fb: Feedback | null, ctx: FeedbackCtx) {
       <div className="fb failed">
         <div className="fbhead"><Icon name="alert" />Not yet — {String(fb.cause.label).toLowerCase()}</div>
         Correctness first: the result does not satisfy the contract yet.
+        {fb.note ? <p className="fbnote">{fb.note}</p> : null}
         <CheckList checks={fb.checks} />
         <div className="fbactions actions">
           <button className="small" onClick={hint}>Show hint</button>

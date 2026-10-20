@@ -225,6 +225,12 @@ async function main() {
     const starterFailure = await cell.locator('.fb.failed').innerText();
     assert(!/Execution error/.test(starterFailure), 'the first-run starter failed to execute');
     assert(/row count/i.test(starterFailure), `the starter did not fail on the contract: ${starterFailure}`);
+    assert(/Expected 5 rows\. Got 10\./.test(starterFailure), `the failure did not name the difference: ${starterFailure}`);
+    await cell.getByRole('button', { name: 'Hint', exact: true }).click();
+    await cell.locator('.fb').filter({ hasText: 'Hints' }).waitFor();
+    await page.waitForTimeout(500);
+    const hintBox = await cell.locator('.cellfeedback').boundingBox();
+    assert(hintBox !== null && hintBox.y < 900, 'the hint panel opened below the viewport');
     await cell.getByRole('button', { name: 'Show solution' }).first().click();
     const reference = cell.locator('.fb').filter({ hasText: 'Reference solution' });
     await reference.waitFor();

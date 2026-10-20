@@ -148,8 +148,8 @@ export default function TablesDrawer() {
             <h2>{dataset} · {dialectLabel(dialect)} · dataset_version {datasetVersion}</h2>
             <p className="muted" style={{ fontSize: 12, marginTop: 4 }}>
               {dataset === DEFAULT_DATASET
-                ? 'Generated with this course · 4 tables · ~290 rows'
-                : "The plan lab's larger fixture · 4 tables · row counts below"}
+                ? 'Generated with this course · 4 commerce tables · dataset_meta is internal'
+                : "The plan lab's larger fixture · 4 commerce tables · row counts below"}
             </p>
           </div>
           <button className="small ghost" aria-label="Close" onClick={() => s.setTablesOpen(false)}><Icon name="x" /></button>

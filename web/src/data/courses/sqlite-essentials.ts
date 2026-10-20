@@ -86,7 +86,7 @@ export const SQLITE_ESSENTIALS_MODULES: CourseModule[] = [
   objectives:['Tell EXPLAIN from EXPLAIN QUERY PLAN from ANALYZE','Read SCAN and SEARCH lines and the index they name','Spot a predicate that hides an index from the planner'],
   blocks:[
     {type:'syntax', sql:"EXPLAIN QUERY PLAN\nSELECT id FROM orders WHERE status = 'refunded';", note:'A plan is rows, not prose. SEARCH is an index seek. SCAN is a full pass. SQLite has no EXPLAIN ANALYZE.'},
-    {type:'example', id:'ex.s6.demo', sql:"SELECT id, status, customer_id\nFROM orders\nWHERE customer_id = 1\nORDER BY id;", note:'The query whose plan the chapter reads. The equality on customer_id becomes a covering-index search, so SQLite never visits the table.',
+    {type:'example', id:'ex.s6.demo', sql:"SELECT id, status, customer_id\nFROM orders\nWHERE customer_id = 1\nORDER BY id;", note:'The query whose plan the chapter reads. The equality on customer_id becomes a search on orders_customer_id_idx. SQLite still visits the table to read status.',
       result:{columns:['id','status','customer_id'], rows:[[1001,'completed',1],[1002,'completed',1],[1005,'completed',1],[1006,'shipped',1],[1007,'refunded',1]]}},
     {type:'exercise', id:'ex.s6.1',
       prompt:'Return the id, status and customer_id of every order placed by customer 3, lowest id first.',
@@ -105,7 +105,7 @@ export const SQLITE_ESSENTIALS_MODULES: CourseModule[] = [
     {type:'example', id:'ex.s7.demo', sql:"SELECT (SELECT COUNT(*) FROM customers)   AS customers,\n       (SELECT COUNT(*) FROM products)    AS products,\n       (SELECT COUNT(*) FROM orders)      AS orders,\n       (SELECT COUNT(*) FROM order_items) AS order_items;", note:'The whole commerce store in a single row. The positive case for a database that is a file.',
       result:{columns:['customers','products','orders','order_items'], rows:[[30,20,80,160]]}},
     {type:'exercise', id:'ex.s7.1',
-      prompt:'Return one row per commerce table with the table name as relation and its row count as table_rows, largest table first.',
+      prompt:'Return one row per commerce table (customers, products, orders, order_items) with the table name as relation and its row count as table_rows, largest table first.',
       starter:"SELECT 'customers' AS relation, COUNT(*) AS table_rows FROM customers\n-- UNION ALL the other three\n-- order by table_rows descending",
       solution:"SELECT 'customers' AS relation, COUNT(*) AS table_rows FROM customers\nUNION ALL SELECT 'products', COUNT(*) FROM products\nUNION ALL SELECT 'orders', COUNT(*) FROM orders\nUNION ALL SELECT 'order_items', COUNT(*) FROM order_items\nORDER BY table_rows DESC;",
       hints:['Every branch of a <span class="kbd-inline">UNION ALL</span> projects the same two columns in the same order.','The names come from the first branch, so the trailing <span class="kbd-inline">ORDER BY table_rows DESC</span> can use the alias.'],

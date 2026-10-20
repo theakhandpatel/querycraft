@@ -12,6 +12,7 @@ export default function WorkbookScreen() {
   const pct = lessonPercent(course, progress);
   const mods = activeModules(course);
   const nextIdx = nextChapterIndex(course, progress);
+  const complete = mods.length > 0 && mods.every((m) => !!progress.done[m.id]);
   const notes = (progress.notes || []).filter((n) => n.course === course.id);
   const saved = (progress.saved || []).filter((q) => q.course === course.id);
 
@@ -79,11 +80,13 @@ export default function WorkbookScreen() {
             <div className="actions">
               <button className="small ghost" onClick={s.exportData} title="Download a versioned JSON copy of your data"><Icon name="download" />Export</button>
               <ImportControl className="small ghost" />
-              <button className="small primary" onClick={s.resumeCourse}><Icon name="play" />Resume chapter {nextIdx + 1}</button>
+              <button className="small primary" onClick={complete ? () => s.showScreen('course') : s.resumeCourse}>
+                <Icon name={complete ? 'check' : 'play'} />{complete ? 'Course complete' : `Resume chapter ${nextIdx + 1}`}
+              </button>
             </div>
           </div>
           <div className="reportrow mt-8"><span>Current course</span><span>{course.title}</span></div>
-          <div className="reportrow"><span>Next chapter</span><span>{mods[nextIdx] ? mods[nextIdx].title : '—'}</span></div>
+          <div className="reportrow"><span>{complete ? 'Status' : 'Next chapter'}</span><span>{complete ? 'Course complete' : mods[nextIdx] ? mods[nextIdx].title : '—'}</span></div>
           <div className="meter"><span style={{ width: `${pct}%` }}></span></div>
           <p className="muted mt-8" style={{ fontSize: 12 }}>{
             s.api.mode === 'http'

@@ -30,6 +30,18 @@ export default function LessonScreen() {
     if (ws) ws.scrollTop = 0;
   }, [activeLesson, moduleId]);
 
+  /* Next and Previous replace the chapter under the same button. Move focus to
+     the main region after a chapter change so Enter does not skip the new
+     chapter. The first mount is left alone. */
+  const firstChapter = useRef(true);
+  useEffect(() => {
+    if (firstChapter.current) {
+      firstChapter.current = false;
+      return;
+    }
+    document.getElementById('main')?.focus();
+  }, [activeLesson, moduleId]);
+
   /* Measure study time instead of inventing it.
    *
    * The Progress screen used to print `attempts * 3 + 6` minutes, so an
@@ -226,7 +238,11 @@ export default function LessonScreen() {
 
         <div className="bottomlesson">
           <button disabled={activeLesson === 0} onClick={() => s.stepLesson(-1)}><Icon name="arrow-left" />Previous</button>
-          <button className="ghost" onClick={s.markLessonDone}><Icon name="check" />{progress.done[m.id] ? 'Completed' : 'Mark chapter complete'}</button>
+          {progress.done[m.id] ? (
+            <span className="pill pass chaptercomplete"><Icon name="check" />Completed</span>
+          ) : (
+            <button className="ghost" onClick={s.markLessonDone}><Icon name="check" />Mark chapter complete</button>
+          )}
           {activeLesson === mods.length - 1 ? (
             <button className="primary" onClick={() => s.stepLesson(1)}>Finish<Icon name="check" /></button>
           ) : (
