@@ -61,6 +61,16 @@ works at a custom domain root.
 
 The build needs no secrets. It does not run Go.
 
+## Netlify
+
+The same artifact also deploys to https://querycraft.akhand.cc/ through
+`.github/workflows/netlify.yml`. The site uses the `querycraft` subdomain on
+`akhand.cc`, with DNS and TLS managed by Netlify. The workflow builds
+`web/dist-static`, then uploads it with the Netlify CLI.
+
+The GitHub Pages workflow remains in place as a second static host. Both builds
+come from the same script.
+
 ## What the sample leaves out
 
 - **Accounts.** The sample opens as a local workspace. There is no sign-in.

@@ -1,0 +1,21 @@
+# Netlify builds the public browser sample from the same static artifact as
+# GitHub Pages. The sample has no server, so Netlify only hosts files.
+[build]
+  command = "npm --prefix web ci && node scripts/build-static.mjs"
+  publish = "web/dist-static"
+
+[build.environment]
+  NODE_VERSION = "22"
+  NPM_FLAGS = "--no-audit --no-fund"
+
+# Hashed SPA assets never change. The landing screenshots keep their normal
+# cache behaviour because their filenames are stable.
+[[headers]]
+  for = "/app/assets/*"
+  [headers.values]
+    Cache-Control = "public, max-age=31536000, immutable"
+
+[[headers]]
+  for = "/landing/assets/*"
+  [headers.values]
+    Cache-Control = "public, max-age=3600"

@@ -4,7 +4,7 @@
 
 **Learn SQL by writing it.**
 
-**[Open the browser sample](https://theakhandpatel.github.io/querycraft/)** ·
+**[Open the browser sample](https://querycraft.akhand.cc/)** ·
 [Documentation](docs/README.md)
 
 You cannot learn SQL by watching someone else write it.
@@ -40,7 +40,7 @@ The workbook keeps your notes, saved queries, bookmarks, and every attempt. Sear
 
 ## Try the browser sample
 
-[Open the browser sample](https://theakhandpatel.github.io/querycraft/). It
+[Open the browser sample](https://querycraft.akhand.cc/). It
 carries all eight courses and runs SQLite or PostgreSQL in the page. No account
 is needed, and progress stays in your browser.
 
