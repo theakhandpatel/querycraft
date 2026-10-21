@@ -83,7 +83,7 @@ export function staticLanding(html) {
   /* Internal links and assets become relative. The static site is served from
      a project path such as /querycraft/, so a leading slash would point at the
      domain root instead of the site root. */
-  out = replaceAll(out, 'href="/app/"', 'href="app/"', 'app links');
+  out = replaceAll(out, 'href="/app', 'href="app', 'app links');
   out = replaceAll(out, 'src="/landing/assets/', 'src="landing/assets/', 'landing image sources');
   out = replaceAll(out, 'href="/landing/assets/', 'href="landing/assets/', 'landing asset links');
   out = out.split('url(/landing/assets/').join('url(landing/assets/');

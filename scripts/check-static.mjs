@@ -169,7 +169,7 @@ async function main() {
         title: document.title,
         heading: document.querySelector('h1')?.textContent ?? '',
         build: document.documentElement.dataset.build ?? '',
-        startLinks: [...document.querySelectorAll('a')].filter((a) => a.getAttribute('href') === 'app/').length,
+        startLinks: [...document.querySelectorAll('a')].filter((a) => (a.getAttribute('href') || '').startsWith('app/')).length,
         absoluteInternal: [...document.querySelectorAll('[href], [src]')]
           .map((node) => node.getAttribute('href') || node.getAttribute('src') || '')
           .filter((value) => value.startsWith('/app/') || value.startsWith('/landing/')),
@@ -190,13 +190,14 @@ async function main() {
 
     /* The first app link in the document belongs to the mobile menu, which is
        closed at this width. Use the visible top call to action. */
-    await page.locator('a.top-cta[href="app/"]').click();
+    await page.locator('a.top-cta[href^="app/"]').click();
     await page.waitForURL((url) => url.pathname === `${PREFIX}app/`, { timeout: 30_000 });
     await page.waitForSelector('main.workspace .screen.active', { state: 'attached' });
     await page.waitForFunction(() => !document.querySelector('.authwrap .spin'));
+    await page.waitForSelector('.reader .mdbody');
     await page.waitForFunction(() => {
       const eyebrow = document.querySelector('.screen.active .eyebrow');
-      return !!eyebrow && /workbench/i.test(eyebrow.textContent ?? '');
+      return !!eyebrow && /chapter/i.test(eyebrow.textContent ?? '');
     });
 
     const app = await page.evaluate(() => ({
