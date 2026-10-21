@@ -26,7 +26,7 @@ cd web && npm install
 npm run dev            # http://localhost:5173 (Postgres/WASM in the browser; no server, no Docker)
 VITE_API_MODE=http VITE_API_BASE=http://localhost:8080 npm run dev   # against the Go gateway
 npm run build          # production bundle
-npm run typecheck      # tsc --noEmit (strict)
+npm run typecheck      # tsrs -p . (strict)
 npm run lint           # oxlint + the vendored anti-slop rules
 npm run doctor         # React Doctor diagnostics for src/ (informational; exits 1 when it finds issues)
 
@@ -48,9 +48,9 @@ make db-reset          # delete the dev/smoke PostgreSQL clusters (re-seeds on n
 make help              # list every target
 ```
 
-The tooling needs Node 22 or newer. `.nvmrc` names the line the project tests
+The tooling needs Node 20.19 or newer. `.nvmrc` names the line the project tests
 on, and `web/package.json` declares the floor in `engines.node`. React Doctor
-refuses to run below 20.19, but tsrs requires Node 22, so use the `.nvmrc` line.
+refuses to run below 20.19.
 
 `VITE_API_MODE` picks the frontend adapter: `pglite` (default: real PostgreSQL
 compiled to WebAssembly runs in a Web Worker) or `http` (the Go gateway, also

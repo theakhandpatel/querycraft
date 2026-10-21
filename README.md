@@ -49,7 +49,7 @@ courses.
 
 ## Run it
 
-You need Go 1.26 or later and Node 22 or later.
+You need Go 1.26 or later and Node 20.19 or later.
 
 ```sh
 make install

@@ -58,7 +58,7 @@ static: ## Build the public browser-only site (landing + app) for GitHub Pages.
 static-check: static ## Build the browser-only site and drive it under a project subpath (needs Chrome).
 	node scripts/check-static.mjs
 
-typecheck: ## Type-check the frontend with tsrs (Rust/WASM, strict).
+typecheck: ## Type-check the frontend with tsrs (Rust, strict).
 	cd $(WEB_DIR) && npm run typecheck
 
 lint: ## Lint the frontend with oxlint and the vendored anti-slop rules.
