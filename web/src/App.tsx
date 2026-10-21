@@ -7,7 +7,7 @@ import TablesDrawer from './components/TablesDrawer';
 import TutorDrawer from './components/TutorDrawer';
 import ChaptersDrawer from './components/ChaptersDrawer';
 import Modals from './components/Modals';
-import HomeScreen from './components/screens/HomeScreen';
+import LearningScreen from './components/screens/LearningScreen';
 import CourseScreen from './components/screens/CourseScreen';
 import LibraryScreen from './components/screens/LibraryScreen';
 import CreateScreen from './components/screens/CreateScreen';
@@ -26,7 +26,7 @@ import { SIMPLE_MODE } from './lib/mode';
 import { screenAllowed } from './lib/route';
 
 const SCREENS = {
-  home: HomeScreen,
+  home: LearningScreen,
   course: CourseScreen,
   library: LibraryScreen,
   create: CreateScreen,
@@ -46,7 +46,7 @@ export default function App() {
   /* Authoring lives behind the admin role; a learner landing on one of those
      routes (stale nav, deep link) is sent back to Home rather than shown it.
      The router applies the same list to the fragment. */
-  const Active = screenAllowed(s.screen, s.role) ? SCREENS[s.screen] || HomeScreen : HomeScreen;
+  const Active = screenAllowed(s.screen, s.role) ? SCREENS[s.screen] || LearningScreen : LearningScreen;
 
   useEffect(() => {
     function onKey(e: KeyboardEvent) {

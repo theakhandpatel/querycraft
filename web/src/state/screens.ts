@@ -9,9 +9,9 @@
 import type { Screen } from '../types';
 
 export const SCREEN_CRUMBS: Record<Screen, string> = {
-  home: 'Home',
-  course: 'My learning',
-  library: 'Library',
+  home: 'Learning',
+  course: 'Course',
+  library: 'Courses',
   create: 'Create a course',
   building: 'Building course',
   review: 'Draft studio',
@@ -19,21 +19,21 @@ export const SCREEN_CRUMBS: Record<Screen, string> = {
   runs: 'Generation runs',
   lesson: 'Chapter',
   workbook: 'Workbook',
-  'workbook-progress': 'Progress',
+  'workbook-progress': 'History',
   'challenge-lab': 'Challenge lab',
   'appearance-settings': 'Appearance',
 };
 
 export const SCREEN_NAV: Record<Screen, string> = {
   home: 'home',
-  course: 'course',
+  course: 'library',
   library: 'library',
   create: 'create',
   building: 'create',
   review: 'create',
   manage: 'manage',
   runs: 'manage',
-  lesson: 'course',
+  lesson: 'library',
   workbook: 'workbook',
   'workbook-progress': 'progress',
   'challenge-lab': 'lab',

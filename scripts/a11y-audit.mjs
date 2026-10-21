@@ -69,12 +69,12 @@ const FAIL_IMPACTS = new Set(['critical', 'serious']);
    seeded chapter markdown, which only renders once the in-browser database has
    booted and returned its rows. */
 const ROUTES = [
-  { name: 'Home', hash: '#/', text: 'Workbench' },
-  { name: 'Library', hash: '#/library', text: 'Library' },
+  { name: 'Home', hash: '#/', text: 'Learning' },
+  { name: 'Library', hash: '#/courses', text: 'Courses' },
   { name: 'Workbook', hash: '#/workbook', text: 'Your workbook' },
-  { name: 'Progress', hash: '#/progress', text: 'Progress' },
+  { name: 'Progress', hash: '#/history', text: 'History' },
   { name: 'Appearance', hash: '#/appearance', text: 'Appearance' },
-  { name: 'Lesson', hash: '#/course/sql-analytics/m1', text: 'Chapter 1', settle: '.screen.active .lessonmain .reader .mdbody' },
+  { name: 'Lesson', hash: '#/courses/sql-analytics/m1', text: 'Chapter 1', settle: '.screen.active .lessonmain .reader .mdbody' },
 ];
 
 /* Violations that are expected, each with the reason it is not a failure. The

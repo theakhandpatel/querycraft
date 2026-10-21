@@ -12,9 +12,9 @@ type ViewCourse = Course & { blurb?: string; domain?: string; minutes?: number; 
 
 const FILTERS = [
   { key: 'all', label: 'All courses' },
-  { key: 'enrolled', label: 'Enrolled' },
+  { key: 'enrolled', label: 'Taking' },
   { key: 'mine', label: 'Created by you' },
-  { key: 'new', label: 'Not started' },
+  { key: 'new', label: 'New' },
 ];
 
 export default function LibraryScreen() {
@@ -38,13 +38,13 @@ export default function LibraryScreen() {
   return (
     <div className="content">
       <PageHead
-        eyebrow="Library"
+        eyebrow="Courses"
         title="Find your next course"
         action={isAdmin && (
           <button className="primary" onClick={() => s.showScreen('create')}><Icon name="sparkles" />Create your own</button>
         )}
       >
-        <p>Preview what a course teaches, then enroll to add it to your learning list with its own progress and notes.</p>
+        <p>Preview what a course teaches, then start it to add it to Learning with its own progress and notes.</p>
       </PageHead>
 
       <div className="filterbar">
@@ -69,11 +69,11 @@ export default function LibraryScreen() {
             ? <span className="enrolltag mine">You built this</span>
             : paused
               ? <span className="enrolltag">{interrupted ? 'Interrupted' : 'Waiting for approval'}</span>
-              : c.enrolled ? <span className="enrolltag">Enrolled</span> : null;
+              : c.enrolled ? <span className="enrolltag">Taking</span> : null;
           let btn;
           if (paused) btn = <button className="small primary" onClick={() => s.resumeStoredCourse(c.id, c.title)}><Icon name="play" />Resume</button>;
           else if (c.built && c.enrolled) btn = <button className="small primary" onClick={() => { s.selectCourse(c.id); s.showScreen('course'); }}><Icon name="play" />Continue</button>;
-          else if (c.built) btn = <button className="small primary" onClick={() => s.enrollCourse(c.id)}>Enroll<Icon name="plus" /></button>;
+          else if (c.built) btn = <button className="small primary" onClick={() => s.enrollCourse(c.id)}>Start<Icon name="plus" /></button>;
           else btn = <button className="small" onClick={() => s.toast('Preview: this course would generate with the same pipeline.')}><Icon name="eye" />Preview</button>;
           return (
             <div className="coursecard" key={c.id}>
@@ -106,8 +106,8 @@ export default function LibraryScreen() {
 
       <div className="callout mt-16">
         {SIMPLE_MODE
-          ? 'Every course in this library ships with the app and runs in your browser. Enroll to add one to your workbook; progress stays on this device.'
-          : 'A library course is a starting point. When you enroll, you get your own copy — prompts, datasets and exercises are yours to change, and fixes are proposed by AI but only applied with your approval.'}
+          ? 'Every course in this library ships with the app and runs in your browser. Start one to add it to Learning. Progress stays in this browser.'
+          : 'A course is a starting point. When you start one, it moves into Learning. You get your own copy of the data, and progress is tracked separately.'}
       </div>
     </div>
   );

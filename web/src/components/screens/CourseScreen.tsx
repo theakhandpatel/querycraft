@@ -1,11 +1,8 @@
 import Icon from '../ui/Icon';
-import Ring from '../ui/Ring';
 import DialectBadge, { useChapterDialect } from '../ui/DialectBadge';
 import { useStore } from '../../state/store';
-import { SIMPLE_MODE } from '../../lib/mode';
 import {
-  activeModules, courseAttempts, courseDoneCount, courseExerciseTotal, coursePassed,
-  enrolledCourses, exerciseIdsOfModule, lessonPercent, nextChapterIndex,
+  activeModules, courseExerciseTotal, exerciseIdsOfModule, lessonPercent, nextChapterIndex,
 } from '../../lib/model';
 import type { Course, CourseModule } from '../../types';
 
@@ -26,13 +23,12 @@ export default function CourseScreen() {
   const ms = activeModules(course);
   const nextIdx = nextChapterIndex(course, progress);
   const complete = ms.length > 0 && ms.every((m) => !!progress.done[m.id]);
-  const enrolled = enrolledCourses();
 
   return (
     <div className="content">
       <div className="pagehead">
         <div>
-          <div className="eyebrow">My learning</div>
+          <div className="eyebrow">Course</div>
           <h1>{course.title}</h1>
           <p>{course.blurb}</p>
           <div className="actions mt-12">
@@ -50,23 +46,7 @@ export default function CourseScreen() {
         </div>
       </div>
 
-      <div className="coursehero">
-        <div className="courseicon"><Icon name="layers" /></div>
-        <div style={{ flex: 1, minWidth: 'min(200px, 100%)' }}>
-          <h2>{course.title}</h2>
-          <p>{course.blurb}</p>
-        </div>
-        <Ring pct={pct} />
-      </div>
-
-      <div className="stats">
-        <div className="stat"><strong>{courseDoneCount(course, progress)}</strong><span>Chapters done</span></div>
-        <div className="stat"><strong>{coursePassed(course, progress)}</strong><span>Exercises passed</span></div>
-        <div className="stat"><strong>{courseAttempts(course, progress)}</strong><span>Attempts in this course</span></div>
-        <div className="stat"><strong>{(progress.notes || []).filter((n) => n.course === course.id).length}</strong><span>Notes in this course</span></div>
-      </div>
-
-      <div className="grid2 mt-16">
+      <div className="mt-16">
         <div className="card">
           <div className="sectiontitle">
             <h2>Chapter index</h2>
@@ -101,27 +81,6 @@ export default function CourseScreen() {
                 </div>
               );
             })}
-          </div>
-        </div>
-
-        <div className="card">
-          <h2>This course</h2>
-          <div className="reportrow mt-8"><span>Grading</span><span>Result contract, not SQL text</span></div>
-          <div className="reportrow"><span>Practice</span><span>Runnable SQL on a live dataset</span></div>
-          <div className="reportrow"><span>Notes &amp; bookmarks</span><span>Kept per course</span></div>
-          {!SIMPLE_MODE && <div className="reportrow"><span>Challenge lab</span><span>AI-generated drills</span></div>}
-          <div className="actions mt-14">
-            <button onClick={() => s.showScreen('workbook')}><Icon name="book" />Workbook</button>
-            {!SIMPLE_MODE && <button onClick={() => s.showScreen('challenge-lab')}><Icon name="flask" />Challenge lab</button>}
-          </div>
-          <h3 className="mt-18">Switch course</h3>
-          <div className="switcher">
-            {enrolled.map((c) => (
-              <button key={c.id} className={`cswitch${c.id === course.id ? ' active' : ''}`} onClick={() => s.selectCourse(c.id)}>
-                <strong>{c.title}</strong>
-                <small>{lessonPercent(c, progress)}% complete</small>
-              </button>
-            ))}
           </div>
         </div>
       </div>

@@ -1,9 +1,8 @@
 import React, { useState } from 'react';
 import Icon from '../ui/Icon';
-import Ring from '../ui/Ring';
 import { useStore } from '../../state/store';
 import ImportControl from '../ui/ImportControl';
-import { activeModules, courseAccepted, courseAttempts, coursePassed, lessonPercent, nextChapterIndex } from '../../lib/model';
+import { activeModules, lessonPercent, nextChapterIndex } from '../../lib/model';
 import type { SavedItem } from '../../types';
 
 export default function WorkbookScreen() {
@@ -64,16 +63,9 @@ export default function WorkbookScreen() {
           <h1>{course.title}</h1>
           <p>Notes, bookmarks and saved queries, kept per course.</p>
         </div>
-        <Ring pct={pct} />
       </div>
 
-      <div className="grid3">
-        <div className="stat"><strong>{coursePassed(course, progress)}</strong><span>Exercises passed</span></div>
-        <div className="stat"><strong>{courseAccepted(course, progress)}</strong><span>Accepted by you</span></div>
-        <div className="stat"><strong>{courseAttempts(course, progress)}</strong><span>Attempts in this course</span></div>
-      </div>
-
-      <div className="grid2 mt-16">
+      <div className="mt-16">
         <div className="card">
           <div className="sectiontitle">
             <h2>Continue</h2>
@@ -93,16 +85,6 @@ export default function WorkbookScreen() {
               ? `Drafts, attempts and notes are saved to ${s.api.baseUrl} and survive a reload. Export writes a versioned JSON copy you can keep; Import merges one back in without overwriting anything.`
               : 'Drafts, attempts and notes are stored locally and survive a reload. Export writes a versioned JSON copy you can keep; Import merges one back in without overwriting anything.'
           }</p>
-        </div>
-        <div className="card">
-          <h2>Course content</h2>
-          {mods.map((m, i) => (
-            <button type="button" className="reportrow action" key={m.id} onClick={() => s.openLessonIn(course.id, i)}>
-              <span>{progress.done[m.id] ? <span className="pass">✓</span> : `${i + 1}.`} {m.title}</span>
-              <span className="muted">{m.minutes} min</span>
-            </button>
-          ))}
-          <button className="small ghost mt-12" onClick={() => s.showScreen('course')}><Icon name="layers" />Open course home</button>
         </div>
       </div>
 

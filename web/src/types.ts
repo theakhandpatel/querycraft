@@ -760,4 +760,7 @@ export type ThemePreference = ThemeName | `user-${string}`;
 export interface UiState {
   selectedCourseId: string;
   libraryFilter: string;
+  /** Courses the learner has opened. The catalog's `enrolled` flag is a
+      projection of this list, so taking a course survives a reload. */
+  enrolledCourseIds?: string[];
 }

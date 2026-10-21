@@ -26,9 +26,9 @@ generation runs, and administration.
   courses and 52 chapters.
 - **Lessons built for practice.** A chapter combines reading with one or two
   exercises and a worked example. Fenced Mermaid diagrams render as SVG.
-- **Library.** Browse every course, filter by topic or dialect, and start a
+- **Courses.** Browse every course, filter by topic or dialect, and start a
   course from the library or the home screen.
-- **Next step, always visible.** Home shows the next chapter, your streak, time
+- **Next step, always visible.** Learning shows your courses, the next chapter, your streak, time
   practised, recent work, and suggested courses.
 
 ## Practice and grading

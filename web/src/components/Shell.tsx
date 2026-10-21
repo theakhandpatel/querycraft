@@ -3,7 +3,7 @@ import Icon from './ui/Icon';
 import SearchBox from './SearchBox';
 import { useStore } from '../state/store';
 import { SCREEN_CRUMBS, SCREEN_NAV } from '../state/screens';
-import { courseShort, findExercise, activeModules, lessonPercent, nextChapterIndex, coursePassed } from '../lib/model';
+import { courseShort, findExercise, activeModules, lessonPercent, nextChapterIndex, coursePassed, enrolledCourses } from '../lib/model';
 import { effectiveDialect } from '../lib/dialect';
 import { SIMPLE_MODE } from '../lib/mode';
 import { formatDuration } from '../lib/progress';
@@ -74,6 +74,7 @@ export function TopBar() {
   const nextIdx = nextChapterIndex(course, progress);
   const here = screen === 'lesson' ? mods[activeLesson] : mods[nextIdx];
   const passed = coursePassed(course, progress);
+  const courseStarted = screen === 'course' || screen === 'lesson' || enrolledCourses().some((c) => c.id === course.id);
   const allDone = mods.length > 0 && mods.every((m) => !!progress.done[m.id]);
   const study = formatDuration(progress.timeMs?.[course.id] || 0);
 
@@ -91,21 +92,21 @@ export function TopBar() {
         </div>
 
         <div className="spine-context">
-          <div className="spine-kicker">SQL workbook</div>
-          <div className="spine-course" title={course.title}>{courseShort(course)}</div>
+          <div className="spine-kicker">SQL notebook</div>
+          <div className="spine-course" title={courseStarted ? course.title : 'Choose a course'}>{courseStarted ? courseShort(course) : 'No course yet'}</div>
           <div className="spine-position">
-            {allDone ? 'Course complete' : `${screen === 'lesson' ? 'Chapter' : 'Next · chapter'} ${here ? here.n : '—'} of ${mods.length}`} · {pct}%
+            {!courseStarted ? 'Choose a course' : allDone ? `Course complete · ${pct}%` : `${screen === 'lesson' ? 'Chapter' : 'Next · chapter'} ${here ? here.n : '—'} of ${mods.length} · ${pct}%`}
           </div>
           <div className="spine-ledgerline">
-            {passed} passed · {study} · {pct}%
+            {courseStarted ? `${passed} passed · ${study} · ${pct}%` : 'Browse Courses to begin'}
           </div>
         </div>
 
         <nav className="topnav" aria-label="Primary">
-          <NavLink variant="top" icon="graduation" label="Home" active={nav === 'home'} onClick={() => s.showScreen('home')} />
-          <NavLink variant="top" icon="search" label="Library" active={nav === 'library'} onClick={() => s.showScreen('library')} />
+          <NavLink variant="top" icon="graduation" label="Learning" active={nav === 'home'} onClick={() => s.showScreen('home')} />
+          <NavLink variant="top" icon="layers" label="Courses" active={nav === 'library'} onClick={() => s.showScreen('library')} />
           <NavLink variant="top" icon="book" label="Workbook" active={nav === 'workbook'} badge={`${s.pct}%`} onClick={() => s.showScreen('workbook')} />
-          <NavLink variant="top" icon="clock" label="Progress" active={nav === 'progress'} onClick={() => s.showScreen('workbook-progress')} />
+          <NavLink variant="top" icon="clock" label="History" active={nav === 'progress'} onClick={() => s.showScreen('workbook-progress')} />
           {!SIMPLE_MODE && <NavLink variant="top" icon="flask" label="Challenge lab" active={nav === 'lab'} onClick={() => s.showScreen('challenge-lab')} />}
           {isAdmin && <NavLink variant="top" icon="sparkles" label="Manage" active={nav === 'manage'} onClick={() => s.showScreen('manage')} />}
         </nav>
@@ -138,7 +139,7 @@ export function TopBar() {
         <div className="runhead-context">
           <span className="runhead-section">{SCREEN_CRUMBS[screen]}</span>
           <span className="runhead-rule" aria-hidden="true" />
-          <span className="runhead-course" title={course.title}>{course.title}</span>
+          <span className="runhead-course" title={courseStarted ? course.title : 'Choose a course'}>{courseStarted ? course.title : 'Choose a course'}</span>
           {onCourseTrack && screen === 'lesson' && mods.length > 0 && (
             <span className="runhead-moves">
               <button className="small ghost iconbtn" onClick={() => s.setChaptersOpen(true)} aria-label="All chapters" title="All chapters">
@@ -174,16 +175,16 @@ export function TopBar() {
 
       <nav className="bottombar" aria-label="Quick navigation">
         <button className={`bbitem${nav === 'home' ? ' active' : ''}`} onClick={() => s.showScreen('home')}>
-          <Icon name="graduation" /><span>Home</span>
+          <Icon name="graduation" /><span>Learning</span>
         </button>
         <button className={`bbitem${nav === 'library' ? ' active' : ''}`} onClick={() => s.showScreen('library')}>
-          <Icon name="search" /><span>Library</span>
-        </button>
-        <button className="bbitem bbcontinue" onClick={s.resumeCourse}>
-          <Icon name="play" /><span>Continue</span>
+          <Icon name="layers" /><span>Courses</span>
         </button>
         <button className={`bbitem${nav === 'workbook' ? ' active' : ''}`} onClick={() => s.showScreen('workbook')}>
           <Icon name="book" /><span>Workbook</span>
+        </button>
+        <button className={`bbitem${nav === 'progress' ? ' active' : ''}`} onClick={() => s.showScreen('workbook-progress')}>
+          <Icon name="clock" /><span>History</span>
         </button>
         <button className="bbitem" onClick={() => s.setNavOpen(true)} aria-label="More sections" aria-haspopup="dialog" aria-expanded={s.navOpen}>
           <Icon name="menu" /><span>More</span>
@@ -256,13 +257,12 @@ export function NavDrawer() {
             </div>
           )}
           <div className="navgroup">
-            <NavLink variant="drawer" icon="graduation" label="Home" active={nav === 'home'} onClick={go(() => s.showScreen('home'))} />
-            <NavLink variant="drawer" icon="layers" label={courseShort(course)} active={nav === 'course'} onClick={go(() => s.showScreen('course'))} />
-            <NavLink variant="drawer" icon="search" label="Library" active={nav === 'library'} onClick={go(() => s.showScreen('library'))} />
+            <NavLink variant="drawer" icon="graduation" label="Learning" active={nav === 'home'} onClick={go(() => s.showScreen('home'))} />
+            <NavLink variant="drawer" icon="layers" label="Courses" active={nav === 'library'} onClick={go(() => s.showScreen('library'))} />
           </div>
           <div className="navgroup">
             <NavLink variant="drawer" icon="book" label="Workbook" active={nav === 'workbook'} badge={`${s.pct}%`} onClick={go(() => s.showScreen('workbook'))} />
-            <NavLink variant="drawer" icon="clock" label="Progress" active={nav === 'progress'} onClick={go(() => s.showScreen('workbook-progress'))} />
+            <NavLink variant="drawer" icon="clock" label="History" active={nav === 'progress'} onClick={go(() => s.showScreen('workbook-progress'))} />
             {!SIMPLE_MODE && <NavLink variant="drawer" icon="flask" label="Challenge lab" active={nav === 'lab'} onClick={go(() => s.showScreen('challenge-lab'))} />}
           </div>
           {isAdmin && (

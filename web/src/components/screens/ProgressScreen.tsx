@@ -60,7 +60,7 @@ export default function ProgressScreen() {
     <div className="content">
       <div className="pagehead">
         <div>
-          <div className="eyebrow">Progress · {courseShort(course)}</div>
+          <div className="eyebrow">History · {courseShort(course)}</div>
           <h1>Your history</h1>
           <p>Attempts are immutable. Rerunning makes a new attempt; nothing is deleted, and an earlier pass is never silently re-graded.</p>
         </div>

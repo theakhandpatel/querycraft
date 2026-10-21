@@ -68,7 +68,7 @@ export default function ChaptersDrawer() {
             className="small ghost mt-18"
             onClick={() => { s.setChaptersOpen(false); s.showScreen('course'); }}
           >
-            <Icon name="arrow-left" />Course home
+            <Icon name="arrow-left" />Course
           </button>
         </div>
       </aside>

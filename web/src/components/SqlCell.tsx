@@ -39,9 +39,8 @@ interface FeedbackCtx {
 
 /* One inline SQL cell. Holds its own draft + result + feedback state; execution
    and grading always go through the API boundary, never computed here.
-   `onPassed` lets a host that derives its own next step (the workbench on Home)
-   hold the page still for the verdict instead of advancing under the learner. */
-export default function SqlCell({ block, module: mod, course, onPassed }: { block: Block; module: CourseModule; course: Course; onPassed?: () => void }) {
+   The host owns what happens after a pass; the cell only reports the verdict. */
+export default function SqlCell({ block, module: mod, course }: { block: Block; module: CourseModule; course: Course }) {
   const s = useStore();
   const isExercise = block.type === 'exercise';
   const id = block.id as string;
@@ -196,7 +195,6 @@ export default function SqlCell({ block, module: mod, course, onPassed }: { bloc
       s.recordEvent(id, 'passed', undefined);
       setFb({ kind: 'passed', checks: out.checks });
       s.toast('Exercise passed. Nice.');
-      onPassed?.();
     } else {
       const cause = out.checks.find((r) => !r.ok) || { label: 'the result contract' };
       s.recordEvent(id, 'failed', undefined);
@@ -231,8 +229,7 @@ export default function SqlCell({ block, module: mod, course, onPassed }: { bloc
       if (verdict.passed) {
         s.recordEvent(id, 'passed', undefined);
         s.toast('Plan passed. Nice.');
-        onPassed?.();
-      } else {
+        } else {
         const cause = verdict.checks.find((r) => !r.ok) || { label: 'the perf contract' };
         s.recordEvent(id, 'failed', undefined);
         s.toast(`Plan not yet — ${String(cause.label).toLowerCase()}`);

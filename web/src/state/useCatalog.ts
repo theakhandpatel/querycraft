@@ -98,7 +98,7 @@ export function useCatalog({
   /* ---------- M8: the learner's stored courses ----------
    *
    * The gateway stores a generated course; this tab used to keep it only in
-   * React state, so a reload threw it away and `#/course/{id}` landed on
+   * React state, so a reload threw it away and `#/courses/{id}` landed on
    * whatever built-in course the router fell back to. Everything below makes
    * the gateway the source of truth: read the list on sign-in, resolve a course
    * a link names, and delete through the API so the change is the server's.

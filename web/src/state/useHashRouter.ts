@@ -123,8 +123,16 @@ export function useHashRouter({
     if (!isRouteHash(raw)) return;
     const target = gated(routeTarget(raw));
     if (target.hash !== raw) window.history.replaceState(null, '', target.hash);
-    if (target.courseId && target.courseId !== uiStateRef.current.selectedCourseId) {
-      const nextState = { ...uiStateRef.current, selectedCourseId: target.courseId };
+    if (target.courseId) {
+      const linked = courseById(target.courseId);
+      if (linked) linked.enrolled = true;
+      const ids = new Set(uiStateRef.current.enrolledCourseIds ?? []);
+      if (linked) ids.add(linked.id);
+      const nextState = {
+        ...uiStateRef.current,
+        selectedCourseId: target.courseId,
+        enrolledCourseIds: [...ids],
+      };
       uiStateRef.current = nextState;
       saveUiState(nextState);
     }

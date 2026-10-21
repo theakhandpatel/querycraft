@@ -211,10 +211,17 @@ async function main() {
     assert(!/Challenge lab/i.test(app.body), 'the simple build still offers the AI challenge lab');
     assert(!/Create your own|Create a course/i.test(app.body), 'the simple build still offers course generation');
 
-    /* Drive the engine and the grader, not just the first paint. The home cell
-       is the first SQLite exercise. The starter must run and fail the contract;
-       a learner who presses Run first must not get a syntax error. Then the
-       authored solution must pass. */
+    /* The bare app root is Learning, not a chapter exercise. */
+    await page.goto(`${base}${PREFIX}app/`, { waitUntil: 'domcontentloaded' });
+    await page.waitForSelector('main.workspace .screen.active');
+    await page.waitForFunction(() => !document.querySelector('.authwrap .spin'));
+    await page.waitForFunction(() => /learning/i.test(document.querySelector('.screen.active .eyebrow')?.textContent ?? ''));
+    assert((await page.locator('.cell.exercise').count()) === 0, 'Learning still shows an exercise');
+
+    /* Drive the engine and the grader, not just the first paint. The first
+       SQLite exercise must run, fail the contract, then pass the solution. */
+    await page.goto(`${base}${PREFIX}app/#/courses/sqlite-essentials/s1`, { waitUntil: 'domcontentloaded' });
+    await page.waitForSelector('.reader .mdbody');
     const cell = page.locator('.cell.exercise').first();
     const editor = cell.locator('.sql-editor-host .cm-content').first();
     await editor.waitFor();
@@ -282,7 +289,7 @@ async function main() {
       if (message.type() === 'error') errors.push(message.text());
     });
     try {
-      await mobile.goto(`${base}${PREFIX}app/`, { waitUntil: 'domcontentloaded' });
+      await mobile.goto(`${base}${PREFIX}app/#/courses/sqlite-essentials/s1`, { waitUntil: 'domcontentloaded' });
       await mobile.waitForSelector('main.workspace .screen.active');
       await mobile.waitForFunction(() => !document.querySelector('.authwrap .spin'));
       const mobileEditor = mobile.locator('.sql-editor-host .cm-content').first();

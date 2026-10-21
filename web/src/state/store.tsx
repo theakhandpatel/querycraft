@@ -300,8 +300,12 @@ export function StoreProvider({ children }: { children: React.ReactNode }) {
      navigation after that goes through `hashchange`. */
   const [entry] = useState<RouteTarget>(initialRoute);
   const [uiState, setUiState] = useState<UiState>(() => {
-    const s = loadJSON<UiState | null>(STATE_KEY, null) || { selectedCourseId: 'sqlite-essentials', libraryFilter: 'all' };
+    const s = loadJSON<UiState | null>(STATE_KEY, null) || { selectedCourseId: 'sqlite-essentials', libraryFilter: 'all', enrolledCourseIds: [] };
     if (!s.libraryFilter) s.libraryFilter = 'all';
+    if (!Array.isArray(s.enrolledCourseIds)) s.enrolledCourseIds = [];
+    /* The catalog's `enrolled` flags are in-memory projections of the stored
+       list. Hydrate them once so Library, Learning and the shell agree. */
+    for (const course of COURSES) course.enrolled = s.enrolledCourseIds.includes(course.id);
     /* A chapter link names its course as well as its chapter, and opening a
        chapter from inside the app selects that course; a link resolves the
        same way rather than inventing an enrolment. */
@@ -375,7 +379,7 @@ export function StoreProvider({ children }: { children: React.ReactNode }) {
   const [resumeBuild, setResumeBuild] = useState<{ courseId: string; goal: string } | null>(null);
   /* A course id a fragment named that the catalog does not have. It may be a
      stored course the gateway owns, so it is fetched before the screen paints:
-     a `#/course/{id}` link used to fall back to the first built-in course and
+     a `#/courses/{id}` link used to fall back to the first built-in course and
      rewrite the URL, which is how a generated course "vanished" on reload. */
   const [pendingCourse, setPendingCourse] = useState<PendingCourse | null>(() =>
     entry.courseUnresolved && entry.courseId ? { id: entry.courseId, chapterId: entry.chapterId ?? null } : null
@@ -482,6 +486,38 @@ export function StoreProvider({ children }: { children: React.ReactNode }) {
     saveJSON(STATE_KEY, next);
   }, []);
 
+  /* Older snapshots predate the stored enrolled-course list. Any course with
+     progress was opened, so it belongs in Learning after the upgrade. */
+  useEffect(() => {
+    const touched = new Set<string>();
+    for (const event of progress.events || []) if (event.course) touched.add(event.course);
+    for (const note of progress.notes || []) touched.add(note.course);
+    for (const saved of progress.saved || []) touched.add(saved.course);
+    for (const id of Object.keys(progress.timeMs || {})) touched.add(id);
+    for (const moduleId of Object.keys(progress.done || {})) {
+      const owner = COURSES.find((c) => c.modules?.some((m) => m.id === moduleId));
+      if (owner) touched.add(owner.id);
+    }
+    if (touched.size === 0) return;
+    const ids = new Set(uiStateRef.current.enrolledCourseIds ?? []);
+    let changed = false;
+    for (const c of COURSES) {
+      if (!touched.has(c.id)) continue;
+      if (!c.enrolled) {
+        c.enrolled = true;
+        changed = true;
+      }
+      if (!ids.has(c.id)) {
+        ids.add(c.id);
+        changed = true;
+      }
+    }
+    if (!changed) return;
+    const next = { ...uiStateRef.current, enrolledCourseIds: [...ids] };
+    uiStateRef.current = next;
+    setUiState(next);
+    saveJSON(STATE_KEY, next);
+  }, [progress]);
   /* The progress mutations read the snapshot through this ref so they stay
      identity-stable; `useProgressStore` keeps it in sync and reads it. */
   const progressRef = useRef(progress);
@@ -702,7 +738,10 @@ export function StoreProvider({ children }: { children: React.ReactNode }) {
     (courseId: string, index?: number) => {
       const c = COURSES.find((x) => x.id === courseId);
       if (!c || !c.modules) return;
-      const next = { ...uiState, selectedCourseId: c.id };
+      const ids = new Set(uiState.enrolledCourseIds ?? []);
+      ids.add(c.id);
+      c.enrolled = true;
+      const next = { ...uiState, selectedCourseId: c.id, enrolledCourseIds: [...ids] };
       setUiState(next);
       saveJSON(STATE_KEY, next);
       const ms = c.modules;
@@ -716,7 +755,10 @@ export function StoreProvider({ children }: { children: React.ReactNode }) {
     (id: string) => {
       const c = COURSES.find((x) => x.id === id);
       if (!c || !c.built) return;
-      const next = { ...uiState, selectedCourseId: id };
+      const ids = new Set(uiState.enrolledCourseIds ?? []);
+      ids.add(id);
+      c.enrolled = true;
+      const next = { ...uiState, selectedCourseId: id, enrolledCourseIds: [...ids] };
       setUiState(next);
       saveJSON(STATE_KEY, next);
       setActiveLesson(nextChapterIndexOf(c, progress));
@@ -732,7 +774,7 @@ export function StoreProvider({ children }: { children: React.ReactNode }) {
         return;
       }
       c.enrolled = true;
-      toast(`Enrolled in "${c.title}". Progress is tracked separately.`);
+      toast(`Started "${c.title}". Progress is tracked separately.`);
       selectCourse(id);
       showScreen('course');
     },
@@ -744,7 +786,7 @@ export function StoreProvider({ children }: { children: React.ReactNode }) {
     c.enrolled = true;
     selectCourse(c.id);
     showScreen('course');
-    toast('Added to My learning.');
+    toast(`Started "${c.title}".`);
   }, [draftCourseId, selectCourse, showScreen, toast]);
 
   const stepLesson = useCallback(

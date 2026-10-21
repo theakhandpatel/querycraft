@@ -11,11 +11,11 @@
  * other means. The fragments it produces read like ordinary product URLs:
  *
  *   #/                            home / dashboard
- *   #/library                     the course library
- *   #/course/:courseId            a course overview
- *   #/course/:courseId/:chapterId a chapter (chapterId is the module id)
+ *   #/courses                     the course catalog
+ *   #/courses/:courseId            a course overview
+ *   #/courses/:courseId/:chapterId a chapter (chapterId is the module id)
  *   #/workbook                    the workbook
- *   #/progress                    the progress screen
+ *   #/history                     the attempt history
  *   #/lab                         the challenge lab
  *   #/lab/:challengeId            the lab, on one registered challenge
  *   #/appearance                  appearance settings
@@ -110,17 +110,24 @@ function segment(raw: string): string {
 }
 
 /** Parse a fragment into a route, or null when it names nothing the app has.
-    `#/course/joins/m2`, `course/joins`, `#/` and `` all read. */
+    `#/courses/joins/m2`, `courses/joins`, `#/` and `` all read. */
 function parseRoute(hash: string): Route | null {
   const raw = (hash.charAt(0) === '#' ? hash.slice(1) : hash).split('?')[0];
   const parts = raw.split('/').filter((p) => p.length > 0).map(segment);
   if (parts.length === 0) return { name: 'home' };
   const [head, second, third] = parts;
   switch (head) {
+    case 'courses':
+      if (parts.length === 1) return { name: 'library' };
+      if (parts.length === 2 && second) return { name: 'course', courseId: second };
+      if (parts.length === 3 && second && third) return { name: 'lesson', courseId: second, chapterId: third };
+      return null;
     case 'library':
       return parts.length === 1 ? { name: 'library' } : null;
     case 'workbook':
       return parts.length === 1 ? { name: 'workbook' } : null;
+    case 'history':
+      return parts.length === 1 ? { name: 'progress' } : null;
     case 'progress':
       return parts.length === 1 ? { name: 'progress' } : null;
     case 'appearance':
@@ -165,11 +172,11 @@ export function routeTarget(hash: string): RouteTarget {
     case 'home':
       return homeTarget(false);
     case 'library':
-      return { hash: '#/library', screen: 'library', courseId: null, chapterIndex: null, challengeId: null, unknown: false };
+      return { hash: '#/courses', screen: 'library', courseId: null, chapterIndex: null, challengeId: null, unknown: false };
     case 'workbook':
       return { hash: '#/workbook', screen: 'workbook', courseId: null, chapterIndex: null, challengeId: null, unknown: false };
     case 'progress':
-      return { hash: '#/progress', screen: 'workbook-progress', courseId: null, chapterIndex: null, challengeId: null, unknown: false };
+      return { hash: '#/history', screen: 'workbook-progress', courseId: null, chapterIndex: null, challengeId: null, unknown: false };
     case 'appearance':
       return { hash: '#/appearance', screen: 'appearance-settings', courseId: null, chapterIndex: null, challengeId: null, unknown: false };
     case 'create':
@@ -195,7 +202,7 @@ export function routeTarget(hash: string): RouteTarget {
       if (!course && courseById(route.courseId)) return homeTarget(true);
       if (course) {
         return {
-          hash: `#/course/${encodeURIComponent(course.id)}`,
+          hash: `#/courses/${encodeURIComponent(course.id)}`,
           screen: 'course',
           courseId: course.id,
           chapterIndex: null,
@@ -204,7 +211,7 @@ export function routeTarget(hash: string): RouteTarget {
         };
       }
       return {
-        hash: `#/course/${encodeURIComponent(route.courseId)}`,
+        hash: `#/courses/${encodeURIComponent(route.courseId)}`,
         screen: 'course',
         courseId: route.courseId,
         chapterIndex: null,
@@ -220,7 +227,7 @@ export function routeTarget(hash: string): RouteTarget {
         const index = activeModules(course).findIndex((m) => m.id === route.chapterId);
         if (index < 0) return homeTarget(true);
         return {
-          hash: `#/course/${encodeURIComponent(course.id)}/${encodeURIComponent(route.chapterId)}`,
+          hash: `#/courses/${encodeURIComponent(course.id)}/${encodeURIComponent(route.chapterId)}`,
           screen: 'lesson',
           courseId: course.id,
           chapterIndex: index,
@@ -232,7 +239,7 @@ export function routeTarget(hash: string): RouteTarget {
          once the course arrives; without it a stored course's chapter link
          would open the course at chapter 1. */
       return {
-        hash: `#/course/${encodeURIComponent(route.courseId)}/${encodeURIComponent(route.chapterId)}`,
+        hash: `#/courses/${encodeURIComponent(route.courseId)}/${encodeURIComponent(route.chapterId)}`,
         screen: 'lesson',
         courseId: route.courseId,
         chapterIndex: null,
@@ -253,11 +260,11 @@ export function hashForState(state: RouteState): string {
     case 'home':
       return HOME_HASH;
     case 'library':
-      return '#/library';
+      return '#/courses';
     case 'workbook':
       return '#/workbook';
     case 'workbook-progress':
-      return '#/progress';
+      return '#/history';
     case 'appearance-settings':
       return '#/appearance';
     /* Creating a course is one flow across three screens, and it is one URL: a
@@ -274,12 +281,12 @@ export function hashForState(state: RouteState): string {
     case 'challenge-lab':
       return state.challengeId ? `#/lab/${encodeURIComponent(state.challengeId)}` : '#/lab';
     case 'course':
-      return `#/course/${encodeURIComponent(state.courseId)}`;
+      return `#/courses/${encodeURIComponent(state.courseId)}`;
     case 'lesson': {
       const modules = activeModules(courseById(state.courseId));
       const module = modules[state.chapterIndex] || modules[0];
       if (!module) return HOME_HASH;
-      return `#/course/${encodeURIComponent(state.courseId)}/${encodeURIComponent(module.id)}`;
+      return `#/courses/${encodeURIComponent(state.courseId)}/${encodeURIComponent(module.id)}`;
     }
   }
 }
