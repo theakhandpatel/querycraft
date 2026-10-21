@@ -44,8 +44,7 @@ npm install
 npm run dev            # http://localhost:5173 with PostgreSQL in the browser
 npm run build          # full build bundle in web/dist
 npm run build:simple   # browser-only bundle with a relative base
-npm run typecheck      # tsrs -p ., strict
-npm run typecheck:tsc  # tsc --noEmit fallback
+npm run typecheck      # tsc --noEmit, strict
 
 npm run lint           # oxlint with the vendored anti-slop rules
 npm run doctor         # React Doctor diagnostics for src/
@@ -73,8 +72,6 @@ binary works with no configuration. The header shows the active engine:
 the gateway build with accounts, AI, stored courses, runs, and admin. Set
 `simple` for the public browser sample. The static build sets it together with
 `VITE_API_MODE=pglite`.
-
-`npm run typecheck` runs `tsrs`, the Rust port of the TypeScript 7 checker. On Linux with glibc older than 2.34, `postinstall` adds the static musl build, which runs without a system glibc upgrade. Newer systems use the native gnu build. `npm run typecheck:tsc` keeps the TypeScript compiler as a fallback.
 
 `npm run lint` runs oxlint with the anti-slop rules vendored at
 `web/tools/oxlint/anti-slop/`. The rules reject TypeScript that compiles but
