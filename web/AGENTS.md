@@ -62,7 +62,8 @@ Effect v4. When unsure of an API, read the vendored source at
 ## Checks
 
 ```sh
-npm run typecheck   # tsc --noEmit, strict
+npm run typecheck   # tsrs-wasm -p ., strict
+npm run typecheck:tsc # tsc --noEmit fallback
 npm run lint        # oxlint + the vendored anti-slop rules
 npm run build
 npm run doctor      # React Doctor diagnostics; informational, not a gate

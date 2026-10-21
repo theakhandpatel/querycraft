@@ -48,9 +48,9 @@ make db-reset          # delete the dev/smoke PostgreSQL clusters (re-seeds on n
 make help              # list every target
 ```
 
-The tooling needs Node 20.19 or newer. `.nvmrc` names the line the project tests
+The tooling needs Node 22 or newer. `.nvmrc` names the line the project tests
 on, and `web/package.json` declares the floor in `engines.node`. React Doctor
-refuses to run below 20.19, so a Node upgrade is the first step on a new machine.
+refuses to run below 20.19, but tsrs requires Node 22, so use the `.nvmrc` line.
 
 `VITE_API_MODE` picks the frontend adapter: `pglite` (default: real PostgreSQL
 compiled to WebAssembly runs in a Web Worker) or `http` (the Go gateway, also

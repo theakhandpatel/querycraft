@@ -5,14 +5,15 @@
   "license": "MIT",
   "type": "module",
   "engines": {
-    "node": ">=20.19"
+    "node": ">=22"
   },
   "scripts": {
     "dev": "vite",
     "build": "vite build",
     "build:simple": "VITE_APP_MODE=simple VITE_API_MODE=pglite vite build --base=./",
     "preview": "vite preview --port 4173",
-    "typecheck": "tsc --noEmit",
+    "typecheck": "tsrs-wasm -p .",
+    "typecheck:tsc": "tsc --noEmit",
     "lint": "oxlint src",
     "doctor": "react-doctor --no-score src",
     "audit-ai": "./node_modules/.bin/esbuild --bundle --format=cjs --platform=node --outfile=/tmp/qc-ai.cjs src/api/ai.ts >/dev/null && ./node_modules/.bin/esbuild --bundle --format=cjs --platform=node --outfile=/tmp/qc-deadline.cjs src/api/aiDeadline.ts >/dev/null && node scripts/ai-adapters-audit.mjs",
@@ -40,6 +41,7 @@
   },
   "devDependencies": {
     "@oxlint/plugins": "1.78.0",
+    "@tsrs/wasm": "0.18.0-ts7.1.0-dev.20260929",
     "@types/react": "^18.3.31",
     "@types/react-dom": "^18.3.7",
     "@vitejs/plugin-react": "^4.3.4",

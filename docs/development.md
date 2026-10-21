@@ -35,7 +35,7 @@ imports the other.
 
 ## Work on the frontend
 
-You need Node 20.19 or later and npm. The `.nvmrc` names the line the project
+You need Node 22 or later and npm. The `.nvmrc` names the line the project
 tests on.
 
 ```sh
@@ -44,7 +44,9 @@ npm install
 npm run dev            # http://localhost:5173 with PostgreSQL in the browser
 npm run build          # full build bundle in web/dist
 npm run build:simple   # browser-only bundle with a relative base
-npm run typecheck      # tsc --noEmit, strict
+npm run typecheck      # tsrs-wasm -p ., strict
+npm run typecheck:tsc  # tsc --noEmit fallback
+
 npm run lint           # oxlint with the vendored anti-slop rules
 npm run doctor         # React Doctor diagnostics for src/
 ```
@@ -71,6 +73,8 @@ binary works with no configuration. The header shows the active engine:
 the gateway build with accounts, AI, stored courses, runs, and admin. Set
 `simple` for the public browser sample. The static build sets it together with
 `VITE_API_MODE=pglite`.
+
+`npm run typecheck` runs `tsrs`, the Rust port of the TypeScript 7 checker, through `@tsrs/wasm`. The WASM package runs on the same Ubuntu image and in CI; the native `tsrs` binary needs a newer glibc. `npm run typecheck:tsc` keeps the TypeScript compiler as a fallback.
 
 `npm run lint` runs oxlint with the anti-slop rules vendored at
 `web/tools/oxlint/anti-slop/`. The rules reject TypeScript that compiles but
