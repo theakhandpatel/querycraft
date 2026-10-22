@@ -104,6 +104,44 @@ Do not write `SELECT --`, `WHERE --`, or `ORDER BY --`. Those comments leave an
 empty clause and SQLite rejects the statement before the learner can learn from
 the result. Run every starter against its dialect before committing.
 
+
+## Write for understanding
+
+A chapter teaches one idea. The exercises test it, but passing them is not the
+point. Write so a reader who has never seen the idea can explain it back.
+
+- Open with a situation from the dataset. Name the question before the syntax.
+- Define each new term in plain words the first time it appears.
+- Explain what the engine does and why the rule exists. A rule with a reason is
+  easier to apply than a rule to memorise.
+- Walk through one query step by step: input rows, the clause that changes them,
+  the output rows.
+- Show one plausible mistake and the wrong result it produces. Then correct it.
+- Close with a short recap and three to five "Check yourself" questions that ask
+  for reasoning, not recall.
+- Keep the voice in `AGENTS.md`: address the reader as `you`, use the active
+  voice, keep sentences short, and do not use an em dash or the AI vocabulary
+  list.
+
+Depth comes from explaining the mechanism and the consequence, not from adding
+more edge cases or repeating the same point in new words.
+
+## Check the facts
+
+Every authored `result:` row is a claim about the seeded database. Examples
+render those rows, and a failed exercise quotes them in the mismatch message.
+Run the fact audit after you change a seed, a solution, or a result:
+
+```sh
+make audit-content-facts
+```
+
+It loads the commerce seed into PostgreSQL (PGlite) and SQLite, runs every
+example's `sql` and every exercise's `solution` that carries a `result:`, and
+compares the rows. Plan examples are skipped: `make audit-perf-content` checks
+the `plans` course, including its plan structure. A `result:` row from an older
+seed is the defect this catches.
+
 ## Add a module
 
 1. Add the module to the course's file under `web/src/data/courses/`: id, title,

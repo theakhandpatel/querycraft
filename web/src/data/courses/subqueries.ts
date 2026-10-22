@@ -10,15 +10,15 @@ export const SUBQUERIES_MODULES: CourseModule[] = [
     intro('Three shapes cover almost everything. <span class="kbd-inline">(SELECT ...)</span> that returns one row and one column is a scalar value you compare with <span class="kbd-inline">=</span>. One column with many rows is a list you test with <span class="kbd-inline">IN</span>. Many columns is a table you join against in <span class="kbd-inline">FROM</span>.'),
     {type:'syntax', sql:'SELECT name, price\nFROM products\nWHERE price > (SELECT AVG(price) FROM products)\nORDER BY price DESC;', note:'The subquery collapses to one number, so the outer WHERE compares a column to a value.'},
     {type:'example', id:'ex.q1.demo', sql:"SELECT name\nFROM customers\nWHERE id IN (\n    SELECT customer_id FROM orders WHERE status = 'completed'\n)\nORDER BY name\nLIMIT 4;", note:'The list subquery supplies the ids; the outer query still returns one row per customer.',
-      result:{columns:['name'], rows:[['Ada Whitfield'],['Bruno Sala'],['Chidi Okafor'],['Dara Novak']]}},
-    intro('The mistake to avoid is running the subquery in your head once rather than for the rows it is compared against. A scalar subquery is re-evaluated as a value in the row being tested, which is exactly the difference between the uncorrelated subqueries here and the correlated ones in the next chapter.'),
+      result:{columns:['name'], rows:[['Ada Whitfield'],['Bruno Sala'],['Chidi Okafor'],['Emi Tanaka']]}},
+    intro('The mistake to avoid is running the subquery in your head once rather than for the rows it is compared against. A scalar subquery in this chapter is evaluated once, and every row compares against that value. The next chapter shows the correlated form, which is evaluated per outer row.'),
     {type:'exercise', id:'ex.q1.1',
-      prompt:'Return the name and price of every product priced above the average product price. Most expensive first, then by name.',
-      starter:"SELECT name, price\nFROM products\n-- filter above the average price\n-- most expensive first",
-      solution:"SELECT name, price\nFROM products\nWHERE price > (SELECT AVG(price) FROM products)\nORDER BY price DESC, name;",
-      hints:['The average comes from <span class="kbd-inline">(SELECT AVG(price) FROM products)</span>.','Compare the column against that scalar, not against a hard-coded number.'],
+      prompt:'Return the name and price of every product priced above the most expensive Outdoor product. Most expensive first, then by name.',
+      starter:"SELECT name, price\nFROM products\n-- filter above the most expensive Outdoor product\n-- most expensive first",
+      solution:"SELECT name, price\nFROM products\nWHERE price > (SELECT MAX(price) FROM products WHERE category = 'Outdoor')\nORDER BY price DESC, name;",
+      hints:['The Outdoor maximum comes from <span class="kbd-inline">(SELECT MAX(price) FROM products WHERE category = \'Outdoor\')</span>.','Compare the column against that scalar, not against a hard-coded number.'],
       contract:{columns:['name','price'], column_order:'exact', row_order:'exact'},
-      result:{columns:['name','price'], rows:[['Lumen 27-inch 4K Monitor','329.00'],['Oak Bookshelf','210.00'],['Trail Runner Jacket','139.00'],['Nimbus Headphones','129.00']]}}
+      result:{columns:['name','price'],rows:[['Granite Cookware Set','210.00']]}}
   ]},
 
 { id:'q2', n:2, title:'Correlated subqueries and EXISTS', kind:'Core skill', minutes:16,
@@ -29,15 +29,15 @@ export const SUBQUERIES_MODULES: CourseModule[] = [
     intro('<span class="kbd-inline">EXISTS</span> is the natural partner. It takes a subquery and returns true as soon as the inner query produces a single row. The inner SELECT list is irrelevant, so the convention is <span class="kbd-inline">SELECT 1</span>; what matters is the <span class="kbd-inline">WHERE</span> clause that ties the inner table back to the outer one.'),
     {type:'syntax', sql:'SELECT c.name\nFROM customers c\nWHERE NOT EXISTS (\n    SELECT 1 FROM orders o\n    WHERE o.customer_id = c.id\n)\nORDER BY c.name;', note:'EXISTS stops at the first matching row, so it is a test, not a fetch.'},
     {type:'example', id:'ex.q2.demo', sql:"SELECT p.name,\n       (SELECT COUNT(*) FROM order_items oi WHERE oi.product_id = p.id) AS lines\nFROM products p\nORDER BY p.id\nLIMIT 4;", note:'A correlated scalar subquery computes one count per product row.',
-      result:{columns:['name','lines'], rows:[['Aurora Wireless Earbuds','24'],['Nimbus Headphones','18'],['Linen Duvet Cover','15'],['Cedar Desk Lamp','11']]}},
+      result:{columns:['name','lines'], rows:[['Aurora Wireless Earbuds','10'],['Nimbus Headphones','9'],['Linen Duvet Cover','9'],['Cedar Desk Lamp','8']]}},
     intro('Correlated queries and joins are often interchangeable, and the deciding factor is the grain. If the inner query can return more than one row, a correlated scalar subquery fails at run time while a join multiplies rows; the subquery keeps the outer grain honest.'),
     {type:'exercise', id:'ex.q2.1',
       prompt:'For every product, return its name and the number of order lines that reference it, including products never ordered, which show 0. Lowest product id first.',
-      starter:"SELECT p.name,\n       -- number of lines\nFROM products p\n-- keep one row per product\nORDER BY p.id;",
+      starter:"SELECT p.name,\n       (SELECT COUNT(*) FROM order_items) AS lines\nFROM products p\n-- keep one row per product\nORDER BY p.id;",
       solution:"SELECT p.name,\n       (SELECT COUNT(*) FROM order_items oi WHERE oi.product_id = p.id) AS lines\nFROM products p\nORDER BY p.id;",
       hints:['Correlate the inner query with <span class="kbd-inline">oi.product_id = p.id</span>.','COUNT of an empty set is 0, so no LEFT JOIN and no COALESCE are needed.'],
       contract:{columns:['name','lines'], column_order:'exact', row_order:'exact'},
-      result:{columns:['name','lines'], rows:[['Aurora Wireless Earbuds','24'],['Nimbus Headphones','18'],['Linen Duvet Cover','15'],['Cedar Desk Lamp','11'],['Trail Runner Jacket','9']]}}
+      result:{columns:['name','lines'],rows:[['Aurora Wireless Earbuds','10'],['Nimbus Headphones','9'],['Linen Duvet Cover','9'],['Cedar Desk Lamp','8'],['Trail Runner Jacket','10'],['Pulse Fitness Tracker','8'],['Vertex Mechanical Keyboard','8'],['Harbor Rain Shell','8'],['Maple Cutting Board','8'],['Copper Kettle','8'],['Wool Throw Blanket','8'],['Granite Cookware Set','9'],['Summit Hiking Poles','8'],['Ceramic Vase','8'],['Espresso Tamper','8'],['Solar Camp Lantern','8'],['Bamboo Shelf','8'],['Noise-Cancel Earmuffs','8'],['Rope Dog Leash','9'],['Discontinued Camp Stove','0']]}}
   ]},
 
 { id:'q3', n:3, title:'IN, EXISTS and the NULL trap', kind:'Practice', minutes:16,
@@ -48,15 +48,15 @@ export const SUBQUERIES_MODULES: CourseModule[] = [
     intro('The rule behind the trap is three-valued logic. <span class="kbd-inline">x NOT IN (a, b, NULL)</span> expands to <span class="kbd-inline">x &lt;&gt; a AND x &lt;&gt; b AND x &lt;&gt; NULL</span>, and the last comparison is neither true nor false \u2014 it is unknown. One unknown term makes the whole conjunction not-true, so the row is dropped. A single NULL anywhere in the list empties the result.'),
     {type:'syntax', sql:'-- Not safe: one NULL in the list kills every row\nSELECT name FROM customers\nWHERE id NOT IN (SELECT customer_id FROM orders);\n\n-- Safe: EXISTS only asks whether a matching row exists\nSELECT name FROM customers c\nWHERE NOT EXISTS (\n    SELECT 1 FROM orders o WHERE o.customer_id = c.id\n);', note:'When the outer column can be NULL the same reasoning applies to the left side too.'},
     {type:'example', id:'ex.q3.demo', sql:"SELECT c.name\nFROM customers c\nWHERE NOT EXISTS (\n    SELECT 1 FROM orders o WHERE o.customer_id = c.id\n)\nORDER BY c.name\nLIMIT 4;", note:'NOT EXISTS returns the unmatched customers regardless of NULLs.',
-      result:{columns:['name'], rows:[['Emi Tanaka'],['Farah Haddad'],['Greta Lindqvist'],['Hana Sato']]}},
+      result:{columns:['name'], rows:[['Aya Rahman'],['Bo Ivanov'],['Cleo Haidar'],['Dara Novak']]}},
     intro('The practical rule: use <span class="kbd-inline">NOT EXISTS</span> (or a LEFT JOIN with <span class="kbd-inline">IS NULL</span>) whenever the subquery column can be NULL. Use <span class="kbd-inline">NOT IN</span> only when you can see, from the schema, that the column is <span class="kbd-inline">NOT NULL</span>.'),
     {type:'exercise', id:'ex.q3.1',
-      prompt:'Return the name of every customer who has never placed an order, ordered by name. Use the NULL-safe form.',
-      starter:"SELECT c.name\nFROM customers c\n-- customers with no orders\nORDER BY c.name;",
-      solution:"SELECT c.name\nFROM customers c\nWHERE NOT EXISTS (\n    SELECT 1 FROM orders o WHERE o.customer_id = c.id\n)\nORDER BY c.name;",
-      hints:['<span class="kbd-inline">NOT EXISTS</span> is safe here; <span class="kbd-inline">NOT IN</span> is not.','Tie the inner query to the outer row with <span class="kbd-inline">o.customer_id = c.id</span>.'],
+      prompt:'Return the name of every customer who has never placed a completed order, ordered by name. Use the NULL-safe form.',
+      starter:"SELECT c.name\nFROM customers c\n-- customers with no completed order\nORDER BY c.name;",
+      solution:"SELECT c.name\nFROM customers c\nWHERE NOT EXISTS (\n    SELECT 1 FROM orders o WHERE o.customer_id = c.id AND o.status = 'completed'\n)\nORDER BY c.name;",
+      hints:['<span class="kbd-inline">NOT EXISTS</span> is safe here; <span class="kbd-inline">NOT IN</span> is not.','Tie the inner query to the outer row with <span class="kbd-inline">o.customer_id = c.id</span>, and keep only completed orders with <span class="kbd-inline">o.status = \'completed\'</span>.'],
       contract:{columns:['name'], column_order:'exact', row_order:'exact'},
-      result:{columns:['name'], rows:[['Emi Tanaka'],['Farah Haddad'],['Greta Lindqvist'],['Hana Sato']]}}
+      result:{columns:['name'],rows:[['Aya Rahman'],['Bo Ivanov'],['Cleo Haidar'],['Dara Novak'],['Dev Larsen'],['Gina Rahman'],['Noor Berg'],['Tess Larsen'],['Uma Whitfield'],['Yara Park'],['Zane Lindqvist']]}}
   ]},
 
 { id:'q4', n:4, title:'Set operations: UNION, INTERSECT, EXCEPT', kind:'Advanced', minutes:18,

@@ -13,12 +13,12 @@ export const FOUNDATIONS_MODULES: CourseModule[] = [
       result:{columns:['category'], rows:[['Electronics'],['Home'],['Kitchen'],['Outdoor']]}},
     intro('The subtlety is that <span class="kbd-inline">DISTINCT</span> applies to the whole row, not to one column. Ask for two columns and you get every distinct combination, so <span class="kbd-inline">category, active</span> keeps a separate row for Outdoor whether or not the product is still available \u2014 read it as a set of pairs, not as a de-duplicated list.'),
     {type:'exercise', id:'ex.f1.1',
-      prompt:'Return one row per distinct combination of product category and active flag, ordered by category and then by active. Name the columns category and active.',
-      starter:"SELECT DISTINCT\n       -- category and active\nFROM products\n-- order by category, then active",
-      solution:"SELECT DISTINCT category, active\nFROM products\nORDER BY category, active;",
-      hints:['List both columns after <span class="kbd-inline">DISTINCT</span>; it de-duplicates the pair, not each column on its own.','Order by <span class="kbd-inline">category, active</span> to make the output deterministic.'],
-      contract:{columns:['category','active'], column_order:'ignored', row_order:'exact'},
-      result:{columns:['category','active'], rows:[['Electronics',true],['Home',true],['Kitchen',true],['Outdoor',false],['Outdoor',true]]}}
+      prompt:'Return one row per distinct combination of the active flag and product category, ordered by active and then category. Name the columns active and category.',
+      starter:"SELECT DISTINCT\n       -- active and category\nFROM products\n-- order by active, then category",
+      solution:"SELECT DISTINCT active, category\nFROM products\nORDER BY active, category;",
+      hints:['List both columns after <span class="kbd-inline">DISTINCT</span>; it de-duplicates the pair, not each column on its own.','Order by <span class="kbd-inline">active, category</span> to make the output deterministic.'],
+      contract:{columns:['active','category'], column_order:'ignored', row_order:'exact'},
+      result:{columns:['active','category'], rows:[[false,'Outdoor'],[true,'Electronics'],[true,'Home'],[true,'Kitchen'],[true,'Outdoor']]}}
   ]},
 
 { id:'f2', n:2, title:'WHERE, AND, OR and NOT', kind:'Foundations', minutes:14,
@@ -106,7 +106,7 @@ export const FOUNDATIONS_MODULES: CourseModule[] = [
     intro('<span class="kbd-inline">CASE</span> is an expression, not a statement: it produces a value, so it can stand in any position a column can. That is what makes a searched CASE the tool for banding a number into a label \u2014 <span class="kbd-inline">CASE WHEN price &gt;= 100 THEN \'premium\' ... END AS band</span> adds a column just like any other.'),
     intro('Conditions are tested top to bottom and the first match wins, so order the branches from most specific to least. Without a matching <span class="kbd-inline">WHEN</span> and no <span class="kbd-inline">ELSE</span>, the expression is NULL \u2014 an explicit <span class="kbd-inline">ELSE</span> is almost always what you want, even if it is just <span class="kbd-inline">\'other\'</span>.'),
     {type:'syntax', sql:"SELECT name, price,\n       CASE WHEN price >= 100 THEN 'premium'\n            WHEN price >= 50  THEN 'mid'\n            ELSE 'value' END AS band\nFROM products\nORDER BY price DESC, name;", note:'Two thresholds and a catch-all. The order of WHEN matters: >= 100 must be tested before >= 50.'},
-    {type:'example', id:'ex.f6.demo', sql:"SELECT name, price,\n       CASE WHEN price >= 100 THEN 'premium'\n            WHEN price >= 50  THEN 'mid'\n            ELSE 'value' END AS band\nFROM products\nORDER BY price DESC, name\nLIMIT 5;", note:'The band column is ordinary output: sort by it, group by it, or filter it like any other value.',
+    {type:'example', id:'ex.f6.demo', sql:"SELECT name, price,\n       CASE WHEN price >= 100 THEN 'premium'\n            WHEN price >= 50  THEN 'mid'\n            ELSE 'value' END AS band\nFROM products\nORDER BY price DESC, name\nLIMIT 5;", note:'The band column is ordinary output: sort by it or group by it like any other value.',
       result:{columns:['name','price','band'], rows:[['Granite Cookware Set',210,'premium'],['Trail Runner Jacket',139,'premium'],['Nimbus Headphones',129,'premium'],['Harbor Rain Shell',118,'premium'],['Summit Hiking Poles',96.4,'mid']]}},
     intro('Because CASE is an expression, the alias it gets is usable downstream. <span class="kbd-inline">ORDER BY band</span> works on the label you just produced, and <span class="kbd-inline">GROUP BY</span> can group by it too \u2014 the same pattern that turns a continuous number into a handful of categories you can count.'),
     {type:'exercise', id:'ex.f6.1',

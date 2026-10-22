@@ -34,7 +34,7 @@ SMOKE_PG_DIR  ?= $(BACKEND_DIR)/.data/smoke
 # cache but keep the smoke cluster's data and runtime dirs isolated.
 PG_BINARIES_DIR ?= $(BACKEND_DIR)/.data/pg/binaries
 
-.PHONY: help install web static static-check typecheck check-cgo embed backend build test test-all gotest verify verify-mock serve run dev docs dataset audit-lessons audit-content audit-storage audit-search audit-courses audit-progress audit-export audit-import audit-fixtures audit-evaluate-wire audit-themes audit-metrics audit-metrics-live audit-adversarial audit-adversarial-live audit-load audit-parity audit-ai audit-ai-adapters audit-course-store audit-ai-live audit-perf audit-perf-content audit-perf-seam audit-perf-fixtures audit-dataset-map audit-shell audit-a11y audit-sqlite-errors audit-boot audit-course-gen db-reset clean disk
+.PHONY: help install web static static-check typecheck check-cgo embed backend build test test-all gotest verify verify-mock serve run dev docs dataset audit-lessons audit-content audit-content-facts audit-storage audit-search audit-courses audit-progress audit-export audit-import audit-fixtures audit-evaluate-wire audit-themes audit-metrics audit-metrics-live audit-adversarial audit-adversarial-live audit-load audit-parity audit-ai audit-ai-adapters audit-course-store audit-ai-live audit-perf audit-perf-content audit-perf-seam audit-perf-fixtures audit-dataset-map audit-shell audit-a11y audit-sqlite-errors audit-boot audit-course-gen db-reset clean disk
 
 help: ## List the available targets with a one-line description.
 	@echo "Querycraft — make targets"
@@ -98,7 +98,7 @@ TEST_JOBS ?= 8
 # test-all is the real suite, one target per check, so `make test` can fan it
 # out while a single check can still be run by name (make gotest,
 # make audit-parity).
-test-all: typecheck lint check-cgo gotest audit-lessons audit-content audit-courses audit-storage audit-search audit-progress audit-export audit-import audit-fixtures audit-evaluate-wire audit-themes audit-metrics audit-adversarial audit-parity audit-dataset-map audit-sqlite-errors audit-perf audit-perf-fixtures audit-perf-content audit-perf-seam audit-ai-adapters audit-course-store audit-course-gen audit-shell audit-a11y audit-boot
+test-all: typecheck lint check-cgo gotest audit-lessons audit-content audit-content-facts audit-courses audit-storage audit-search audit-progress audit-export audit-import audit-fixtures audit-evaluate-wire audit-themes audit-metrics audit-adversarial audit-parity audit-dataset-map audit-sqlite-errors audit-perf audit-perf-fixtures audit-perf-content audit-perf-seam audit-ai-adapters audit-course-store audit-course-gen audit-shell audit-a11y audit-boot
 
 gotest: ## (test-all) The Go test suite, as one schedulable job.
 	cd $(BACKEND_DIR) && $(GO) test ./...
@@ -337,6 +337,11 @@ audit-content: ## Check the chapter-content seeder: fingerprint, ensure-not-once
 	cd $(WEB_DIR) && ./node_modules/.bin/esbuild --bundle --format=cjs --platform=node \
 		--outfile=/tmp/dataset-for-content.cjs src/lib/dataset.ts >/dev/null
 	node scripts/content-audit.mjs
+
+audit-content-facts: ## Check every authored commerce result row against the seeded database.
+	cd $(WEB_DIR) && ./node_modules/.bin/esbuild --bundle --format=cjs --platform=node \
+		--outfile=/tmp/curriculum-for-content-facts.cjs src/data/curriculum.ts >/dev/null
+	node scripts/content-facts-audit.mjs
 
 audit-storage: ## Check the offline store layout and split match design 8.1, and that a failed write is typed (M2 step 2).
 	cd $(WEB_DIR) && ./node_modules/.bin/esbuild --bundle --format=cjs --platform=node \

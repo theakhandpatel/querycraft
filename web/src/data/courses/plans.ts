@@ -159,10 +159,10 @@ export const PLANS_MODULES: CourseModule[] = [
     {type:'example', id:'ex.p8.demo', sql:"SELECT (SELECT COUNT(*) FROM orders WHERE id = 1050) AS orders_matched,\n       (SELECT COUNT(*) FROM order_items WHERE order_id = 1050) AS lines_matched;", note:'How much of the fixture the report actually needs: one order and its two lines, out of 10 000 and 20 000.',
       result:{columns:['orders_matched','lines_matched'], rows:[[1,2]]}},
     {type:'exercise', id:'ex.p8.1',
-      prompt:'Rewrite the starter so the plan finds the order by primary key and its lines by index. Return order_id, ordered_at, product_id and quantity for order 1050, ordered by product_id. Both sequential scans must be gone, the estimate must stay at a handful of rows, and at least two index scans must appear.',
-      starter:"SELECT o.id AS order_id, o.ordered_at, oi.product_id, oi.quantity\nFROM orders o\nJOIN order_items oi ON oi.order_id = o.id\nWHERE o.id::text = '1050'\nORDER BY oi.product_id;",
-      solution:"SELECT o.id AS order_id, o.ordered_at, oi.product_id, oi.quantity\nFROM orders o\nJOIN order_items oi ON oi.order_id = o.id\nWHERE o.id = 1050\n  AND oi.order_id = 1050\nORDER BY oi.product_id;",
-      hints:['Compare <span class="kbd-inline">o.id</span> with the number 1050, not with text cast through the column.','Add <span class="kbd-inline">AND oi.order_id = 1050</span> so the join\u2019s inner side is a seek on order_items_order_id_idx instead of a sequential read of all 20 000 lines.'],
+      prompt:'Rewrite the starter so the plan finds the order by primary key and its lines by index. Return order_id, ordered_at, product_id and quantity for order 2500, ordered by product_id. Both sequential scans must be gone, the estimate must stay at a handful of rows, and at least two index scans must appear.',
+      starter:"SELECT o.id AS order_id, o.ordered_at, oi.product_id, oi.quantity\nFROM orders o\nJOIN order_items oi ON oi.order_id = o.id\nWHERE o.id::text = '2500'\nORDER BY oi.product_id;",
+      solution:"SELECT o.id AS order_id, o.ordered_at, oi.product_id, oi.quantity\nFROM orders o\nJOIN order_items oi ON oi.order_id = o.id\nWHERE o.id = 2500\n  AND oi.order_id = 2500\nORDER BY oi.product_id;",
+      hints:['Compare <span class="kbd-inline">o.id</span> with the number 2500, not with text cast through the column.','Add <span class="kbd-inline">AND oi.order_id = 2500</span> so the join\u2019s inner side is a seek on order_items_order_id_idx instead of a sequential read of all 20 000 lines.'],
       contract:{columns:['order_id','ordered_at','product_id','quantity'], column_order:'exact', row_order:'exact'},
       perf:{engine:'postgresql',
         require_nodes:[{node_type:'Index Scan', relation:'orders', index:'orders_pkey', label:'the order is found by its primary key'}],
@@ -170,6 +170,6 @@ export const PLANS_MODULES: CourseModule[] = [
         require_indexes:['orders_pkey','order_items_order_id_idx'],
         max_plan_rows:20,
         min_index_scans:2},
-      result:{columns:['order_id','ordered_at','product_id','quantity'], rows:[[1050,'2026-02-07 21:08',5,3],[1050,'2026-02-07 21:08',123,1]]}}
+      result:{columns:['order_id','ordered_at','product_id','quantity'], rows:[[2500,'2026-04-01 05:48',63,2],[2500,'2026-04-01 05:48',282,3]]}}
   ]}
 ];

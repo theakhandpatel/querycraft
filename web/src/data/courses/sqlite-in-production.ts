@@ -6,15 +6,15 @@ export const SQLITE_IN_PRODUCTION_MODULES: CourseModule[] = [
   objectives:['Explain why SQLite serialises writers and what WAL changes','Read the journal mode and the busy timeout from the file and the connection','Say what a retry after SQLITE_BUSY has to re-run'],
   blocks:[
     {type:'syntax', sql:'PRAGMA journal_mode;', note:'A statement that returns rows. delete is the default and it lives in the file header; wal is the mode a read-heavy application wants.'},
-    {type:'example', id:'ex.r1.demo', sql:'PRAGMA journal_mode;', note:'This fixture is a read-only copy, so it reports delete: switching to WAL rewrites the header and has to create a -wal file beside the database.',
-      result:{columns:['journal_mode'], rows:[['delete']]}},
+    {type:'example', id:'ex.r1.demo', sql:'PRAGMA journal_mode;', note:'The in-browser workspace is an in-memory database, so it reports memory. A file-backed copy reports delete by default, or wal after a switch.',
+      result:{columns:['journal_mode'], rows:[['memory']]}},
     {type:'exercise', id:'ex.r1.1',
       prompt:'Return the two concurrency settings in one row: the file\u2019s journal_mode and the connection\u2019s busy_timeout in milliseconds. Use the table-valued pragmas, not the bare PRAGMA statements.',
       starter:"SELECT (SELECT -- the journal mode\n       ) AS journal_mode,\n       (SELECT -- the busy timeout\n       ) AS busy_timeout;",
       solution:"SELECT (SELECT journal_mode FROM pragma_journal_mode()) AS journal_mode,\n       (SELECT timeout FROM pragma_busy_timeout()) AS busy_timeout;",
       hints:['<span class="kbd-inline">pragma_journal_mode()</span> and <span class="kbd-inline">pragma_busy_timeout()</span> are tables, so each can be a scalar subquery.','The busy-timeout column is called <span class="kbd-inline">timeout</span>, not <span class="kbd-inline">busy_timeout</span>.'],
       contract:{columns:['journal_mode','busy_timeout'], column_order:'exact', row_order:'ignored'},
-      result:{columns:['journal_mode','busy_timeout'], rows:[['delete',2000]]}}
+      result:{columns:['journal_mode','busy_timeout'],rows:[['memory','0']]}}
   ]},
 
 { id:'r2', n:2, title:'PRAGMA vs SET', kind:'Core skill', minutes:14, dialect:'sqlite',
@@ -102,14 +102,14 @@ export const SQLITE_IN_PRODUCTION_MODULES: CourseModule[] = [
   objectives:['Say why cp is not a backup while a writer runs','Verify a file with integrity_check and size it in pages','Explain what ATTACH adds and what it does not'],
   blocks:[
     {type:'syntax', sql:'PRAGMA integrity_check;', note:'The verification step for a shipped file: pages, B-tree invariants and the freelist all agree. A backup you cannot integrity-check is a backup you have not tested.'},
-    {type:'example', id:'ex.r7.demo', sql:"SELECT (SELECT integrity_check FROM pragma_integrity_check()) AS integrity,\n       (SELECT page_size  FROM pragma_page_size())             AS page_size,\n       (SELECT page_count FROM pragma_page_count())            AS pages;", note:'The whole commerce dataset in eleven 4 KiB pages, and the file checks out.',
-      result:{columns:['integrity','page_size','pages'], rows:[['ok',4096,11]]}},
+    {type:'example', id:'ex.r7.demo', sql:"SELECT (SELECT integrity_check FROM pragma_integrity_check()) AS integrity,\n       (SELECT page_size  FROM pragma_page_size())             AS page_size,\n       (SELECT page_count FROM pragma_page_count())            AS pages;", note:'The whole commerce dataset in eleven 8 KiB pages, and the file checks out.',
+      result:{columns:['integrity','page_size','pages'], rows:[['ok',8192,11]]}},
     {type:'exercise', id:'ex.r7.1',
       prompt:'Size the file the way a copy operation would: return page_size, pages and the total size in kibibytes as kib, in one row.',
       starter:"SELECT (SELECT page_size FROM pragma_page_size()) AS page_size,\n       -- how many pages\n       -- total size in kibibytes\n;",
       solution:"SELECT (SELECT page_size FROM pragma_page_size()) AS page_size,\n       (SELECT page_count FROM pragma_page_count()) AS pages,\n       (SELECT page_size FROM pragma_page_size()) * (SELECT page_count FROM pragma_page_count()) / 1024 AS kib;",
       hints:['Bytes are <span class="kbd-inline">page_size * page_count</span>; divide by 1024 for KiB.','Integer division is exact here: the product is a whole multiple of 1024.'],
       contract:{columns:['page_size','pages','kib'], column_order:'exact', row_order:'ignored'},
-      result:{columns:['page_size','pages','kib'], rows:[[4096,11,44]]}}
+      result:{columns:['page_size','pages','kib'],rows:[['8192','11','88']]}}
   ]}
 ];
